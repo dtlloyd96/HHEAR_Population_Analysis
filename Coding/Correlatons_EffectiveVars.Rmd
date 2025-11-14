@@ -1,0 +1,951 @@
+---
+title: "CorrelationsandEffectiveVars"
+output: html_document
+date: "2025-08-14"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggcorrplot)
+library(paletteer)
+
+```
+
+
+
+Input Data
+------------
+
+```{r}
+
+#load("../../Input/Harmonized_Datasets/Harmonized_Outcomes.RData")
+load("../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+load("../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+
+```
+
+```{r}
+#New Classifications
+#Trace elements
+Trace_Elements_Theme <- unique(c("As","Ba", "Be","Cd" ,"Co","Cs","Mn", 
+                  "Mo","Pb","Sb", "Tl","U", "W","Cr","Cu",
+                  "Hg" ,"Ni","Pt","Sn",
+                  "V","Zn", "Al", "Mg","Se"  ))
+
+
+length(Trace_Elements_Theme)
+#Phenols
+Phenols_Theme <- unique(c("BP3","BPA","BPF","BPS","DCP24","DCP25","TCC","TCS","BUPB","ETPB","MEPB","PRPB","BP1",
+                          "BP2","BP8","BPAF","BPAP","BPB","BPP","BPZ","DHB34","HB4",
+                          "OH4BP","OHETP","OHMEP","PCP","TCP245","TCP246","DCP","TCP24","PHE","PHEN"))
+length(Phenols_Theme)
+
+#Polycyclic_Aromatic_hydrocarbons 
+PAH_Theme <- unique(c("NAP1","NAP2","PYR1","FLUO2","PHEN1","PHEN2PHEN3","PHEN4","PHEN9","PHET","PHEN2",
+                      "PHEN3","FLUO2_FLUO3","PHEN2_PHEN3","FLU","FLUO","PYR","NAP"))
+
+length(PAH_Theme)
+
+#Phthalates
+Phthalates_Theme <- unique(c("MBZP","MCPP","MECPP","MEHHP","MEHP","MEOHP","MEP","MIBP","MNBP","MCMHP",
+                             "MCHP","MCHPP","MCINP","MCIOP","MCMHP","MHXP","MINP","MIPP","MMP","MOP","MPEP",
+                             "MCOCH","MHNCH","MINP","MCOP","MECPTP","MBZP","MCPP","MEHHTP","MIBP","MHPP","MBZ","MBP",
+                             "MCI","MCMH","MCO","MCP","MEC","MEH","MEHH","MEO","MEOH","MHN","MIB","MIN",
+                             "MNB"))
+
+length(Phthalates_Theme)
+
+#Parabens
+Parabens_Theme <- unique(c("BUPB","ETPB","MEPB","PRPB","BZPB","HEPB","BUP","ETP","PRP"))
+length(Parabens_Theme)
+
+#Smoking/Smoking
+Smoking_Theme <- unique(c("COTT","HCOTT","NICT","NNAL","COT"))
+length(Smoking_Theme)
+
+#Inflam
+Inflam_Theme <- unique(c("HAPTOGLOBIN","FLT3L","TIMP1","TIMP2","IL17F","GMCSF","IFNG","IL10","MIP3A",
+                         "IL12P70", "IL13","IL15","IL17A","IL22","IL9","IL1B","IL33","IL2","IL21",
+                         "IL4"," IL23","IL5","IL6","IL17EIL25","IL27","IL31","TNFA","TNFB","IL28A",
+                         "MMP1","MMP2","MMP7","MMP9","MMP10","CRP","LTE4","IL8","IL23"))
+
+length(Inflam_Theme)
+
+#Pesticide
+
+Pesticide_Theme <- unique(c("DEP","DETP","DMDP","DMP","DMTP","PBA",
+                            "TCP","DEDP","GPS","FPBA","PNP","IMPY","D24","AMPA",
+                            "MDA","T245","BHCH","HCB","PPDDE","PPDDT","TCHL","TNON",
+                            "OCHL","PPDDD"))
+
+length(Pesticide_Theme)
+
+#Volatile Organic Compounds
+VOC_Theme <- unique(c("HPMA","HPMA2","SPMA","HMPMA"))
+
+length(VOC_Theme)
+
+#Oxidative Stress Markers
+OXID_Theme <- unique(c("F2A8IP","F2A23D","F2AVI","F2A12I","OS8OHDG","OSMDA","OS8O","OSMD"))
+
+length(OXID_Theme)
+
+#PFAS
+PFAS_Theme <- unique(c("NMFOSAA","PFBS" ,"PFDA","PFDODA" ,
+                "PFDS" ,"PFHPA" ,"PFHXA" , "PFHXS" ,
+                "PFNA" , "PFOA" , "PFOS","PFOSA", "PFUNDA",
+                "NETFOSAA","PFPEA","ETFOSA","PFBA","PFPEA","PFHPS"))
+
+length(PFAS_Theme)
+
+#Flame Retardants
+Flame_Retardant_Theme <- unique(c("BDE47","BDE99","BDE100","BDCPP","DPHP","TBBA",
+                                  "BCETP","BCPP","DBUP","DBZP","DOCP","DPCP","BDE153",
+                                  "BDE154","BDE183","BDE28","BDE47","BDE17","BDE66",
+                                  "BDE85","BDE99","PBB153","BDE28","BDE85"))
+length(Flame_Retardant_Theme)
+
+PCB_Theme <- unique(c( "PCB105_PCB127","PCB110", "PCB114_PCB122","PCB118_PCB106", "PCB128", "PCB137",
+  "PCB138_PCB158","PCB146_PCB161", "PCB153","PCB156","PCB157","PCB167","PCB170","PCB172_PCB192", "PCB177",
+  "PCB180","PCB182_PCB187","PCB183", "PCB18_PCB17","PCB194",
+  "PCB195","PCB196_PCB203", "PCB199","PCB202","PCB206","PCB208","PCB209","PCB22",
+  "PCB31_PCB28", "PCB33_PCB20","PCB37","PCB41_PCB64","PCB44","PCB47_48_75",
+  "PCB49_PCB43","PCB52_PCB73","PCB5_PCB8","PCB70_PCB76","PCB73_PCB95","PCB74_PCB61",
+  "PCB85_PCB120","PCB90_101_89","PCB99"))
+
+#Bisdithiocarbamates 
+Bisdithiocarbamates_Theme <- unique(c("ETU","PTU"))
+
+#Cellular adhesion molecules 
+CAM_Theme <- unique(c("ICAM1","VCAM1","ESEL","PSEL"))
+
+#Lipids
+
+Lipids_Theme <- unique(c("CHOL","OXLDL","TG"))
+
+#Nutrients
+Nutrients_Theme <- unique(c("GAMTOC","ALPTOC","ZEAXAN","CRYPTO","LYCOPE","ALPCARO",
+                            "BETCARO","RET","FOL","ADIPO"))
+length(Nutrients_Theme)
+
+
+Lipid_Metab <- c("LEP")
+
+Thromboxane <- c("DHTHRM")
+
+
+Other_Theme <- c(Bisdithiocarbamates_Theme,CAM_Theme,Lipids_Theme,Nutrients_Theme,Lipid_Metab,Thromboxane)
+```
+
+Targeted Studies
+-----
+```{r}
+unique(Targeted_Data_All$Study)
+unique(SDOH_Data_All$Study)
+```
+
+
+Data Clean
+-------
+
+```{r}
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
+                                    Location == "NorthEast_US" ~ "United_States",
+                                    Location == "New_Hampshire" ~ "United_States",
+                                    Location == "Washington_State" ~ "United_States",
+                                    Location == "Midwestern_US" ~ "United_States",
+                                    Location == "Denver" ~ "United_States",
+                                    Location == "Baltimore" ~ "United_States",
+                                    Location == "Sacramento" ~ "United_States",
+                                    Location == "Southern_California" ~ "United_States",
+                                    Location == "Syracuse" ~ "United_States",
+                                    Location == "Michigan" ~ "United_States",
+                                    Location == "California" ~ "United_States",
+                                    Location == "SanFrancisco" ~ "United_States",
+                                    Location == "Massachusetts" ~ "United_States",
+                                    TRUE ~ "Worldwide")) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+  Mat_Edu %in% c("No_Education",
+                 "Primary_Education",
+                 "Primary_School",
+                 "High_School") ~ "No_College",
+  Mat_Edu %in% c("Some_College",
+                 "Four_Year_College_Degree",
+                 "Some_Grad_School") ~ "Some_College",
+  Mat_Edu == "Not_Reported" ~ NA
+)) %>% 
+  mutate(Mat_Income_Binary = case_when(
+  Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
+  Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
+                "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
+  TRUE ~ NA
+))
+
+```
+
+
+
+
+```{r}
+
+
+Child_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  dplyr::select(-Mat_PID) %>% 
+  group_by(Study,Child_PID,Analyte_Code) %>% 
+  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+  ungroup()
+
+
+
+# Child_Data_Targeted %>% 
+#   dplyr::filter(Analyte_Code == "As") %>% View
+
+myanalytes <- unique(Child_Data_Targeted$Analyte_Code)
+child_analytes <- myanalytes
+
+child_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Child_PID","Study",curr_analyte)
+  
+  curr_data <- Child_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+    
+  child_list_Targeted[[i]] <- curr_data
+  names(child_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+```{r}
+Mat_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Mat_PID)) %>% 
+  dplyr::select(-Child_PID) %>% 
+  dplyr::filter(!is.na(Analyte_Code)) %>% 
+  group_by(Study,Mat_PID,Analyte_Code) %>% 
+  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+  mutate(across(everything(), ~ replace(., is.infinite(.), 0)))
+
+
+myanalytes <- unique(Mat_Data_Targeted$Analyte_Code)
+
+mat_analytes <- myanalytes
+
+mat_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  #print(i)
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Mat_PID","Study",curr_analyte)
+  
+  curr_data <- Mat_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+    
+  mat_list_Targeted[[i]] <- curr_data
+  names(mat_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+
+
+Separate Data into Child and Adult
+-----
+
+```{r}
+
+# Child_ExWAS_SDOH_Exposures <- ExWAS_SDOH_Exposures %>% 
+#   dplyr::filter(!is.na(Child_PID)) %>% 
+#   mutate(Study = str_replace_all(Study, "_SDOH", "")) %>% 
+#   distinct(Child_PID,.keep_all = TRUE)
+
+#Child_Features_SDOH <- left_join(Child_Features_Df,Child_ExWAS_SDOH_Exposures, by = c("Child_PID","Study"))
+
+
+
+Child_SDOH <- ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  dplyr::select(Study,Child_PID,Mat_PID,everything())
+
+length(unique(Child_SDOH$Child_PID))
+
+
+Mat_SDOH <- ExWAS_SDOH_Exposures %>% 
+  mutate(Adult_Sex = ifelse(is.na(Adult_Sex),"F",Adult_Sex)) %>% 
+  dplyr::filter(Adult_Sex != "M") %>% 
+  dplyr::filter(!is.na(Mat_PID) ) %>% 
+  dplyr::select(Study,Child_PID,Mat_PID,everything()) 
+length(unique(Mat_SDOH$Mat_PID))
+
+
+Combined_SDOH <- ExWAS_SDOH_Exposures %>% 
+  mutate(Comb_PID = paste0(Child_PID,":",Mat_PID)) %>% 
+  dplyr::select(Comb_PID,everything())
+
+```
+
+
+Correlations
+---
+```{r}
+Fast_Merge <- function(mylist = All_Perc,ID_Col = "Child_PID"){
+  
+
+  results_df <- mylist[[1]] %>% 
+   group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    #summarise(value = mean(col_name,na.rm = T))
+  
+
+  for(i in 2:length(mylist)){
+    
+    #print(i)
+    
+    curr_df <- mylist[[i]] %>% 
+      group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    
+    #names(curr_df) <- c(ID_Col,"Study",metab_new)
+    results_df <- full_join(results_df, curr_df, by = c(ID_Col,"Study"))
+
+  }
+  
+  return(results_df)  
+}
+```
+
+```{r}
+Child_Features_Df <- Fast_Merge(mylist = child_list_Targeted,ID_Col = "Child_PID")%>%
+  select(where(~ !all(is.na(.)))) 
+
+Mat_Features_Df <- Fast_Merge(mylist = mat_list_Targeted,ID_Col = "Mat_PID")%>%
+  select(where(~ !all(is.na(.)))) 
+```
+
+Correlation Plots
+-----
+
+```{r}
+pairwise_n <- function(df) {
+  m <- as.matrix(df)
+  n_mat <- outer(
+    1:ncol(m), 1:ncol(m),
+    Vectorize(function(i, j) sum(complete.cases(m[, c(i, j)])))
+  )
+  dimnames(n_mat) <- list(names(df), names(df))
+  n_mat
+}
+
+
+```
+
+
+```{r}
+cor_input <- Child_Features_Df %>% 
+  ungroup() %>% 
+  dplyr::select(-Child_PID,-Study)
+
+
+n_matrix <- pairwise_n(cor_input)
+
+
+cor_matrix <- cor(cor_input, use = "pairwise.complete.obs", method = "pearson")
+
+cor_df <- cor_matrix %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("var1") %>%
+  pivot_longer(-var1, names_to = "var2", values_to = "cor") %>%
+  filter(var1 < var2) %>%
+  mutate(n = n_matrix[cbind(var1, var2)])  %>%   
+  mutate(
+    Category1 = case_when(
+      var1 %in% Trace_Elements_Theme    ~ "TraceElements",
+      var1 %in% Phenols_Theme           ~ "Phenols",
+      var1 %in% Phthalates_Theme        ~ "Phthalates",
+      var1 %in% PAH_Theme               ~ "PAH",
+      var1 %in% PCB_Theme               ~ "PCB",
+      var1 %in% Parabens_Theme          ~ "Parabens",
+      var1 %in% Smoking_Theme           ~ "Smoking",
+      var1 %in% Inflam_Theme            ~ NA_character_,
+      var1 %in% Pesticide_Theme         ~ "Pesticides",
+      var1 %in% VOC_Theme               ~ "VOCs",
+      var1 %in% OXID_Theme              ~ NA_character_,
+      var1 %in% Flame_Retardant_Theme   ~ "FlameRetardants",
+      var1 %in% Other_Theme             ~ NA_character_,
+      var1 %in% PFAS_Theme              ~ "PFAS"
+    ),
+    Category2 = case_when(
+      var2 %in% Trace_Elements_Theme    ~ "TraceElements",
+      var2 %in% Phenols_Theme           ~ "Phenols",
+      var2 %in% Phthalates_Theme        ~ "Phthalates",
+      var2 %in% PAH_Theme               ~ "PAH",
+      var2 %in% PCB_Theme               ~ "PCB",
+      var2 %in% Parabens_Theme          ~ "Parabens",
+      var2 %in% Smoking_Theme           ~ "Smoking",
+      var2 %in% Inflam_Theme            ~ NA_character_,
+      var2 %in% Pesticide_Theme         ~ "Pesticides",
+      var2 %in% VOC_Theme               ~ "VOCs",
+      var2 %in% OXID_Theme              ~ NA_character_,
+      var2 %in% Flame_Retardant_Theme   ~ "FlameRetardants",
+      var2 %in% Other_Theme             ~ NA_character_,
+      var2 %in% PFAS_Theme              ~ "PFAS"
+    )
+  ) %>%
+  filter(!is.na(Category1), !is.na(Category2)) %>% 
+  mutate(Category_Comb = paste0(Category1,":",Category2)) 
+
+
+strong_corrs <- cor_df %>%
+  filter(n >= 30) %>%              
+  filter(abs(cor) > 0.2) %>%      
+  arrange(desc(abs(cor))) %>% 
+  group_by(Category_Comb) %>%
+  filter(n() > 10) %>%
+  ungroup()
+
+table(strong_corrs$Category_Comb)
+
+```
+
+```{r}
+vars_order <- strong_corrs %>%
+  pivot_longer(c(var1, var2), names_to = "side", values_to = "var") %>%
+  group_by(var) %>%
+  summarise(mean_abs = mean(abs(cor)), .groups = "drop") %>%
+  arrange(desc(mean_abs)) %>%
+  pull(var)
+
+pdf(file = "../../Output/Final_Paper1_Output/Plots/Child_CorPlot_All.pdf",height = 10,width = 14)
+p_heat <- strong_corrs %>%
+  mutate(
+    var1 = factor(var1, levels = vars_order),
+    var2 = factor(var2, levels = vars_order),
+    sign = ifelse(cor >= 0, "positive", "negative")
+  ) %>%
+  #dplyr::filter(Category1 == Category2) %>% 
+  ggplot(aes(var1, var2, fill = cor)) +
+  geom_tile(color = "white") +
+  #geom_text(aes(label = sprintf("%.2f\n(n=%d)", cor, n)), size = 3) +
+  scale_fill_gradient2(limits = c(-1, 1), midpoint = 0, name = "Pearson r") +
+  labs(x = NULL, y = NULL, title = "Exposure Correlations over 0.2") +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        axis.text.y = element_text(size = 10),
+        panel.grid = element_blank()) +
+  facet_wrap(~Category_Comb,scales = "free")
+
+print(p_heat)
+dev.off()
+```
+
+```{r}
+
+# Fast pairwise N using crossprod on !is.na
+pairwise_n <- function(df) {
+  m <- as.matrix(df)
+  n_mat <- crossprod(!is.na(m))
+  dimnames(n_mat) <- list(colnames(df), colnames(df))
+  n_mat
+}
+
+# Helper: map a variable name to a category given a named list of themes
+# theme_map MUST be a named list: list(
+#   TraceElements = Trace_Elements_Theme, Phenols = Phenols_Theme, ..., PFAS = PFAS_Theme
+# )
+map_category <- function(var, theme_map) {
+  hit <- keep(names(theme_map), ~ var %in% theme_map[[.x]])
+  if (length(hit) == 0) NA_character_ else hit[[1]]
+}
+
+# Main function
+make_corrplot <- function(features_df,
+                          id_cols = c("Child_PID","Study"),
+                          theme_map,                     # named list of themes -> vectors
+                          min_n = 30,                    # minimum pairwise sample size
+                          min_abs_cor = 0.2,             # minimum |r|
+                          min_pairs_per_category = 10,   # minimum rows per Category_Comb
+                          facet_scales = "free",
+                          output_pdf = NULL,             # e.g., "Child_CorPlot_All.pdf"
+                          plot_title = "Exposure Correlations over threshold") {
+
+  # 1) Prep input: drop ids, keep numeric columns only
+  cor_input <- features_df %>%
+    ungroup() %>%
+    select(-any_of(id_cols)) %>%
+    select(where(is.numeric))
+
+  # Early exit if too few numeric columns
+  if (ncol(cor_input) < 2) {
+    stop("Need at least two numeric columns after removing id_cols.")
+  }
+
+  # 2) Pairwise N matrix and correlation matrix
+  n_matrix <- pairwise_n(cor_input)
+  cor_matrix <- cor(cor_input, use = "pairwise.complete.obs", method = "pearson")
+
+  # 3) Long-format with n lookup
+  cor_df <- cor_matrix %>%
+    as.data.frame() %>%
+    rownames_to_column("var1") %>%
+    pivot_longer(-var1, names_to = "var2", values_to = "cor") %>%
+    filter(var1 < var2) %>%
+    mutate(
+      n = n_matrix[cbind(var1, var2)],
+      Category1 = map_chr(var1, map_category, theme_map = theme_map),
+      Category2 = map_chr(var2, map_category, theme_map = theme_map)
+    ) %>%
+    filter(!is.na(Category1), !is.na(Category2)) %>%
+    mutate(Category_Comb = paste0(Category1, ":", Category2))
+
+  # 4) Strong correlations with frequency filter on Category_Comb
+  strong_corrs <- cor_df %>%
+    filter(n >= min_n, abs(cor) > min_abs_cor) %>%
+    arrange(desc(abs(cor))) %>%
+    group_by(Category_Comb) %>%
+    filter(n() > min_pairs_per_category) %>%
+    ungroup()
+
+  # If nothing survives, stop with a helpful message
+  if (nrow(strong_corrs) == 0) {
+    stop("No correlations passed the filters (min_n, min_abs_cor, and min_pairs_per_category). Try loosening thresholds.")
+  }
+
+  # 5) Order variables by average |r| within the kept set
+  vars_order <- strong_corrs %>%
+    pivot_longer(c(var1, var2), names_to = "side", values_to = "var") %>%
+    group_by(var) %>%
+    summarise(mean_abs = mean(abs(cor)), .groups = "drop") %>%
+    arrange(desc(mean_abs)) %>%
+    pull(var)
+
+  # 6) Plot
+  p_heat <- strong_corrs %>%
+    mutate(
+      var1 = factor(var1, levels = vars_order),
+      var2 = factor(var2, levels = vars_order),
+      sign = ifelse(cor >= 0, "positive", "negative")
+    ) %>%
+    ggplot(aes(var1, var2, fill = cor)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient2(limits = c(-1, 1), midpoint = 0, name = "Pearson r") +
+    labs(x = NULL, y = NULL, title = plot_title,
+         subtitle = paste0("Filters: |r| > ", min_abs_cor,
+                           ", n ≥ ", min_n,
+                           ", Category_Comb count > ", min_pairs_per_category)) +
+    theme_classic(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+          axis.text.y = element_text(size = 9),
+          panel.grid = element_blank()) +
+    facet_wrap(~ Category_Comb, scales = facet_scales)
+
+  # 7) Optional save
+  if (!is.null(output_pdf)) {
+    ggsave(filename = output_pdf, plot = p_heat, width = 14, height = 10, units = "in")
+  }
+
+  return(list(p_heat,strong_corrs))
+}
+
+```
+
+```{r}
+theme_map <- list(
+  TraceElements     = Trace_Elements_Theme,
+  Phenols           = Phenols_Theme,
+  Phthalates        = Phthalates_Theme,
+  PAH               = PAH_Theme,
+  PCB               = PCB_Theme,
+  Parabens          = Parabens_Theme,
+  Smoking           = Smoking_Theme,
+  Pesticides        = Pesticide_Theme,
+  VOCs              = VOC_Theme,
+  FlameRetardants   = Flame_Retardant_Theme,
+  PFAS              = PFAS_Theme
+)
+
+Child_Corr_Res <- make_corrplot(
+  features_df = Child_Features_Df,
+  id_cols = c("Child_PID","Study"),
+  theme_map = theme_map,
+  min_n = 30,
+  min_abs_cor = 0.2,
+  min_pairs_per_category = 10,
+  output_pdf = "../../Output/Final_Paper1_Output/Plots/Child_CorPlot_All.pdf"
+)
+
+print(Child_Corr_Res[[1]])
+
+```
+
+```{r}
+Mat_Corr_Res <- make_corrplot(
+  features_df = Mat_Features_Df,
+  id_cols = c("Mat_PID","Study"),
+  theme_map = theme_map,
+  min_n = 30,
+  min_abs_cor = 0.2,
+  min_pairs_per_category = 10,
+  output_pdf = "../../Output/Final_Paper1_Output/Plots/Mat_CorPlot_All.pdf"
+)
+
+print(Mat_Corr_Res[[1]])
+
+```
+
+Calculate Effective Features
+-------
+```{r}
+meff_from_long <- function(corr_long,
+                           var1 = "var1",
+                           var2 = "var2",
+                           rcol = "cor",
+                           missing = c("zero", "drop")) {
+  missing <- missing
+
+  v1 <- as.character(corr_long[[var1]])
+  v2 <- as.character(corr_long[[var2]])
+  rv <- as.numeric(corr_long[[rcol]])
+
+  # ensure each pair is unordered so (A,B) == (B,A)
+  a <- pmin(v1, v2)
+  b <- pmax(v1, v2)
+
+  # average duplicates if any
+  key <- paste(a, b, sep = "\r")
+  vals <- tapply(rv, key, mean, na.rm = TRUE)
+
+  # all variables
+  pairs <- strsplit(names(vals), "\r", fixed = TRUE)
+  vars  <- sort(unique(unlist(pairs)))
+  p <- length(vars)
+
+  # build symmetric correlation matrix
+  R <- matrix(NA_real_, nrow = p, ncol = p, dimnames = list(vars, vars))
+  diag(R) <- 1
+  for (i in seq_along(vals)) {
+    ij <- pairs[[i]]
+    r  <- max(min(vals[i], 1), -1)  # clamp tiny drift to [-1,1]
+    R[ij[1], ij[2]] <- r
+    R[ij[2], ij[1]] <- r
+  }
+
+  # handle any missing off-diagonals
+  if (anyNA(R)) {
+    if (missing == "zero") {
+      R[is.na(R)] <- 0   # assume independence for unseen pairs
+    } else {              # missing == "drop": drop vars until complete
+      na_ct <- rowSums(is.na(R))
+      while (any(na_ct > 0) && ncol(R) > 1) {
+        dropi <- names(sort(na_ct, decreasing = TRUE))[1]
+        keep  <- setdiff(colnames(R), dropi)
+        R <- R[keep, keep, drop = FALSE]
+        diag(R) <- 1
+        na_ct <- rowSums(is.na(R))
+      }
+      if (anyNA(R) || ncol(R) < 2)
+        stop("Could not form a complete correlation matrix by dropping variables.")
+    }
+  }
+
+  # eigenvalues and Meff
+  eig <- eigen(R, symmetric = TRUE, only.values = TRUE)$values
+  M   <- ncol(R)
+  var_lambda <- stats::var(eig)
+  Meff <- 1 + (M - 1) * (1 - var_lambda / M)
+  Meff <- min(max(Meff, 1), M)  # keep within [1, M]
+
+  list(
+    Meff = Meff,
+    M = M,
+    var_lambda = var_lambda,
+    prop_reduction = var_lambda / M,  # Var(λ_obs)/M
+    eigenvalues = eig,
+    R = R
+  )
+}
+
+```
+
+```{r}
+
+```
+
+
+```{r}
+
+mycats <- Child_Corr_Res[[2]] %>% 
+   dplyr::filter(Category1 == Category2) %>% 
+   pull(Category_Comb) %>% 
+   unique()
+
+All_Meff_Results_Child <- list()
+for(i in seq_along(mycats)){
+  
+  curr_corr <-   Child_Corr_Res[[2]] %>% 
+    dplyr::filter(Category_Comb == mycats[i])
+
+  Meff_zero <- meff_from_long(corr_long = curr_corr, var1="var1", var2="var2", rcol="cor", missing="zero")
+  Meff_drop <- meff_from_long(corr_long = curr_corr, var1="var1", var2="var2", rcol="cor", missing="drop")
+  Meff_Results <- list(Meff_zero,Meff_drop)
+  names(Meff_Results) <- c("Meff_Zero","Meff_Drop")
+  All_Meff_Results_Child[[i]] <- Meff_Results
+  names(All_Meff_Results_Child)[i] <- mycats[i]
+  
+}
+
+Child_Meff <- list()
+for(i in seq_along(All_Meff_Results_Child)){
+  
+  Curr_Zero <- All_Meff_Results_Child[[i]][[1]]
+  Meff <- Curr_Zero$Meff
+  M <- Curr_Zero$M
+  var_lambda <- Curr_Zero$var_lambda
+  prop_reduction <- Curr_Zero$prop_reduction
+  curr_row <- data.frame("Category"= names(All_Meff_Results_Child)[i],"Meff" = Meff,"M" = M,
+                        "Var_Lambda" = var_lambda,"Prop_Reduction" = prop_reduction)
+  
+  Child_Meff[[i]] <- curr_row
+
+}
+
+Child_Meff_Df <- bind_rows(Child_Meff) %>% 
+  mutate(Population = "Child")
+```
+
+
+```{r}
+
+mycats <- Mat_Corr_Res[[2]] %>% 
+   dplyr::filter(Category1 == Category2) %>% 
+   pull(Category_Comb) %>% 
+   unique()
+
+All_Meff_Results_Mat <- list()
+for(i in seq_along(mycats)){
+  
+  curr_corr <-   Mat_Corr_Res[[2]] %>% 
+    dplyr::filter(Category_Comb == mycats[i])
+
+  Meff_zero <- meff_from_long(corr_long = curr_corr, var1="var1", var2="var2", rcol="cor", missing="zero")
+  Meff_drop <- meff_from_long(corr_long = curr_corr, var1="var1", var2="var2", rcol="cor", missing="drop")
+  Meff_Results <- list(Meff_zero,Meff_drop)
+  names(Meff_Results) <- c("Meff_Zero","Meff_Drop")
+  All_Meff_Results_Mat[[i]] <- Meff_Results
+  names(All_Meff_Results_Mat)[i] <- mycats[i]
+  
+}
+
+Mat_Meff <- list()
+for(i in seq_along(All_Meff_Results_Mat)){
+  
+  Curr_Zero <- All_Meff_Results_Mat[[i]][[1]]
+  Meff <- Curr_Zero$Meff
+  M <- Curr_Zero$M
+  var_lambda <- Curr_Zero$var_lambda
+  prop_reduction <- Curr_Zero$prop_reduction
+  curr_row <- data.frame("Category"= names(All_Meff_Results_Mat)[i],"Meff" = Meff,"M" = M,
+                        "Var_Lambda" = var_lambda,"Prop_Reduction" = prop_reduction)
+  
+  Mat_Meff[[i]] <- curr_row
+
+}
+
+Mat_Meff_Df <- bind_rows(Mat_Meff)%>% 
+  mutate(Population = "Adult")
+```
+
+```{r}
+All_Meff_Data <- bind_rows(Mat_Meff_Df,Child_Meff_Df) %>% 
+  mutate(
+    Meff = as.numeric(Meff),
+    M    = as.numeric(M),
+    gap  = M - Meff
+  ) %>%
+  arrange(desc(gap)) %>%                                 
+  mutate(Category = factor(Category, levels = unique(Category)))  %>% 
+  separate(Category,c(NA,"Category"),sep = ":")
+
+```
+
+
+```{r}
+All_Long_Cors <- bind_rows(Child_Corr_Res[[2]] %>% mutate(Population = "Child"), 
+                           Mat_Corr_Res[[2]] %>% mutate(Population = "Adult")) %>% 
+  dplyr::filter(Category1 == Category2) %>% 
+  mutate(abs_cor = abs(cor))
+
+
+
+```
+
+```{r}
+All_Long_Cors %>% 
+  group_by(Category1) %>% 
+  summarise(mean_cor = mean(abs_cor,na.rm = T)) %>% 
+  View
+```
+
+
+```{r}
+
+Plot_Meff <- All_Meff_Data %>% 
+  group_by(Category) %>% 
+  summarise(Meff = mean(Meff,na.rm = T),
+            M = mean(M,na.rm = T))
+
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+pdf(file = "../../Output/Final_Paper1_Output/Plots/Meff_All.pdf", width = 4, height = 4)
+cor_box <- ggplot(All_Long_Cors, aes(x = Category1, y = abs_cor, fill = Category1)) +
+    geom_boxplot(outlier.size = 0.8, width = 0.6, color = "black") +
+    coord_cartesian(ylim = c(0, 1)) +
+    scale_y_continuous(breaks = seq(0, 1, by = 0.25),
+                       name = "Abs(correlation)") +
+    labs(x = "Category",
+         title = "Chemical Exposome Correlations") +
+  scale_fill_manual(values = mypal) +
+    theme_classic(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none") 
+print(cor_box)
+
+cor_bar <- ggplot(Plot_Meff, aes(y = Category)) +
+  geom_segment(aes(x = Meff, xend = M, yend = Category),
+               size = 1.2, lineend = "round", colour = "grey55") +
+  geom_point(aes(x = Meff), size = 2.6, shape = 21, fill = "#197EC0FF") +
+  geom_point(aes(x = M),    size = 2.6, shape = 21, fill = "#C80813FF") +
+  labs(
+    x = "Count (Blue = Meff, Red = M)",
+    y = NULL,
+    title = "Effective vs Total Exposures",
+    subtitle = "Line length = M − Meff"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(axis.text.y = element_text(size = 9)) 
+print(cor_bar)
+dev.off()
+```
+```{r}
+cor_box <- ggplot(All_Long_Cors, aes(x = Category1, y = abs_cor, fill = Category1)) +
+  geom_boxplot(
+    outlier.size = 0.8,
+    width = 0.65,
+    color = "grey25",
+    alpha = 0.9,
+    linewidth = 0.4
+  ) +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_y_continuous(
+    breaks = seq(0, 1, by = 0.25),
+    labels = scales::number_format(accuracy = 0.01),
+    name = expression("|Correlation|")
+  ) +
+  scale_fill_manual(values = mypal) +
+  labs(
+    x = NULL,
+    title = "Distribution of Chemical Exposome Correlations"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(
+      size = 18,
+      face = "bold",
+      hjust = 0.5
+    ),
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      size = 12,
+      face = "bold",
+      color = "grey15"
+    ),
+    axis.text.y = element_text(size = 12, color = "grey15"),
+    axis.title.y = element_text(size = 14, face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6),
+    axis.ticks = element_line(color = "grey50"),
+    axis.ticks.length = unit(0.2, "cm"),
+    legend.position = "none"
+  )
+save(cor_box,file = "../../Output/Final_Paper1_Output/cor_box.RData")
+```
+
+```{r}
+Plot_Meff <- Plot_Meff %>% 
+  dplyr::mutate(
+    gap = M - Meff,
+    Category = forcats::fct_reorder(Category, M, .desc = TRUE)
+  )
+
+cor_bar <- ggplot(Plot_Meff, aes(y = Category)) +
+  # Gap line
+  geom_segment(
+    aes(x = Meff, xend = M, yend = Category),
+    linewidth = 1.6, lineend = "round", colour = "grey60"
+  ) +
+  # Meff and M points with legend
+  geom_point(aes(x = Meff, color = "Meff"), size = 3, shape = 16) +
+  geom_point(aes(x = M,    color = "M"),    size = 3, shape = 16) +
+  # Gap label at the midpoint (light and unobtrusive)
+  # geom_text(
+  #   aes(x = (Meff + M) / 2, label = scales::comma(M - Meff)),
+  #   size = 3, nudge_y = 0.18, color = "grey30", family = "sans"
+  # ) +
+  scale_color_manual(
+    name = NULL,
+    values = c("Meff" = "#197EC0FF", "M" = "#C80813FF")
+  ) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0.02, 0.06)),
+    breaks = scales::pretty_breaks(6)
+  ) +
+  labs(
+    x = "Exposure Count",
+    y = NULL,
+    title = "Effective vs Total Exposures by Category",
+    subtitle = "Line = gap (M − Meff)"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title   = element_text(size = 18, face = "bold", hjust = 0.5),
+    plot.subtitle= element_text(size = 12, color = "black", hjust = 0.5),
+    axis.text.y  = element_text(size = 11, face = "bold", color = "black"),
+    axis.text.x  = element_text(size = 11, color = "black"),
+    axis.title.x = element_text(size = 12, face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6),
+    legend.position = "top"
+  )
+
+save(cor_bar,file = "../../Output/Final_Paper1_Output/cor_bar.RData")
+
+```
+
+```{r}
+Plot_Meff %>% 
+  mutate(meff_Delta = M-Meff) %>% 
+  View
+```
+

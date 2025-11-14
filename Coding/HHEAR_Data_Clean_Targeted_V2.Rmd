@@ -1,0 +1,579 @@
+---
+title: "HHEAR_Data_Clean"
+author: "Dillon Lloyd"
+date: "2024-10-03"
+output: html_document
+---
+```{r}
+## =========================================================
+## Harmonize Targeted Metabolomics (All Cohorts) - Clean .R
+## =========================================================
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(data.table)
+})
+
+## ---------- Helpers ----------
+lod_impute <- function(conc, lim) {
+  lim <- suppressWarnings(as.numeric(lim))
+  ifelse(!is.na(lim) & lim > 0 & !is.na(conc) & conc <= lim, lim/2, conc)
+}
+
+sg_correct <- function(conc, sg, target = 1.020) {
+  ifelse(is.na(sg) | sg <= 1, conc, conc * ((target - 1)/(sg - 1)))
+}
+
+cre_correct <- function(conc, cre) {
+  ifelse(!is.na(cre) & cre > 0, conc/cre, conc)
+}
+
+to_ng_per_mL <- function(value, units) {
+  case_when(
+    is.na(units)            ~ value,
+    units %in% c("ng/mL")   ~ value,
+    units %in% c("ug/dL")   ~ value * 10,
+    units %in% c("ng/L")    ~ value / 1000,
+    units %in% c("pg/mL","pg/ml") ~ value / 1000,
+    units %in% c("mg/L")    ~ value * 1000,
+    TRUE ~ value
+  )
+}
+
+## ---------- Load All Datasets ----------
+data_files <- list.files(
+  path = "../Input/",
+  pattern = "All\\.RData$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+invisible(lapply(data_files, load, .GlobalEnv))
+
+## =========================================================
+## Cohort-by-cohort targeted tables (always produce *_Targeted)
+## =========================================================
+
+## CCREOH ---------------------------------------------------
+CCREOH_Targeted <- CCREOH_data_list[["CCREOH_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## CEHC -----------------------------------------------------
+CEHC_Targeted <- CEHC_data_list[["CEHC_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## CHARGE ---------------------------------------------------
+CHARGE_Targeted <- CHARGE_data_list[["CHARGE_Targeted"]] %>%
+  transmute(
+    Child_PID      = CHILD_PID,
+    Chemical_Group = Chemical_Group,
+    Analyte_Code   = analyte_code,
+    Concentration  = concentration,
+    Units          = units,
+    LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## DAPS (CRE correction) -----------------------------------
+DAPS_Targeted_raw <- DAPS_data_list[["DAPS_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = chemical_group, Analyte_Code = Analyte_code,
+    Concentration, Units = units, LOD, sample_collection_timepoint
+  )
+
+DAPS_Targeted <- DAPS_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+DAPS_CRE <- DAPS_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, sample_collection_timepoint, Concentration_CRE = Concentration)
+
+DAPS_Targeted <- DAPS_Targeted %>%
+  left_join(DAPS_CRE, by = c("Child_PID","sample_collection_timepoint")) %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE, -sample_collection_timepoint)
+
+## DEPART (CRE correction) ---------------------------------
+DEPART_Targeted_raw <- DEPART_data_list[["DEPART_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD
+  )
+
+DEPART_Targeted <- DEPART_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+DEPART_CRE <- DEPART_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, Concentration_CRE = Concentration, Units_CRE = Units)
+
+DEPART_Targeted <- DEPART_Targeted %>%
+  left_join(DEPART_CRE, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE, -Units_CRE)
+
+## DISCOVER (SG correction) --------------------------------
+DISCOVER_Targeted_raw <- DISCOVER_data_list[["DISCOVER_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, Units, LOD, aw_visit, ds_visit, ds_day,
+    ID2 = paste0(aw_visit, ":", ds_visit, ":", ds_day)
+  )
+
+DISCOVER_Targeted <- DISCOVER_Targeted_raw %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD)) %>%
+  select(-aw_visit, -ds_visit, -ds_day)
+
+DISCOVER_SG <- DISCOVER_Targeted_raw %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Child_PID, ID2, Concentration_SG = Concentration)
+
+DISCOVER_Targeted <- DISCOVER_Targeted %>%
+  left_join(DISCOVER_SG, by = c("Child_PID","ID2")) %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG)) %>%
+  select(-ID2, -Concentration_SG)
+
+## EEICC ---------------------------------------------------
+EEICC_Targeted <- EEICC_data_list[["EEICC_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## ELEMENT (pivot to long for child + maternal) ------------
+ELEMENT_Targeted_Child <- ELEMENT_data_list[["ELEMENT_Targeted"]] %>%
+  filter(str_detect(Sample_collection_timepoint_desc, "early")) %>%
+  pivot_longer(cols = 7:14, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  mutate(Units = "ng/L") %>%
+  transmute(Child_PID = PID, Analyte_Code, Concentration, Units)
+
+ELEMENT_Targeted_Mat <- ELEMENT_data_list[["ELEMENT_Targeted"]] %>%
+  filter(str_detect(Sample_collection_timepoint_desc, "preg")) %>%
+  pivot_longer(cols = 7:14, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  mutate(Units = "ng/L") %>%
+  transmute(Mat_PID = PID, Analyte_Code, Concentration, Units)
+
+ELEMENT_Targeted <- bind_rows(ELEMENT_Targeted_Child, ELEMENT_Targeted_Mat)
+rm(ELEMENT_Targeted_Child, ELEMENT_Targeted_Mat)
+
+## ESPINA --------------------------------------------------
+ESPINA_Targeted <- ESPINA_data_list[["ESPINA_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, LOD = LOQ, Units
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## GOALS (fix name) ---------------------------------------
+GOALS_Targeted <- GOALS_data_list[["GOALS_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, LOD = LOQ, Units
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## GOC (CRE correction) -----------------------------------
+GOC_Targeted_raw <- GOC_data_list[["GOC_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = chemical_group, Analyte_Code = analyte_code,
+    Concentration, Units, LOD, sample_collection_timepoint
+  )
+
+GOC_Targeted <- GOC_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+GOC_CRE <- GOC_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, sample_collection_timepoint, Concentration_CRE = Concentration)
+
+GOC_Targeted <- GOC_Targeted %>%
+  left_join(GOC_CRE, by = c("Child_PID","sample_collection_timepoint")) %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE, -sample_collection_timepoint)
+
+## IMBEDD (no targeted) -----------------------------------
+# (intentionally omitted)
+
+## MADRES --------------------------------------------------
+MADRES_Targeted <- MADRES_data_list[["MADRES_Targeted"]] %>%
+  transmute(
+    Mat_PID = child_PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## MARBLES (SG correction; multiple sources) ---------------
+marbtar <- MARBLES_data_list[["MARBLES_Targeted"]] %>%
+  select(Mat_PID = CHILD_PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD)
+
+marb_uep1 <- MARBLES_data_list[["MARBLES_UEP_Tri1"]] %>%
+  pivot_longer(cols = 5:13, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = CHILD_PID, Analyte_Code, Concentration)
+
+marb_uep2 <- MARBLES_data_list[["MARBLES_UEP_Tri2_3"]] %>%
+  pivot_longer(cols = 5:9, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = CHILD_PID, Analyte_Code, Concentration)
+
+marb_upest1 <- MARBLES_data_list[["MARBLES_UPEST_Tri1"]] %>%
+  pivot_longer(cols = 5:12, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = CHILD_PID, Analyte_Code, Concentration)
+
+marb_uphth1 <- MARBLES_data_list[["MARBLES_UPHTH_Trim1"]] %>%
+  pivot_longer(cols = 5:14, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = CHILD_PID, Analyte_Code, Concentration)
+
+MARBLES_all <- rbindlist(list(marbtar, marb_uep1, marb_uep2, marb_upest1, marb_uphth1),
+                         use.names = TRUE, fill = TRUE)
+
+MARBLES_Targeted <- MARBLES_all %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+MARBLES_SG <- marbtar %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Mat_PID, Concentration_SG = ifelse(is.na(Concentration), 1.020, Concentration))
+
+MARBLES_Targeted <- MARBLES_Targeted %>%
+  left_join(MARBLES_SG, by = "Mat_PID") %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG)) %>%
+  select(-Concentration_SG)
+
+## MDUC ----------------------------------------------------
+MDUC_Targeted <- MDUC_data_list[["MDUC_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_Code, Analyte_Code, LOD,
+    Concentration, Units
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## MEBCO (CRE correction) ---------------------------------
+MEBCO_long <- MEBCO_data_list[["MEBCO_Targeted"]] %>%
+  pivot_longer(cols = 3:8, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Child_PID = PID, Analyte_Code, Concentration)
+
+MEBCO_Targeted <- MEBCO_long %>%
+  filter(Analyte_Code != "CRE")
+
+MEBCO_CRE <- MEBCO_long %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, Concentration_CRE = Concentration)
+
+MEBCO_Targeted <- MEBCO_Targeted %>%
+  left_join(MEBCO_CRE, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+## NASH ----------------------------------------------------
+NASH_Targeted <- NASH_data_list[["NASH_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## NFGS (SG correction) -----------------------------------
+NFGS_Targeted_raw <- NFGS_data_list[["NFGS_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD)
+
+NFGS_Targeted <- NFGS_Targeted_raw %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+NFGS_SG <- NFGS_Targeted_raw %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Child_PID, Concentration_SG = Concentration)
+
+NFGS_Targeted <- NFGS_Targeted %>%
+  left_join(NFGS_SG, by = "Child_PID") %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG)) %>%
+  select(-Concentration_SG)
+
+## NHBCS_Cot (CRE correction; LOQ) ------------------------
+NHBCS_Cot_Targeted_raw <- NHBCS_Cot_data_list[["NHBCS_Cot_Targeted"]] %>%
+  transmute(Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD = LOQ)
+
+NHBCS_Cot_Targeted <- NHBCS_Cot_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+NHBCS_Cot_CRE <- NHBCS_Cot_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Mat_PID, Concentration_CRE = Concentration)
+
+NHBCS_Cot_Targeted <- NHBCS_Cot_Targeted %>%
+  left_join(NHBCS_Cot_CRE, by = "Mat_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+## NHBCS (combine targeted + Epi PFAS) --------------------
+NHBCS_Targeted_Targ <- NHBCS_data_list[["NHBCS_Targeted"]] %>%
+  transmute(Mat_PID = Mother_pid, Chemical_Group, Analyte_Code, Concentration, Units, LOD = LOQ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+NHBCS_Targeted_Epi <- NHBCS_data_list[["NHBCS_Epi"]] %>%
+  pivot_longer(cols = 16:22, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = mother_pid, Analyte_Code, Concentration)
+
+NHBCS_Targeted <- bind_rows(NHBCS_Targeted_Targ, NHBCS_Targeted_Epi)
+
+## nuMoM2b (SG correction) --------------------------------
+nuMoM2b_Targeted_raw <- nuMoM2b_data_list[["nuMoM2b_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,
+    sample_collection_timepoint
+  )
+
+nuMoM2b_Targeted <- nuMoM2b_Targeted_raw %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+nuMoM2b_SG <- nuMoM2b_Targeted_raw %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Mat_PID, sample_collection_timepoint, Concentration_SG = Concentration)
+
+nuMoM2b_Targeted <- nuMoM2b_Targeted %>%
+  left_join(nuMoM2b_SG, by = c("Mat_PID","sample_collection_timepoint")) %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG)) %>%
+  select(-sample_collection_timepoint, -Concentration_SG)
+
+## PARENTs -------------------------------------------------
+PARENTs_Targeted <- PARENTs_data_list[["PARENTs_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## SEARCH --------------------------------------------------
+SEARCH_Targeted <- SEARCH_data_list[["SEARCH_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## SICAS (CRE correction) ---------------------------------
+SICAS_Targeted_raw <- SICAS_data_list[["SICAS_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD)
+
+SICAS_Targeted <- SICAS_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+SICAS_CRE <- SICAS_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, Concentration_CRE = Concentration)
+
+SICAS_Targeted <- SICAS_Targeted %>%
+  left_join(SICAS_CRE, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+## SLC (bind two parts) -----------------------------------
+slc_2517 <- SLC_data_list[["SLC_2517_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+slc_3131 <- SLC_data_list[["SLC_3131_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+SLC_Targeted <- bind_rows(slc_2517, slc_3131)
+
+## TEDDY (CRE correction) ---------------------------------
+TEDDY_Targeted_raw <- TEDDY_data_list[["TEDDY_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,
+    Sample_collection_timepoint
+  )
+
+TEDDY_Targeted <- TEDDY_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+TEDDY_CRE <- TEDDY_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, Sample_collection_timepoint, Concentration_CRE = Concentration)
+
+TEDDY_Targeted <- TEDDY_Targeted %>%
+  left_join(TEDDY_CRE, by = c("Child_PID","Sample_collection_timepoint")) %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE, -Sample_collection_timepoint)
+
+## TSIC (bind inflam + cotinine; LOQ used for cot if provided) -----------
+tsic_inflam <- TSIC_data_list[["TSIC_Inflam"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+tsic_cot <- TSIC_data_list[["TSIC_Cotine"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD = LOQ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+TSIC_Targeted <- bind_rows(tsic_inflam, tsic_cot)
+
+## USCEHC (none targeted) ---------------------------------
+# (intentionally omitted)
+
+## VAPS (CRE correction) ----------------------------------
+VAPS_Targeted_raw <- VAPS_data_list[["VAPS_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD)
+
+VAPS_Targeted <- VAPS_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+VAPS_CRE <- VAPS_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, Concentration_CRE = Concentration)
+
+VAPS_Targeted <- VAPS_Targeted %>%
+  left_join(VAPS_CRE, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+## VDAART (SG correction) ---------------------------------
+VDAART_Targeted_raw <- VDAART_data_list[["VDAART_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code = analyte_code,
+    Concentration, Units, LOD
+  )
+
+VDAART_Targeted <- VDAART_Targeted_raw %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+VDAART_SG <- VDAART_Targeted_raw %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Child_PID, Concentration_SG = Concentration)
+
+VDAART_Targeted <- VDAART_Targeted %>%
+  left_join(VDAART_SG, by = "Child_PID") %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG)) %>%
+  select(-Concentration_SG)
+
+## VIVA ----------------------------------------------------
+VIVA_Targeted <- VIVA_data_list[["VIVAC_Targeted"]] %>%
+  transmute(
+    Mat_PID = CHILD_PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## ZIP (CRE correction) -----------------------------------
+ZIP_Targeted_raw <- ZIP_data_list[["ZIP_Targeted"]] %>%
+  transmute(Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD)
+
+ZIP_Targeted <- ZIP_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+ZIP_CRE <- ZIP_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Mat_PID, Concentration_CRE = Concentration)
+
+ZIP_Targeted <- ZIP_Targeted %>%
+  left_join(ZIP_CRE, by = "Mat_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+## CTS -----------------------------------------------------
+CTS_Targeted <- CTS_data_list[["CTS_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## DCHS (prefer LOQ; CRE correction) ----------------------
+# Child
+DCHS_Targeted_Child_raw <- DCHS_data_list[["DCHS_Targeted"]] %>%
+  filter(Sample_collection_timepoint_unit == "Age")
+
+DCHS_Targeted_Child <- DCHS_Targeted_Child_raw %>%
+  transmute(
+    Child_PID = child_pid,
+    Chemical_Group = Chemical_Group_code,
+    Analyte_Code,
+    Concentration,
+    Units,
+    Limit = coalesce(LOQ, LOD)
+  ) %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, Limit))
+
+DCHS_CRE_Child <- DCHS_Targeted_Child_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID = child_pid, Concentration_CRE = Concentration)
+
+DCHS_Targeted_Child <- DCHS_Targeted_Child %>%
+  left_join(DCHS_CRE_Child, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+# Maternal
+DCHS_Targeted_Mat_raw <- DCHS_data_list[["DCHS_Targeted"]] %>%
+  filter(Sample_collection_timepoint_unit != "Age")
+
+DCHS_Targeted_Mat <- DCHS_Targeted_Mat_raw %>%
+  transmute(
+    Mat_PID = mother_pid,
+    Chemical_Group = Chemical_Group_code,
+    Analyte_Code,
+    Concentration,
+    Units,
+    Limit = coalesce(LOQ, LOD)
+  ) %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Concentration = lod_impute(Concentration, Limit))
+
+DCHS_CRE_Mat <- DCHS_Targeted_Mat_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Mat_PID = mother_pid, Concentration_CRE = Concentration)
+
+DCHS_Targeted_Mat <- DCHS_Targeted_Mat %>%
+  left_join(DCHS_CRE_Mat, by = "Mat_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+DCHS_Targeted <- bind_rows(DCHS_Targeted_Child, DCHS_Targeted_Mat)
+
+## OBSS ----------------------------------------------------
+OBSS_Targeted <- OBSS_data_list[["OBSS_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group = Chemical_group, Analyte_Code,
+    Concentration, Units, LOD
+  ) %>%
+  mutate(Concentration = lod_impute(Concentration, LOD))
+
+## =========================================================
+## Final bind & save
+## =========================================================
+if (exists("Targeted_Data_All")) rm(Targeted_Data_All)
+
+tgt_names <- ls(envir = .GlobalEnv, pattern = "^[A-Za-z0-9._]+_Targeted$")
+# drop helper or raw suffixes if any slipped in
+tgt_names <- tgt_names[!grepl("_Targeted_(SG|CRE|raw|Raw)$", tgt_names)]
+
+bind_list <- mget(tgt_names, envir = .GlobalEnv)
+
+Targeted_Data_All <- rbindlist(bind_list, use.names = TRUE, fill = TRUE, idcol = "Study") %>%
+  relocate(any_of(c("Study","Child_PID","Mat_PID","Chemical_Group","Analyte_Code",
+                    "Concentration","Units","LOD")))
+
+dir.create("../Input/Harmonized_Datasets", recursive = TRUE, showWarnings = FALSE)
+save(Targeted_Data_All, file = "../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+
+# quick sanity
+print(dim(Targeted_Data_All))
+print(head(Targeted_Data_All))
+
+```
+
+```{r}
+
+```
+

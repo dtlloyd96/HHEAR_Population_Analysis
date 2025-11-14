@@ -1,0 +1,661 @@
+---
+title: "Cumulative_Conc_Plot"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(glmnet)
+library(scales)
+library(paletteer)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggridges)
+
+```
+
+```{r}
+# load("../../Output/Final_Model_Child_SDOH_Metab_Quantile_Results_QuantData.RData")
+# Quant_Results <- Child_SDOH_Metab_Quantile_Results_with_predictions_highlow_allresults
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+rm(Child_SDOH_Metab_Quantile_Results,Child_SDOH_Metab_Quantile_Results_with_predictions)
+load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+```
+
+
+Exposure Classes
+-----
+
+```{r}
+#New Classifications
+#Trace elements
+Trace_Elements_Theme <- unique(c("As","Ba", "Be","Cd" ,"Co","Cs","Mn", 
+                  "Mo","Pb","Sb", "Tl","U", "W","Cr","Cu",
+                  "Hg" ,"Ni","Pt","Sn",
+                  "V","Zn", "Al", "Mg","Se"  ))
+
+
+length(Trace_Elements_Theme)
+#Phenols
+Phenols_Theme <- unique(c("BP3","BPA","BPF","BPS","DCP24","DCP25","TCC","TCS","BUPB","ETPB","MEPB","PRPB","BP1",
+                          "BP2","BP8","BPAF","BPAP","BPB","BPP","BPZ","DHB34","HB4",
+                          "OH4BP","OHETP","OHMEP","PCP","TCP245","TCP246","DCP","TCP24","PHE","PHEN"))
+length(Phenols_Theme)
+
+#Polycyclic_Aromatic_hydrocarbons 
+PAH_Theme <- unique(c("NAP1","NAP2","PYR1","FLUO2","PHEN1","PHEN2PHEN3","PHEN4","PHEN9","PHET","PHEN2",
+                      "PHEN3","FLUO2_FLUO3","PHEN2_PHEN3","FLU","FLUO","PYR","NAP"))
+
+length(PAH_Theme)
+
+#Phthalates
+Phthalates_Theme <- unique(c("MBZP","MCPP","MECPP","MEHHP","MEHP","MEOHP","MEP","MIBP","MNBP","MCMHP",
+                             "MCHP","MCHPP","MCINP","MCIOP","MCMHP","MHXP","MINP","MIPP","MMP","MOP","MPEP",
+                             "MCOCH","MHNCH","MINP","MCOP","MECPTP","MBZP","MCPP","MEHHTP","MIBP","MHPP","MBZ","MBP",
+                             "MCI","MCMH","MCO","MCP","MEC","MEH","MEHH","MEO","MEOH","MHN","MIB","MIN",
+                             "MNB"))
+
+length(Phthalates_Theme)
+
+#Parabens
+Parabens_Theme <- unique(c("BUPB","ETPB","MEPB","PRPB","BZPB","HEPB","BUP","ETP","PRP"))
+length(Parabens_Theme)
+
+#Smoking/Smoking
+Smoking_Theme <- unique(c("COTT","HCOTT","NICT","NNAL","COT"))
+length(Smoking_Theme)
+
+#Inflam
+Inflam_Theme <- unique(c("HAPTOGLOBIN","FLT3L","TIMP1","TIMP2","IL17F","GMCSF","IFNG","IL10","MIP3A",
+                         "IL12P70", "IL13","IL15","IL17A","IL22","IL9","IL1B","IL33","IL2","IL21",
+                         "IL4"," IL23","IL5","IL6","IL17EIL25","IL27","IL31","TNFA","TNFB","IL28A",
+                         "MMP1","MMP2","MMP7","MMP9","MMP10","CRP","LTE4","IL8","IL23"))
+
+length(Inflam_Theme)
+
+#Pesticide
+
+Pesticide_Theme <- unique(c("DEP","DETP","DMDP","DMP","DMTP","PBA",
+                            "TCP","DEDP","GPS","FPBA","PNP","IMPY","D24","AMPA",
+                            "MDA","T245","BHCH","HCB","PPDDE","PPDDT","TCHL","TNON",
+                            "OCHL","PPDDD"))
+
+length(Pesticide_Theme)
+
+#Volatile Organic Compounds
+VOC_Theme <- unique(c("HPMA","HPMA2","SPMA","HMPMA"))
+
+length(VOC_Theme)
+
+#Oxidative Stress Markers
+OXID_Theme <- unique(c("F2A8IP","F2A23D","F2AVI","F2A12I","OS8OHDG","OSMDA","OS8O","OSMD"))
+
+length(OXID_Theme)
+
+#PFAS
+PFAS_Theme <- unique(c("NMFOSAA","PFBS" ,"PFDA","PFDODA" ,
+                "PFDS" ,"PFHPA" ,"PFHXA" , "PFHXS" ,
+                "PFNA" , "PFOA" , "PFOS","PFOSA", "PFUNDA",
+                "NETFOSAA","PFPEA","ETFOSA","PFBA","PFPEA","PFHPS"))
+
+length(PFAS_Theme)
+
+#Flame Retardants
+Flame_Retardant_Theme <- unique(c("BDE47","BDE99","BDE100","BDCPP","DPHP","TBBA",
+                                  "BCETP","BCPP","DBUP","DBZP","DOCP","DPCP","BDE153",
+                                  "BDE154","BDE183","BDE28","BDE47","BDE17","BDE66",
+                                  "BDE85","BDE99","PBB153","BDE28","BDE85"))
+length(Flame_Retardant_Theme)
+
+PCB_Theme <- unique(c( "PCB105_PCB127","PCB110", "PCB114_PCB122","PCB118_PCB106", "PCB128", "PCB137",
+  "PCB138_PCB158","PCB146_PCB161", "PCB153","PCB156","PCB157","PCB167","PCB170","PCB172_PCB192", "PCB177",
+  "PCB180","PCB182_PCB187","PCB183", "PCB18_PCB17","PCB194",
+  "PCB195","PCB196_PCB203", "PCB199","PCB202","PCB206","PCB208","PCB209","PCB22",
+  "PCB31_PCB28", "PCB33_PCB20","PCB37","PCB41_PCB64","PCB44","PCB47_48_75",
+  "PCB49_PCB43","PCB52_PCB73","PCB5_PCB8","PCB70_PCB76","PCB73_PCB95","PCB74_PCB61",
+  "PCB85_PCB120","PCB90_101_89","PCB99"))
+length(PCB_Theme)
+
+#Bisdithiocarbamates 
+Bisdithiocarbamates_Theme <- unique(c("ETU","PTU"))
+
+#Cellular adhesion molecules 
+CAM_Theme <- unique(c("ICAM1","VCAM1","ESEL","PSEL"))
+
+#Lipids
+
+Lipids_Theme <- unique(c("CHOL","OXLDL","TG"))
+
+#Nutrients
+Nutrients_Theme <- unique(c("GAMTOC","ALPTOC","ZEAXAN","CRYPTO","LYCOPE","ALPCARO",
+                            "BETCARO","RET","FOL","ADIPO"))
+length(Nutrients_Theme)
+
+
+Lipid_Metab <- c("LEP")
+
+Thromboxane <- c("DHTHRM")
+
+
+Other_Theme <- c(Bisdithiocarbamates_Theme,CAM_Theme,Lipids_Theme,Nutrients_Theme,Lipid_Metab,Thromboxane)
+```
+
+
+```{r}
+
+load("../../../Input/Harmonized_Datasets/TEDDY_SDOH_Clean.RData")
+load("../../../Input/Harmonized_Datasets/ZIP_SDOH_Clean.RData")
+
+ZIP_Data <- ZIP_SDOH %>% 
+    mutate(Country = ifelse(
+    is.na(Country),
+    Country[match(Site_Location, Site_Location[!is.na(Country)])],
+    Country
+  )) %>% 
+  mutate(Study = "ZIP") %>% 
+  dplyr::select(Mat_PID,Study,Location = Country) 
+
+
+TEDDY_Data <- TEDDY_SDOH %>% 
+  mutate(Study = "TEDDY") %>% 
+  dplyr::select(Child_PID,Study,Location) 
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
+                                    Location == "NorthEast_US" ~ "United_States",
+                                    Location == "New_Hampshire" ~ "United_States",
+                                    Location == "Washington_State" ~ "United_States",
+                                    Location == "Midwestern_US" ~ "United_States",
+                                    Location == "Denver" ~ "United_States",
+                                    Location == "Baltimore" ~ "United_States",
+                                    Location == "Sacramento" ~ "United_States",
+                                    Location == "Southern_California" ~ "United_States",
+                                    Location == "Syracuse" ~ "United_States",
+                                    Location == "Michigan" ~ "United_States",
+                                    Location == "California" ~ "United_States",
+                                    Location == "SanFrancisco" ~ "United_States",
+                                    Location == "Massachusetts" ~ "United_States",
+                                    TRUE ~ "Worldwide")) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+  Mat_Edu %in% c("No_Education",
+                 "Primary_Education",
+                 "Primary_School",
+                 "High_School") ~ "No_College",
+  Mat_Edu %in% c("Some_College",
+                 "Four_Year_College_Degree",
+                 "Some_Grad_School") ~ "Some_College",
+  Mat_Edu == "Not_Reported" ~ NA
+)) %>% 
+  mutate(Mat_Income_Binary = case_when(
+  Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
+  Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
+                "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
+  TRUE ~ NA
+)) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+  dplyr::filter(Study != "ZIP") %>% 
+  dplyr::filter(Study != "TEDDY") %>% 
+  dplyr::select(Child_PID,Mat_PID,Study,Location)
+
+
+
+
+Child_SDOH <- bind_rows(ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Child_PID) ),TEDDY_Data ) %>% 
+  dplyr::select(-Mat_PID)
+
+Mat_SDOH <- bind_rows(ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Mat_PID)), ZIP_Data) %>% 
+  dplyr::select(-Child_PID)
+```
+
+
+
+```{r}
+
+
+Child_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
+  mutate(
+    Concentration = case_when(
+      Units == "ug/dL" ~ Concentration * 10,
+      Units == "ng/L"  ~ Concentration / 1000,
+      Units == "pg/mL" ~ Concentration / 1000,
+      Units == "pg/ml" ~ Concentration / 1000,
+      Units == "mg/L"  ~ Concentration * 1000,
+      TRUE             ~ Concentration     # keep as is if no match
+    )
+  ) %>% 
+  dplyr::select(-Mat_PID) %>% 
+  group_by(Study,Child_PID,Analyte_Code) %>% 
+  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+  ungroup()
+
+# Child_Data_Targeted %>% 
+#   dplyr::filter(Analyte_Code == "As") %>% View
+
+myanalytes <- unique(Child_Data_Targeted$Analyte_Code)
+child_analytes <- myanalytes
+
+child_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Child_PID","Study",curr_analyte)
+  
+  curr_data <- Child_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+  
+  child_list_Targeted[[i]] <- curr_data
+  names(child_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+```{r}
+Mat_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Mat_PID)) %>% 
+  dplyr::select(-Child_PID) %>% 
+  mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
+  mutate(
+    Concentration = case_when(
+      Units == "ug/dL" ~ Concentration * 10,
+      Units == "ng/L"  ~ Concentration / 1000,
+      Units == "pg/mL" ~ Concentration / 1000,
+      Units == "pg/ml" ~ Concentration / 1000,
+      Units == "mg/L"  ~ Concentration * 1000,
+      TRUE             ~ Concentration     # keep as is if no match
+    )
+  ) %>% 
+  dplyr::filter(!is.na(Analyte_Code)) %>% 
+  group_by(Study,Mat_PID,Analyte_Code) %>% 
+  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+  mutate(across(everything(), ~ replace(., is.infinite(.), 0)))
+#Mat_Data_Targeted <- Targeted_Data_All %>% 
+ # dplyr::filter(!is.na(Mat_PID)) %>% 
+ # dplyr::select(-Child_PID) %>% 
+ # dplyr::filter(!is.na(Analyte_Code)) %>% 
+ # group_by(Study,Mat_PID,Analyte_Code) %>% 
+ # summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+ # mutate(across(everything(), ~ replace(., is.infinite(.), 0)))
+
+
+myanalytes <- unique(Mat_Data_Targeted$Analyte_Code)
+
+mat_analytes <- myanalytes
+
+mat_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  #print(i)
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Mat_PID","Study",curr_analyte)
+  
+  curr_data <- Mat_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+  
+  mat_list_Targeted[[i]] <- curr_data
+  names(mat_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+```{r}
+Fast_Merge <- function(mylist = All_Perc,ID_Col = "Child_PID"){
+  
+
+  results_df <- mylist[[1]] %>% 
+   dplyr::select(-any_of("Units")) %>% 
+   group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    #summarise(value = mean(col_name,na.rm = T))
+  
+
+  for(i in 2:length(mylist)){
+    
+    #print(i)
+    
+    curr_df <- mylist[[i]] %>% 
+   dplyr::select(-any_of("Units")) %>% 
+      group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    
+    #names(curr_df) <- c(ID_Col,"Study",metab_new)
+    results_df <- full_join(results_df, curr_df, by = c(ID_Col,"Study"))
+
+  }
+  
+  return(results_df)  
+}
+
+```
+
+```{r}
+Child_All_Exposures <- Fast_Merge(child_list_Targeted,ID_Col = "Child_PID")
+Mat_All_Exposures <- Fast_Merge(mat_list_Targeted,ID_Col = "Mat_PID") %>% 
+    mutate(across(where(is.numeric), ~ifelse(is.infinite(.), NA, .)))
+
+
+```
+
+```{r}
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
+                                    Location == "NorthEast_US" ~ "United_States",
+                                    Location == "New_Hampshire" ~ "United_States",
+                                    Location == "Washington_State" ~ "United_States",
+                                    Location == "Midwestern_US" ~ "United_States",
+                                    Location == "Denver" ~ "United_States",
+                                    Location == "Baltimore" ~ "United_States",
+                                    Location == "Sacramento" ~ "United_States",
+                                    Location == "Southern_California" ~ "United_States",
+                                    Location == "Syracuse" ~ "United_States",
+                                    Location == "Michigan" ~ "United_States",
+                                    Location == "California" ~ "United_States",
+                                    Location == "SanFrancisco" ~ "United_States",
+                                    Location == "Massachusetts" ~ "United_States",
+                                    TRUE ~ "Worldwide")) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+  Mat_Edu %in% c("No_Education",
+                 "Primary_Education",
+                 "Primary_School",
+                 "High_School") ~ "No_College",
+  Mat_Edu %in% c("Some_College",
+                 "Four_Year_College_Degree",
+                 "Some_Grad_School") ~ "Some_College",
+  Mat_Edu == "Not_Reported" ~ NA
+)) %>% 
+  mutate(Mat_Income_Binary = case_when(
+  Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
+  Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
+                "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
+  TRUE ~ NA
+)) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) 
+
+
+ExWAS_SDOH_Exposures$Mat_Edu <- ExWAS_SDOH_Exposures$Mat_Edu %>%
+  fct_recode(
+    "Primary"       = "Primary_School",
+    "Primary"       = "Primary_Education",
+    "High School"   = "High_School",
+    "Some College"  = "Some_College",
+    "College"       = "Four_Year_College_Degree",
+    "Grad School"   = "Some_Grad_School",
+    "Other"         = "Other",
+    "None"          = "No_Education"
+  ) %>%
+  fct_relevel("None", "Primary", "High School", "Some College",
+              "College", "Grad School", "Other")
+
+
+Ref_Vars <- c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu","Child_Age","Mat_Race","Child_Race","Child_Sex")
+
+
+
+Child_SDOH <- ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  dplyr::select(Study,Child_PID,Mat_PID,all_of(Ref_Vars)) 
+
+
+Mat_SDOH <- ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Mat_PID) ) %>% 
+  dplyr::select(Study,Child_PID,Mat_PID,all_of(Ref_Vars)) 
+```
+
+```{r}
+Child_SDOH_Exp <- left_join(Child_All_Exposures,Child_SDOH,by = c("Child_PID","Study")) 
+Mat_SDOH_Exp <- left_join(Mat_All_Exposures,Mat_SDOH,by = c("Mat_PID","Study")) 
+```
+
+
+
+```{r}
+Ref_Vars <- c("Child_PID" ,"Study","Mat_PID","Mat_Age","Mat_Edu","Mat_Income", "Max_Edu","Child_Age","Mat_Race","Child_Race","Child_Sex")
+
+mystudies <- unique(Child_SDOH_Exp$Study)
+All_PCA_Data <- list()
+for(i in seq_along(mystudies)){
+  
+  curr_study <- mystudies[[i]]
+  
+  curr_data <- Child_SDOH_Exp %>% 
+    dplyr::filter(Study == curr_study) %>% 
+    select_if(~ !all(is.na(.))) %>% 
+    mutate(.rowid = row_number())
+
+  mycols <- names(curr_data)
+  mycols <- mycols[!mycols %in% Ref_Vars]
+  
+  pca_data <-curr_data %>% 
+    dplyr::select(all_of(mycols)) %>% 
+    mutate(across(everything(), ~ ifelse(is.na(.x), mean(.x, na.rm = TRUE), .x)))
+
+  
+  pca_obj <- prcomp(pca_data, scale. = TRUE)
+  k <- min(10, ncol(pca_obj$x))
+  pca_scores <- as_tibble(pca_obj$x[, 1:k, drop = FALSE])
+  names(pca_scores) <- paste0("PCA_", seq_len(k))
+  pca_scores <- bind_cols(
+      tibble(.rowid = curr_data$.rowid),  # aligns to original rows
+      pca_scores
+    )
+
+  curr_pca_data <- curr_data %>%
+    left_join(pca_scores, by = ".rowid") %>%
+    dplyr::select(-all_of(mycols),contains("PCA_"))
+
+  All_PCA_Data[[i]] <- curr_pca_data
+  
+}
+
+All_PCA_Df_Child <- bind_rows(All_PCA_Data) %>% 
+  mutate(Population = "Child")
+```
+
+
+```{r}
+Ref_Vars <- c("Child_PID" ,"Study","Mat_PID","Mat_Age","Mat_Edu","Mat_Income", "Max_Edu","Child_Age","Mat_Race","Child_Race","Child_Sex")
+
+mystudies <- unique(Mat_SDOH_Exp$Study)
+All_PCA_Data <- list()
+for(i in seq_along(mystudies)){
+  #print(i)
+  curr_study <- mystudies[[i]]
+  
+  curr_data <- Mat_SDOH_Exp %>% 
+    dplyr::filter(Study == curr_study) %>% 
+    select_if(~ !all(is.na(.))) %>% 
+    mutate(.rowid = row_number())
+
+  mycols <- names(curr_data)
+  mycols <- mycols[!mycols %in% Ref_Vars]
+  
+  pca_data <-curr_data %>% 
+    dplyr::select(all_of(mycols)) %>% 
+    mutate(across(everything(), ~ ifelse(is.na(.x), mean(.x, na.rm = TRUE), .x)))
+
+  
+  pca_obj <- prcomp(pca_data, scale. = TRUE)
+  k <- min(10, ncol(pca_obj$x))
+  pca_scores <- as_tibble(pca_obj$x[, 1:k, drop = FALSE])
+  names(pca_scores) <- paste0("PCA_", seq_len(k))
+  pca_scores <- bind_cols(
+      tibble(.rowid = curr_data$.rowid),  # aligns to original rows
+      pca_scores
+    )
+
+  curr_pca_data <- curr_data %>%
+    left_join(pca_scores, by = ".rowid") %>%
+    dplyr::select(-all_of(mycols),contains("PCA_"))
+
+  All_PCA_Data[[i]] <- curr_pca_data
+  
+}
+
+All_PCA_Df_Mat <- bind_rows(All_PCA_Data) %>% 
+  mutate(Population = "Adult")
+
+```
+
+```{r}
+All_PCA_Df <- bind_rows(All_PCA_Df_Mat,All_PCA_Df_Child)
+```
+
+
+
+```{r}
+
+mypal <- paletteer_d("ggsci::default_igv")
+
+Plot_Data <- All_PCA_Df %>% 
+  filter(PCA_1 > -3, PCA_1 < 3)
+
+socio_ridge <- ggplot(Plot_Data, aes(x = PCA_1, y = fct_rev(Study), fill = Study)) +
+  geom_density_ridges(
+    alpha = 0.85,                   # slightly stronger fill
+    scale = 1.1,                    # tighter spacing between ridges
+    rel_min_height = 0.01,
+    color = "white", size = 0.3     # crisp separation lines
+  ) +
+  scale_fill_manual(values = mypal) +
+  labs(
+    title = "Within-Study PCA: Distribution of PC1 Scores",
+    #subtitle = "Each ridge represents the density of PC1 within a single study",
+    x = "PC1 (Study-specific first principal component)",
+    y = NULL
+  ) +
+  theme_ridges(center_axis_labels = TRUE, font_size = 13) +
+  theme(
+    plot.title = element_text(
+      size = 18, face = "bold", hjust = 0.5
+    ),
+    plot.subtitle = element_text(
+      size = 13, color = "grey30", hjust = 0.5
+    ),
+    axis.text.y = element_text(
+      size = 11, face = "bold"
+    ),
+    axis.text.x = element_text(size = 10),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    legend.position = "none"
+  ) +
+  coord_cartesian(clip = "off")
+
+print(socio_ridge)
+
+```
+
+
+```{r}
+study_order <- c(
+  "DAPS", "PARENTs", "CEHC", "ZIP", "TEDDY", "SICAS", "TSIC", "DISCOVER", 
+  "DEPART", "MARBLES", "SEARCH", "MADRES", "CTS", "CCREOH", "NFGS", 
+  "VDAART", "VIVA", "NASH", "SLC", "nuMoM2b", "ESPINA", "NHBCS", 
+  "CHARGE", "MDUC", "EEICC", "MEBCO", "GOC", "ELEMENT", "DCHS"
+)
+
+
+Plot_Data <- All_PCA_Df %>%
+  group_by(Study) %>%
+  mutate(
+    PCA_Dist = sqrt(rowSums(select(cur_data(), starts_with("PC"))^2, na.rm = TRUE))
+  ) %>%
+  ungroup() %>% 
+  filter(PCA_Dist > -10, PCA_Dist < 10) %>% 
+  mutate(Study = factor(Study, levels = study_order)) %>% 
+  dplyr::filter(!is.na(Study))
+
+studies_to_box <- c("MADRES")   # can be c("TEDDY","ZIP") etc.
+
+# y positions after fct_rev()
+lvl_rev <- rev(levels(Plot_Data$Study))
+y_pos    <- match(studies_to_box, lvl_rev)
+highlight_df <- data.frame(
+  xmin = -Inf, xmax = Inf,
+  ymin = y_pos - 0.1,
+  ymax = y_pos + 0.75
+)
+
+
+summ_socio_ridge <- ggplot(Plot_Data, aes(x = PCA_Dist, y = fct_rev(Study), fill = Study)) +
+    geom_rect(
+    data = highlight_df,
+    inherit.aes = FALSE,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    fill = "grey95", alpha = 0.6, color = "black", linewidth = 0.5
+  ) +
+  geom_density_ridges(
+    alpha = 0.85, scale = 1.1, rel_min_height = 0.01,
+    color = "white", size = 0.3
+  ) +
+  scale_fill_manual(values = mypal) +
+  labs(
+    title = "Within Study Variability",
+    #subtitle = "Each ridge shows how far individuals are from their study's PCA centroid (PC1–PC10 combined)",
+    x = "Overall Exposure Variability",
+    y = NULL
+  ) +
+  theme_ridges(center_axis_labels = TRUE, font_size = 13) +
+  theme(
+    plot.title = element_text(size =23, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 13, color = "grey30", hjust = 0.5),
+    axis.text.y = element_text(size = 12, face = "bold"),
+    axis.text.x = element_text(size = 16),
+    axis.title.x = element_text(size = 20),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA),
+    legend.position = "none"
+  )
+
+save(summ_socio_ridge,file = "../../../Output/Final_Paper1_Output/summ_socio_ridge.RData")
+```
+
+
+```{r}
+Plot_Data %>% 
+  group_by(Study) %>% 
+  summarise(mean_dist = mean(PCA_Dist,na.rm = T)) %>% 
+  View
+```
+

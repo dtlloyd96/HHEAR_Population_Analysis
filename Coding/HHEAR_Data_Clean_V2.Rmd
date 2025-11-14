@@ -1,0 +1,1253 @@
+---
+title: "HHEAR_Data_Clean"
+author: "Dillon Lloyd"
+date: "2024-10-03"
+output: html_document
+---
+
+
+```{r}
+# Setup -------------------------------------------------------------------
+suppressPackageStartupMessages({
+  library(tidyverse)   # dplyr, tidyr, readr, purrr, etc.
+  library(data.table)  # rbindlist for fast row-binding of lists
+})
+
+# Load all input .RData files from ../Input -------------------------------
+data_files <- list.files(
+  path = "../Input/",
+  pattern = "*All.RData$",   # matches files that end with 'All.RData'
+  recursive = FALSE,
+  full.names = TRUE
+)
+
+invisible(lapply(data_files, load, .GlobalEnv))  # loads data_*_list objects into .GlobalEnv
+
+# ---------------------------
+# Harmonize SDOH by Cohort
+# ---------------------------
+
+# AIRWEIGHS ---------------------------------------------------------------
+AIRWEIGHS_SDOH <- AIRWEIGHS_data_list[["AIRWEIGHS_Epi"]] %>%
+  select(
+    Child_PID = PID,
+    childrace_all,
+    Child_Age = tsage,
+    tsgender,
+    dmgrphcprimaryeducation,
+    dmgrphcincome,
+    dmgrphcchldrace
+  ) %>%
+  mutate(
+    Child_Sex = ifelse(tsgender == 1, "M", "F"),  # CHECK: verify coding (1=male?)
+    Max_Edu = case_when(
+      dmgrphcprimaryeducation == 1 ~ "Primary_Education",
+      dmgrphcprimaryeducation == 2 ~ "High_School",
+      dmgrphcprimaryeducation == 3 ~ "High_School",
+      dmgrphcprimaryeducation == 4 ~ "Some_College",
+      dmgrphcprimaryeducation == 5 ~ "Some_College",
+      dmgrphcprimaryeducation == 6 ~ "Four_Year_College_Degree",
+      dmgrphcprimaryeducation == 7 ~ "Some_Grad_School"
+    ),
+    Child_Race = case_when(
+      dmgrphcchldrace == 1 ~ "Hispanic",
+      childrace_all == 1 ~ "Black",
+      childrace_all == 2 ~ "White",
+      childrace_all == 3 ~ "MultiRacial"
+    ),
+    Mat_Income = case_when(
+      dmgrphcincome <= 5 ~ "0_25k",
+      dmgrphcincome %in% 6:10 ~ "25_49k",
+      dmgrphcincome == 11 ~ "Over_49k"
+    )
+  ) %>%
+  select(-tsgender, -childrace_all, -dmgrphcprimaryeducation, -dmgrphcincome, -dmgrphcchldrace)
+
+# CCREOH ------------------------------------------------------------------
+CCREOH_SDOH <- CCREOH_data_list[["CCREOH_Epi"]] %>%
+  select(
+    Mat_PID = PID, Child_PID = CHILD_PID, Mat_Age = v107,
+    Mat_Edu_Cat = v112a, Mat_Income_Cat = v115a, Mat_BMI = v111c, b030
+  ) %>%
+  mutate(
+    Child_Sex = ifelse(b030 == 1, "M", "F"),  # CHECK: verify coding (1=male?)
+    Mat_Race = "Surinamese",
+    Location = "Suriname",
+    Child_Age = 0,
+    Child_Race = "Suriname",
+    Mat_Edu = case_when(
+      Mat_Edu_Cat %in% 1:5 ~ "High_School",            # collapsed low-mid into HS
+      Mat_Edu_Cat == 6 ~ "Some_College",
+      Mat_Edu_Cat == 7 ~ "Four_Year_College_Degree",
+      Mat_Edu_Cat == 8 ~ "Some_Grad_School",
+      is.na(Mat_Edu_Cat) ~ NA_character_
+    )
+    # NOTE: Mat_Income_Cat available but not mapped; left dropped below.
+  ) %>%
+  select(-Mat_Edu_Cat, -Mat_Income_Cat, -b030, -Child_PID)
+
+# CEHC --------------------------------------------------------------------
+CEHC_SDOH <- CEHC_data_list[["CEHC_Epi"]] %>%
+  select(
+    Child_PID = CHILD_PID, Mat_PID = PID, Mat_Race_Cat = ethnicity_synthesized,
+    Mat_Income_Cat = SurveyQ1, Mat_Smoking = SurveyQ2, Mat_Edu_Cat = edu,
+    sex, Mat_Age = mtr_age_yrs, marital_status
+  ) %>%
+  mutate(
+    Location = "Michigan",
+    Child_Age = 0,
+    Mat_Marital_Status = case_when(
+      marital_status == 0 ~ "Single",
+      marital_status == 1 ~ "Married",
+      marital_status == 2 ~ "Partner",
+      marital_status == 3 ~ "Divorced",
+      marital_status == 4 ~ "Not_Answered"
+    ),
+    Mat_Edu = case_when(
+      Mat_Edu_Cat == 0 ~ "High_School",
+      Mat_Edu_Cat == 1 ~ "Some_College",
+      Mat_Edu_Cat == 2 ~ "Four_Year_College_Degree",
+      Mat_Edu_Cat == 3 ~ "Some_Grad_School",
+      Mat_Edu_Cat == 4 ~ NA_character_
+    ),
+    Mat_Income = case_when(
+      Mat_Income_Cat == 0 ~ "0_25k",
+      Mat_Income_Cat == 1 ~ "25_49k",
+      Mat_Income_Cat == 2 ~ "50_74k",
+      Mat_Income_Cat == 3 ~ "75_99k",
+      Mat_Income_Cat == 4 ~ "100_124k",
+      Mat_Income_Cat == 5 ~ "Over_125k",
+      Mat_Income_Cat == 6 ~ NA_character_
+    ),
+    Mat_Race = case_when(
+      Mat_Race_Cat == 0 ~ "White",
+      Mat_Race_Cat == 1 ~ "Black",
+      Mat_Race_Cat == 2 ~ "Hispanic",
+      Mat_Race_Cat == 3 ~ "MultiRacial",
+      Mat_Race_Cat == 4 ~ "NativeAmerican",
+      Mat_Race_Cat == 5 ~ "Asian",
+      Mat_Race_Cat == 6 ~ "Pacific_Islander",
+      Mat_Race_Cat == 7 ~ "Unknown",
+      Mat_Race_Cat == 8 ~ "Other"
+    ),
+    Child_Sex = ifelse(sex == 1, "F", "M")  # FIXME: confirm coding; 1→Female seems unusual
+  ) %>%
+  select(-Mat_Income_Cat, -Mat_Race_Cat, -sex, -marital_status, -Mat_Edu_Cat, -Child_PID)
+
+# CHARGE ------------------------------------------------------------------
+CHARGE_SDOH <- CHARGE_data_list[["CHARGE_Epi"]] %>%
+  select(
+    Child_PID = CHILD_PID, MomEdu_4cat, DadEdu_4cat, MaxEdu_4cat,
+    MomRace, DadRace, Child_Sex = correctsex, Mat_Age = AgeMomYrs,
+    Pat_Age = AgeDadYrs, ChildAgeMos, Mat_Smoking = MomSmokedAny_BPorPreg,
+    ChildRace_3cat
+  ) %>%
+  mutate(
+    Child_Age = ChildAgeMos / 12,
+    Location = "Sacramento",
+    Mat_Edu = case_when(
+      MomEdu_4cat == 2 ~ "High_School",
+      MomEdu_4cat == 3 ~ "Some_College",
+      MomEdu_4cat == 4 ~ "Four_Year_College_Degree",
+      MomEdu_4cat == 5 ~ "Some_Grad_School"
+    ),
+    Pat_Edu = case_when(
+      DadEdu_4cat == 2 ~ "High_School",
+      DadEdu_4cat == 3 ~ "Some_College",
+      DadEdu_4cat == 4 ~ "Four_Year_College_Degree",
+      DadEdu_4cat == 5 ~ "Some_Grad_School"
+    ),
+    Max_Edu = case_when(
+      MaxEdu_4cat == 2 ~ "High_School",
+      MaxEdu_4cat == 3 ~ "Some_College",
+      MaxEdu_4cat == 4 ~ "Four_Year_College_Degree",
+      MaxEdu_4cat == 5 ~ "Some_Grad_School"
+    ),
+    Mat_Race = case_when(
+      MomRace == 1 ~ "White",
+      MomRace == 2 ~ "Black",
+      MomRace == 3 ~ "NativeAmerican",
+      MomRace == 4 ~ "Asian",
+      MomRace == 5 ~ "Pacific_Islander",
+      MomRace %in% c(6, 7) ~ "Hispanic",
+      MomRace == 9 ~ "MultiRacial"
+    ),
+    Pat_Race = case_when(
+      DadRace == 1 ~ "White",
+      DadRace == 2 ~ "Black",
+      DadRace == 3 ~ "NativeAmerican",
+      DadRace == 4 ~ "Asian",
+      DadRace == 5 ~ "Pacific_Islander",
+      DadRace %in% c(6, 7) ~ "Hispanic",
+      DadRace == 9 ~ "MultiRacial"
+    ),
+    Child_Race = case_when(
+      ChildRace_3cat == 1 ~ "White",
+      ChildRace_3cat == 2 ~ "NonWhite",
+      ChildRace_3cat == 3 ~ "Hispanic"
+    )
+  ) %>%
+  select(-MomEdu_4cat, -DadEdu_4cat, -MaxEdu_4cat, -MomRace, -DadRace, -ChildRace_3cat, -ChildAgeMos)
+
+# DAPS --------------------------------------------------------------------
+DAPS_SDOH <- DAPS_data_list[["DAPS_Epi"]] %>%
+  select(
+    Child_PID = PID, demo_hisp_latino, demo_racialafam, demo_income_code,
+    demo_school_code, Child_BMI = vital_bmi_visit1, Child_Age = daps_spiro_age_visit1,
+    daps_spiro_gender_visit1
+  ) %>%
+  mutate(
+    Location = "Denver",
+    Child_Sex = ifelse(daps_spiro_gender_visit1 == 1, "F", "M"),  # CHECK: verify coding (1=female?)
+    Child_Race = case_when(
+      demo_hisp_latino == 1 ~ "Hispanic",
+      demo_racialafam == 1 ~ "Black",
+      demo_hisp_latino == 0 & demo_racialafam == 2 ~ "White",
+      TRUE ~ "Other"
+    ),
+    Mat_Income = case_when(
+      demo_income_code %in% 1:5 ~ "0_25k",
+      demo_income_code %in% 6:10 ~ "25_49k",
+      demo_income_code == 11 ~ "Over_49k"
+    ),
+    Mat_Edu = case_when(
+      demo_school_code == 0 ~ "No_Education",
+      demo_school_code %in% c(12, 18) ~ "High_School",
+      demo_school_code %in% c(13, 14, 15) ~ "Some_College"
+    )
+  ) %>%
+  select(-daps_spiro_gender_visit1, -demo_hisp_latino, -demo_racialafam, -demo_income_code, -demo_school_code)
+
+# DEPART ------------------------------------------------------------------
+DEPART_SDOH <- DEPART_data_list[["DEPART_Epi"]] %>%
+  select(Child_PID = PID, Child_Age = age.1, race, ethnicity, gender, fam_income) %>%
+  mutate(
+    Location = "Washington_State",
+    Child_Sex = ifelse(gender == 1, "M", "F"),  # CHECK: verify coding
+    Child_Race = "Hispanic",                    # NOTE: hard-coded
+    Mat_Income = case_when(
+      fam_income == 1 ~ "0_25k",
+      fam_income == 2 ~ "0_25k",
+      fam_income == 3 ~ "25_49k",
+      fam_income == 4 ~ "Over_49k"
+    )
+  ) %>%
+  select(-race, -ethnicity, -gender, -fam_income)
+
+# DISCOVER ----------------------------------------------------------------
+DISCOVER_SDOH <- DISCOVER_data_list[["DISCOVER_EPI"]] %>%
+  select(
+    Child_PID = PID, Child_Age = age_cont, male, black,
+    Child_BMI_Cat = bmi_cat_pft, insurance, income, grade_care
+  ) %>%
+  mutate(
+    Location = "Baltimore",
+    Child_Race = ifelse(black == 1, "Black", "Other"),
+    Child_Sex = ifelse(male == 1, "M", "F"),
+    Payment = case_when(
+      insurance == 1 ~ "Insurance",
+      insurance == 2 ~ "Government",
+      insurance == 3 ~ "Other"
+    ),
+    Mat_Income = case_when(
+      income == 1 ~ "0_25k",
+      income == 2 ~ "25_49k",
+      income == 3 ~ "Over_49k",
+      income == 4 ~ NA_character_
+    ),
+    Mat_Edu = case_when(
+      grade_care %in% 1:2 ~ "High_School",
+      grade_care == 3 ~ "Some_College"
+    )
+  ) %>%
+  select(-insurance, -income, -grade_care, -male, -black) %>%
+  group_by(Child_PID) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+# EEICC -------------------------------------------------------------------
+EEICC_SDOH <- EEICC_data_list[["EEICC_Epi"]] %>%
+  select(Child_PID = PID, Child_Age = age) %>%
+  mutate(Location = "Baltimore")
+
+# ELEMENT -----------------------------------------------------------------
+ELEMENT_SDOH <- ELEMENT_data_list[["ELEMENT_Epi"]] %>%
+  select(
+    Child_PID = PID_child, Mat_PID = PID_mother, Mat_Age = AGE_M,
+    SmHx, MARITAL_STATUS, DELIVERY_SEX, Mat_Edu_Yrs = SCHOOL_T1, Pat_Edu_Yrs = SCHOOLP_T
+  ) %>%
+  mutate(
+    Location = "Mexico_City",
+    Child_Sex = ifelse(DELIVERY_SEX == 1, "M", "F"),
+    Mat_Smoker = ifelse(SmHx == 1, 1, 0),
+    Child_Age = 0,
+    Mat_Marital_Status = case_when(
+      MARITAL_STATUS == 1 ~ "Married",
+      MARITAL_STATUS == 2 ~ "Partner",
+      MARITAL_STATUS == 3 ~ "Single",
+      MARITAL_STATUS == 4 ~ "Seperated",
+      MARITAL_STATUS == 5 ~ "Divorced",
+      MARITAL_STATUS == 6 ~ "Widow",
+      MARITAL_STATUS == 7 ~ "Not_Answered"
+    )
+  ) %>%
+  select(-DELIVERY_SEX, -SmHx, -MARITAL_STATUS)
+
+# (DEBUG) Example joins; comment out for production -----------------------
+# left_join(ELEMENT_Targeted, ELEMENT_SDOH, by = "Child_PID") %>% View   # NOTE: interactive
+# left_join(ELEMENT_Targeted, ELEMENT_SDOH, by = c('Child_PID' = "Mat_PID")) %>% View
+
+# ESPINA ------------------------------------------------------------------
+ESPINA_SDOH <- ESPINA_data_list[["ESPINA_Epi"]] %>%
+  select(
+    Child_PID = PID, Child_Age = c_age, c_gender, c_d8civilstatus,
+    c_d8civilstatusm, Child_Edu_Yrs = c_d9educat, Mat_Edu_Yrs = c_d9educatm,
+    Child_BMI = c_bmi, Family_Income_Cont = c_g4income
+  ) %>%
+  mutate(
+    Location = "Ecuador",
+    Child_Race = "Ecuadorian",
+    Child_Sex = ifelse(c_gender == 1, "M", "F"),
+    Child_Marital_Status = case_when(
+      c_d8civilstatus == 1 ~ "Married",
+      c_d8civilstatus == 2 ~ "Seperated",
+      c_d8civilstatus == 3 ~ "Divorced",
+      c_d8civilstatus == 4 ~ "Widow",
+      c_d8civilstatus == 5 ~ "Partner",
+      c_d8civilstatus == 6 ~ "Single"
+    ),
+    Mat_Marital_Status = case_when(
+      c_d8civilstatusm == 1 ~ "Married",
+      c_d8civilstatusm == 2 ~ "Seperated",
+      c_d8civilstatusm == 3 ~ "Divorced",
+      c_d8civilstatusm == 4 ~ "Widow",
+      c_d8civilstatusm == 5 ~ "Partner",
+      c_d8civilstatusm == 6 ~ "Single"
+    ),
+    Mat_Edu = case_when(
+      Mat_Edu_Yrs > 14 ~ "Four_Year_College_Degree",
+      Mat_Edu_Yrs >= 8 ~ "High_School",
+      Mat_Edu_Yrs >= 4 ~ "Primary_School",
+      TRUE ~ "No_Education"
+    ),
+    Child_Edu = case_when(
+      Child_Edu_Yrs > 14 ~ "Four_Year_College_Degree",
+      Child_Edu_Yrs >= 8 ~ "High_School",
+      Child_Edu_Yrs >= 4 ~ "Primary_School",
+      TRUE ~ "No_Education"
+    )
+  ) %>%
+  select(-c_gender, -c_d8civilstatusm, -c_d8civilstatus)
+
+# GOALS -------------------------------------------------------------------
+GOALS_SDOH <- GOALS_data_list[["GOALS_Epi"]] %>%
+  select(
+    Child_PID = PID, Child_BMI = BMI, Child_Age = AGE, Mat_Age = PAGE,
+    MAX_PARED, INCOME, MARITAL, CHISPRACE, SEX, CHISP, OWNHOME
+  ) %>%
+  mutate(
+    Location = "SanFrancisco",
+    Child_Race = "Hispanic",  # NOTE: fixed as Hispanic
+    Mat_Income = case_when(
+      INCOME %in% 1:2 ~ "0_25k",
+      INCOME %in% 3:4 ~ "25_49k",
+      INCOME == 5 ~ "50_74k",
+      INCOME == 6 ~ "75_99k",
+      INCOME %in% 7:8 ~ "Over_125k"
+    ),
+    Child_Sex = ifelse(SEX == 1, "M", "F"),  # CHECK: verify coding
+    Mat_Marital_Status = case_when(
+      MARITAL == 1 ~ "Married",
+      MARITAL == 2 ~ "Divorced",
+      MARITAL == 3 ~ "Widow",
+      MARITAL == 4 ~ "Single"
+    ),
+    Max_Edu = case_when(
+      MAX_PARED %in% 1:2 ~ "Primary_Education",
+      MAX_PARED %in% 3:4 ~ "High_School",
+      MAX_PARED %in% 5:7 ~ "Some_College",
+      MAX_PARED == 8 ~ "Four_Year_College_Degree"
+    ),
+    Own_Home = ifelse(OWNHOME == 1, "Yes", "No")
+  ) %>%
+  select(-CHISPRACE, -CHISP, -SEX, -MARITAL, -INCOME, -MAX_PARED, -OWNHOME)
+
+# GOC ---------------------------------------------------------------------
+GOC_SDOH <- GOC_data_list[["GOC_Epi"]] %>%
+  select(Child_PID = pid, educ_mom_y, Child_Age = age_b1) %>%
+  mutate(
+    Location = "Chile",
+    Child_Sex = "F",  
+    Mat_Edu = case_when(
+      educ_mom_y == 1 ~ "No_Education",
+      educ_mom_y %in% 2:4 ~ "Primary_Education",
+      educ_mom_y %in% 5:6 ~ "High_School",
+      educ_mom_y %in% 7:9 ~ "Some_College",
+      educ_mom_y == 10 ~ "Four_Year_College_Degree",
+      educ_mom_y == 11 ~ "Some_Grad_School",
+      educ_mom_y == 12 ~ "Other",
+      educ_mom_y == 99 ~ NA_character_
+    )
+  ) %>%
+  select(-educ_mom_y)
+
+# IMBEDD ------------------------------------------------------------------
+IMBEDD_SDOH <- IMBEDD_data_list[["IMBEDD_Epi"]] %>%
+  select(
+    Child_PID = CHILD_PID, Child_Sex = COI_Gender, Child_YOB = COI_YOB,
+    MomRace, DadRace, COIRace, Mat_Age = AgeMomYears, Pat_Age = AgeDadYears,
+    MomEdu, DadEdu, MaxEdu, OwnHome, Mat_BMI = MTH_BMI
+  ) %>%
+  mutate(
+    Location = "California",
+    Mat_Race = case_when(
+      MomRace == 1 ~ "White",
+      MomRace == 2 ~ "Black",
+      MomRace == 3 ~ "NativeAmerican",
+      MomRace == 4 ~ "Asian",
+      MomRace == 5 ~ "Pacific_Islander",
+      MomRace %in% c(6, 7) ~ "Hispanic",
+      MomRace == 9 ~ "MultiRacial"
+    ),
+    Pat_Race = case_when(
+      DadRace == 1 ~ "White",
+      DadRace == 2 ~ "Black",
+      DadRace == 3 ~ "NativeAmerican",
+      DadRace == 4 ~ "Asian",
+      DadRace == 5 ~ "Pacific_Islander",
+      DadRace %in% c(6, 7) ~ "Hispanic",
+      DadRace == 9 ~ "MultiRacial"
+    ),
+    Child_Race = case_when(
+      COIRace == 1 ~ "White",
+      COIRace == 2 ~ "Black",
+      COIRace == 3 ~ "NativeAmerican",
+      COIRace == 4 ~ "Asian",
+      COIRace == 5 ~ "Pacific_Islander",
+      COIRace %in% c(6, 7) ~ "Hispanic",
+      COIRace == 9 ~ "MultiRacial"
+    ),
+    Own_Home = ifelse(OwnHome == 1, "Yes", "No"),
+    Mat_Edu = case_when(
+      MomEdu == 0 ~ "No_Education",
+      MomEdu == 1 ~ "Primary_Education",
+      MomEdu %in% 2:3 ~ "High_School",
+      MomEdu %in% 4:5 ~ "Some_College",
+      MomEdu == 6 ~ "Four_Year_College_Degree",
+      MomEdu %in% 7:8 ~ "Some_Grad_School"
+    ),
+    Pat_Edu = case_when(
+      DadEdu == 0 ~ "No_Education",
+      DadEdu == 1 ~ "Primary_Education",
+      DadEdu %in% 2:3 ~ "High_School",
+      DadEdu %in% 4:5 ~ "Some_College",
+      DadEdu == 6 ~ "Four_Year_College_Degree",
+      DadEdu %in% 7:8 ~ "Some_Grad_School"
+    ),
+    Max_Edu = case_when(
+      MaxEdu == 0 ~ "No_Education",
+      MaxEdu == 1 ~ "Primary_Education",
+      MaxEdu %in% 2:3 ~ "High_School",
+      MaxEdu %in% 4:5 ~ "Some_College",
+      MaxEdu == 6 ~ "Four_Year_College_Degree",
+      MaxEdu %in% 7:8 ~ "Some_Grad_School"
+    )
+  ) %>%
+  select(-MomEdu, -DadEdu, -MaxEdu, -OwnHome, -COIRace, -MomRace, -DadRace)
+
+# MADRES (maternal PID) ---------------------------------------------------
+MADRES_SDOH <- MADRES_data_list[["MADRES_Epi"]] %>%
+  select(
+    Mat_PID = child_pid, Mat_Age = t1_mat_age, Mat_Smoking = t1_smoke,
+    t1_demo_edu, t1_demo_dad_edu, t1_demo_race, t1_demo_hispanic, t1_demo_dad_race,
+    t1_demo_dad_hispanic, baby_race, baby_hispanic, t1_income, t1_demo_marital,
+    gender, t1_home
+  ) %>%
+  mutate(
+    Location = "Los_Angeles",
+    Child_Age = 0,
+    Child_Sex = ifelse(gender == 1, "M", "F"),
+    Mat_Edu = case_when(
+      t1_demo_edu %in% 1:2 ~ "High_School",
+      t1_demo_edu == 3 ~ "Some_College",
+      t1_demo_edu == 4 ~ "Four_Year_College_Degree",
+      t1_demo_edu == 5 ~ "Some_Grad_School"
+    ),
+    Pat_Edu = case_when(
+      t1_demo_dad_edu %in% 1:2 ~ "High_School",
+      t1_demo_dad_edu == 3 ~ "Some_College",
+      t1_demo_dad_edu == 4 ~ "Four_Year_College_Degree",
+      t1_demo_dad_edu == 5 ~ "Some_Grad_School"
+    ),
+    Mat_Marital_Status = case_when(
+      t1_demo_marital == 1 ~ "Married",
+      t1_demo_marital == 2 ~ "Partner",
+      t1_demo_marital == 3 ~ "Single",
+      t1_demo_marital == 4 ~ "Divorced",
+      t1_demo_marital == 5 ~ "Widow"
+    ),
+    Mat_Race = case_when(
+      t1_demo_hispanic == 1 ~ "Hispanic",
+      t1_demo_race == 1 ~ "MultiRacial",
+      t1_demo_race == 2 ~ "White",
+      t1_demo_race == 3 ~ "Asian",
+      t1_demo_race == 4 ~ "Black",
+      t1_demo_race == 5 ~ "Pacific_Islander",
+      t1_demo_race == 6 ~ "Native_American"
+    ),
+    Pat_Race = case_when(
+      t1_demo_dad_hispanic == 1 ~ "Hispanic",
+      t1_demo_dad_race == 1 ~ "MultiRacial",
+      t1_demo_dad_race == 2 ~ "White",
+      t1_demo_dad_race == 3 ~ "Asian",
+      t1_demo_dad_race == 4 ~ "Black",
+      t1_demo_dad_race == 5 ~ "Pacific_Islander",
+      t1_demo_dad_race == 6 ~ "Native_American"
+    ),
+    Child_Race = case_when(
+      baby_hispanic == 1 ~ "Hispanic",
+      baby_race == 1 ~ "MultiRacial",
+      baby_race == 2 ~ "White",
+      baby_race == 3 ~ "Asian",
+      baby_race == 4 ~ "Black",
+      baby_race == 5 ~ "Pacific_Islander",
+      baby_race == 6 ~ "Native_American"
+    ),
+    Mat_Income = case_when(
+      t1_income %in% 1:2 ~ "0_25k",
+      t1_income == 3 ~ "25_49k",
+      t1_income == 4 ~ "Over_49k",
+      t1_income == 5 ~ "Over_100k"
+    ),
+    Home_Type = case_when(
+      t1_home == 1 ~ "House",
+      t1_home == 2 ~ "TownHouse",
+      t1_home %in% c(3, 4) ~ "Apartment",
+      t1_home == 5 ~ "Mobile_Home",
+      t1_home == 7 ~ "Car",
+      t1_home == 8 ~ "Room",
+      t1_home == 9 ~ "Garage"
+    )
+  ) %>%
+  select(
+    -t1_demo_dad_race, -t1_demo_dad_hispanic, -t1_demo_hispanic, -t1_demo_race,
+    -t1_demo_edu, -t1_demo_marital, -t1_demo_dad_edu, -baby_race, -baby_hispanic,
+    -gender, -t1_income, -t1_home
+  )
+# left_join(MADRES_Targeted, MADRES_SDOH, by = "Mat_PID") %>% View  # NOTE: interactive
+
+# MARBLES -----------------------------------------------------------------
+MARBLES_SDOH <- MARBLES_data_list[["MARBLES_Epi"]] %>%
+  select(
+    Mat_PID = CHILD_PID, Child_Sex = COI_Gender, Child_YOB = COI_YOB,
+    MomRace, DadRace, Mat_Age = AgeMomYears, Pat_Age = AgeDadYears,
+    MomEdu, DadEdu, MaxEdu, OwnHome, Mat_BMI = Mth_BMI, COIRace
+  ) %>%
+  mutate(
+    Location = "Sacramento",
+    Child_Age = 2017 - Child_YOB, # CHECK: hard-coded ref year 2017
+    Mat_Race = case_when(
+      MomRace == 1 ~ "White",
+      MomRace == 2 ~ "Black",
+      MomRace == 3 ~ "NativeAmerican",
+      MomRace == 4 ~ "Asian",
+      MomRace == 5 ~ "Pacific_Islander",
+      MomRace %in% c(6, 7) ~ "Hispanic",
+      MomRace == 9 ~ "MultiRacial"
+    ),
+    Pat_Race = case_when(
+      DadRace == 1 ~ "White",
+      DadRace == 2 ~ "Black",
+      DadRace == 3 ~ "NativeAmerican",
+      DadRace == 4 ~ "Asian",
+      DadRace == 5 ~ "Pacific_Islander",
+      DadRace %in% c(6, 7) ~ "Hispanic",
+      DadRace == 9 ~ "MultiRacial"
+    ),
+    Child_Race = case_when(
+      COIRace == 1 ~ "White",
+      COIRace == 2 ~ "Black",
+      COIRace == 3 ~ "NativeAmerican",
+      COIRace == 4 ~ "Asian",
+      COIRace == 5 ~ "Pacific_Islander",
+      COIRace %in% c(6, 7) ~ "Hispanic",
+      COIRace == 9 ~ "MultiRacial"
+    ),
+    Own_Home = ifelse(OwnHome == 1, "Yes", "No"),
+    Mat_Edu = case_when(
+      MomEdu == 0 ~ "No_Education",
+      MomEdu == 1 ~ "Primary_Education",
+      MomEdu %in% 2:3 ~ "High_School",
+      MomEdu %in% 4:5 ~ "Some_College",
+      MomEdu == 6 ~ "Four_Year_College_Degree",
+      MomEdu %in% 7:8 ~ "Some_Grad_School"
+    ),
+    Pat_Edu = case_when(
+      DadEdu == 0 ~ "No_Education",
+      DadEdu == 1 ~ "Primary_Education",
+      DadEdu %in% 2:3 ~ "High_School",
+      DadEdu %in% 4:5 ~ "Some_College",
+      DadEdu == 6 ~ "Four_Year_College_Degree",
+      DadEdu %in% 7:8 ~ "Some_Grad_School"
+    ),
+    Max_Edu = case_when(
+      MaxEdu == 0 ~ "No_Education",
+      MaxEdu == 1 ~ "Primary_Education",
+      MaxEdu %in% 2:3 ~ "High_School",
+      MaxEdu %in% 4:5 ~ "Some_College",
+      MaxEdu == 6 ~ "Four_Year_College_Degree",
+      MaxEdu %in% 7:8 ~ "Some_Grad_School"
+    )
+  ) %>%
+  select(-MomEdu, -DadEdu, -MaxEdu, -OwnHome, -COIRace, -MomRace, -DadRace, -Child_YOB)
+
+# MDUC --------------------------------------------------------------------
+# 0=nursery,1=P1,2=P2,3=P3,4=P4,5=P5,6=P6,7=P7,8=Secondary,9=Tertiary,66=Never sch.,77=NA,99=Missing,88=DK
+MDUC_SDOH <- MDUC_data_list[["MDUC_Epi"]] %>%
+  select(Child_PID = PID, Child_Age = age, sex, race, highesteducation, levelm, levelf) %>%
+  mutate(
+    Location = "Uganda",
+    Mat_Race = "Ugandan",
+    Child_Sex = ifelse(sex == 1, "M", "F"),  # CHECK: verify coding
+    Child_Race = "Ugandan",
+    Child_Edu = "Primary",
+    Mat_Edu = case_when(
+      levelm %in% 0:7 ~ "Primary_Education",
+      levelm == 8 ~ "High_School",
+      levelm == 9 ~ "Some_College",
+      levelm == 66 ~ "No_Education"
+    ),
+    Pat_Edu = case_when(
+      levelf %in% 0:7 ~ "Primary_Education",
+      levelf == 8 ~ "High_School",
+      levelf == 9 ~ "Some_College",
+      levelf == 66 ~ "No_Education"
+    )
+  ) %>%
+  select(-sex, -race, -highesteducation, -levelm, -levelf)
+
+# MEBCO -------------------------------------------------------------------
+MEBCO_SDOH <- MEBCO_data_list[["MEBCO_Epi"]] %>%
+  select(Child_PID = PID, Mat_BMI = bmi, education, gender, Mat_Age = age) %>%
+  mutate(
+    Location = "Bangladesh",
+    Child_Race = "Bangladeshi",
+    Mat_Race = "Bangladeshi",
+    Mat_Edu = case_when(
+      education %in% 1:2 ~ "No_Education",
+      education == 3 ~ "Primary_Education",
+      education == 4 ~ "High_School",
+      education == 6 ~ "Some_College",
+      education == 7 ~ "Some_Grad_School"
+    ),
+    Child_Sex = ifelse(gender == 1, "M", "F"),  # CHECK: verify coding
+    Child_Age = 0
+  ) %>%
+  select(-gender, -education)
+
+# NASH --------------------------------------------------------------------
+NASH_SDOH <- NASH_data_list[["NASH_Epi"]] %>%
+  select(
+    Child_PID = PID, Child_Age = age, sex, ethnicity, race1_indian, race2_asian,
+    race3_black, race4_native, race5_white, race6_refused, Child_BMI = bmi
+  ) %>%
+  mutate(
+    Location = "United_States",
+    Child_Race = case_when(
+      ethnicity == 1 ~ "Hispanic",
+      race3_black == 1 ~ "Black",
+      race1_indian == 1 ~ "Asian",          # FIXME: likely Native_American (race1_indian)
+      race2_asian == 1 ~ "Asian",
+      race4_native == 1 ~ "Native_American",
+      race5_white == 1 ~ "White"
+    ),
+    Child_Sex = ifelse(sex == 1, "M", "F")
+  ) %>%
+  select(-sex, -ethnicity, -race1_indian, -race2_asian, -race3_black, -race4_native, -race5_white, -race6_refused)
+
+# NFGS --------------------------------------------------------------------
+NFGS_SDOH <- NFGS_data_list[["NFGS_Epi"]] %>%
+  select(
+    Child_PID = PID, Child_Age = CHILD_AGE, CHILD_GENDER, AI_AK, ASIAN, BLACK, HW_PI,
+    WHITE, MIXED, CHILD_ETH, MOM_EDUC, DAD_EDUC, INCOME, Child_BMI = BMI
+  ) %>%
+  mutate(
+    Location = "United_States",
+    Child_Sex = ifelse(CHILD_GENDER == 1, "F", "M"),  # FIXME: verify; 1 often = male
+    Child_Race = case_when(
+      CHILD_ETH == 1 ~ "Hispanic",
+      BLACK == 1 ~ "Black",
+      AI_AK == 1 ~ "Native_American",
+      ASIAN == 1 ~ "Asian",
+      HW_PI == 1 ~ "Pacific_Islander",
+      WHITE == 1 ~ "White",
+      MIXED == 1 ~ "MultiRacial"
+    ),
+    Mat_Edu = case_when(
+      MOM_EDUC == 1 ~ "High_School",
+      MOM_EDUC == 2 ~ "Some_College",
+      MOM_EDUC == 3 ~ "Some_Grad_School"
+    ),
+    Pat_Edu = case_when(
+      DAD_EDUC == 1 ~ "High_School",
+      DAD_EDUC == 2 ~ "Some_College",
+      DAD_EDUC == 3 ~ "Some_Grad_School"
+    ),
+    Mat_Income = case_when(
+      INCOME <= 4 ~ "0_25k",
+      INCOME %in% 5:6 ~ "25_49k",
+      INCOME == 7 ~ "50_74k",
+      INCOME == 8 ~ "75_99k",
+      INCOME %in% 9:10 ~ "Over_100k"
+    )
+  ) %>%
+  select(-CHILD_GENDER, -AI_AK, -ASIAN, -BLACK, -HW_PI, -WHITE, -MIXED, -CHILD_ETH, -MOM_EDUC, -DAD_EDUC, -INCOME)
+
+# NHBCS_Cot ---------------------------------------------------------------
+NHBCS_Cot_SDOH <- NHBCS_Cot_data_list[["NHBCS_Cot_Epi"]] %>%
+  select(
+    Mat_PID = PID, Mat_Age = enrollage, PNQRelatStat, PNQSchoolLvl, sex,
+    Bby_Hisp, bby_race, Mth_Hisp, mth_race, Mat_BMI = MaternalBMI, Mat_Smoking = EverCigPreg, PNQAge
+  ) %>%
+  mutate(
+    Location = "New_Hampshire",
+    Child_Sex = ifelse(sex == 1, "M", "F"),
+    Mat_Age = PNQAge,
+    Child_Race = case_when(                     # first write
+      Bby_Hisp == 1 ~ "Hispanic",
+      bby_race == 1 ~ "Native_American",
+      bby_race == 2 ~ "Asian",
+      bby_race == 3 ~ "Pacific_Islander",
+      bby_race == 4 ~ "Black",
+      bby_race == 5 ~ "White",
+      bby_race == 6 ~ "MultiRacial"
+    ),
+    Mat_Race = case_when(                     
+      Mth_Hisp == 1 ~ "Hispanic",
+      mth_race == 1 ~ "Native_American",
+      mth_race == 2 ~ "Asian",
+      mth_race == 3 ~ "Pacific_Islander",
+      mth_race == 4 ~ "Black",
+      mth_race == 5 ~ "White",
+      mth_race == 6 ~ "MultiRacial"
+    ),
+    Mat_Marital_Status = case_when(
+      PNQRelatStat == 1 ~ "Married",
+      PNQRelatStat == 2 ~ "Single",
+      PNQRelatStat == 3 ~ "Divorced",
+      PNQRelatStat == 4 ~ "Widow"
+    ),
+    Mat_Edu = case_when(
+      PNQSchoolLvl %in% 1:2 ~ "High_School",
+      PNQSchoolLvl == 3 ~ "Some_College",
+      PNQSchoolLvl == 4 ~ "Four_Year_College_Degree",
+      PNQSchoolLvl == 5 ~ "Some_Grad_School"
+    )
+  ) %>%
+  select(-PNQRelatStat, -sex, -PNQSchoolLvl, -Bby_Hisp, -bby_race, -Mth_Hisp, -mth_race) %>%
+  mutate(Mat_Age = ifelse(Mat_Age >= 60, NA, Mat_Age))
+
+# NHBCS -------------------------------------------------------------------
+NHBCS_SDOH <- NHBCS_data_list[["NHBCS_Epi"]] %>%
+  select(
+    Child_PID = child_pid, Mat_PID = mother_pid, Mat_BMI = maternalbmi,
+    Mat_Age = enrollment_age, PNQSchoolLvl, PNQRelatStat, Mat_Smoking = smoking_status,
+    mth_white, bbymale
+  ) %>%
+  mutate(
+    Location = "New_Hampshire",
+    Child_Sex = ifelse(bbymale == 1, "M", "F"),
+    Mat_Marital_Status = case_when(
+      PNQRelatStat == 1 ~ "Married",
+      PNQRelatStat == 2 ~ "Single",
+      PNQRelatStat == 3 ~ "Divorced",
+      PNQRelatStat == 4 ~ "Widow"
+    ),
+    Mat_Edu = case_when(
+      PNQSchoolLvl %in% 1:2 ~ "High_School",
+      PNQSchoolLvl == 3 ~ "Some_College",
+      PNQSchoolLvl == 4 ~ "Four_Year_College_Degree",
+      PNQSchoolLvl == 5 ~ "Some_Grad_School"
+    ),
+    Mat_Race = ifelse(mth_white == 1, "White", "NonWhite")
+  ) %>%
+  select(-PNQRelatStat, -bbymale, -PNQSchoolLvl, -mth_white, -Child_PID)
+
+# nuMoM2b -----------------------------------------------------------------
+nuMoM2b_SDOH <- nuMoM2b_data_list[["nuMoM2b_Epi"]] %>%
+  select(
+    Mat_PID = PID, sex = CBAA02, Mat_Smoking = V1AG07, newrace, Mat_BMI = BMI,
+    fam_income = V1AF14, Mat_Age = Age_at_V1
+  ) %>%
+  mutate(
+    Location = "United_States",
+    Mat_Race = case_when(
+      newrace == 1 ~ "White",
+      newrace == 2 ~ "Black",
+      newrace == 3 ~ "Hispanic",
+      newrace == 4 ~ "Asian",
+      newrace == 5 ~ "MultiRacial",
+      newrace == 6 ~ "Native_American"
+    ),
+    Child_Sex = ifelse(sex == 1, "M", "F"),  # CHECK: verify coding (maternal study; Child_Sex from 'sex'?)
+    Mat_Income = case_when(
+      fam_income <= 6 ~ "0_25k",
+      fam_income %in% 7:8 ~ "25_49k",
+      fam_income == 9 ~ "50_74k",
+      fam_income %in% 10:11 ~ "75_99k",
+      fam_income %in% 12:14 ~ "Over_100k"
+    )
+  ) %>%
+  select(-sex, -newrace, -fam_income)
+
+# PARENTs -----------------------------------------------------------------
+PARENTs_SDOH <- PARENTs_data_list[["PARENTs_Epi"]] %>%
+  select(
+    Mat_PID = PID, Race_of_mother, income_personal, smoking, Mat_BMI = BMI_pre,
+    Mat_Age = Age, education_of_mother
+  ) %>%
+  mutate(
+    Location = "Los_Angeles",
+    Child_Age = 0,
+    Mat_Smoking = ifelse(smoking == "never", 0, 1),
+    Mat_Race = case_when(
+      Race_of_mother == "Asian" ~ "Asian",
+      Race_of_mother == "Black, non-Hispanic" ~ "Black",
+      Race_of_mother == "Hispanic" ~ "Hispanic",
+      Race_of_mother %in% c("White", "White, non-Hispanic") ~ "White",
+      Race_of_mother == "Other" ~ "Other"
+    ),
+    Mat_Edu = case_when(
+      education_of_mother == "Bachelors Degree" ~ "Four_Year_College_Degree",
+      education_of_mother == "High School Graduate or GED" ~ "High_School",
+      education_of_mother == "Some College" ~ "Some_College",
+      education_of_mother %in% c(
+        "Professional degree beyond college", "Vocational, Technical, Associates or other 2 year degree",
+        "Doctoral Degree", "Masters Degree"
+      ) ~ "Some_Grad_School"
+    ),
+    Mat_Income = case_when(
+      income_personal == "Less than $20,000" ~ "0_25k",
+      income_personal == "40,000 to $60,000" ~ "50_74k",
+      income_personal == "60,000 to $100,000" ~ "75_99k",
+      income_personal == "More than $100,000" ~ "Over_100k"
+    )
+  ) %>%
+  select(-smoking, -Race_of_mother, -education_of_mother, -income_personal)
+
+# SEARCH ------------------------------------------------------------------
+SEARCH_SDOH <- SEARCH_data_list[["SEARCH_Epi"]] %>%
+  select(Child_PID = PID, Child_Sex = gender, race_ethnic, maxedu_base, Child_Age = age_ipv) %>%
+  mutate(
+    Location = "United_States",
+    Child_Race = case_when(
+      race_ethnic == 1 ~ "Black",
+      race_ethnic == 2 ~ "Hispanic",
+      race_ethnic == 3 ~ "Other",
+      race_ethnic == 4 ~ "White"
+    ),
+    Max_Edu = case_when(
+      maxedu_base == 1 ~ "Four_Year_College_Degree",
+      maxedu_base %in% 2:3 ~ "High_School",
+      maxedu_base == 4 ~ "Some_College"
+    )
+  ) %>%
+  select(-race_ethnic, -maxedu_base)
+
+# SICAS -------------------------------------------------------------------
+SICAS_SDOH <- SICAS_data_list[["SICAS_Epi"]] %>%
+  select(
+    Child_PID = PID, gender_form03, ethnicity_form03,
+    race_form03___am_indian, race_form03___asian, race_form03___hawaii,
+    race_form03___black, race_form03___white, race_form03___other,
+    Child_Age = age, household_income, respondent_smoke
+  ) %>%
+  mutate(
+    Location = "NorthEast_US",
+    Mat_Smoking = ifelse(respondent_smoke == 1, 1, 0),
+    Child_Sex = ifelse(gender_form03 == 1, "M", "F"),
+    Child_Race = case_when(
+      ethnicity_form03 == 1 ~ "Hispanic",
+      race_form03___black == 1 ~ "Black",
+      race_form03___am_indian == 1 ~ "Native_American",
+      race_form03___hawaii == 1 ~ "Pacific_Islander",
+      race_form03___asian == 1 ~ "Asian",
+      race_form03___white == 1 ~ "White",
+      race_form03___other == 1 ~ "Other"
+    ),
+    Mat_Income = case_when(
+      household_income == 1 ~ "Over_100k",
+      household_income %in% 2:3 ~ "75_99k",
+      household_income %in% 4:5 ~ "50_74k",
+      household_income %in% 6:8 ~ "25_49k",
+      household_income %in% 9:10 ~ "0_25k"
+    )
+  ) %>%
+  select(
+    -gender_form03, -ethnicity_form03, -race_form03___am_indian, -race_form03___asian,
+    -race_form03___hawaii, -race_form03___black, -race_form03___white, -race_form03___other,
+    -household_income, -respondent_smoke
+  )
+
+# SLC ---------------------------------------------------------------------
+SLC_SDOH <- SLC_data_list[["SLC_Epi"]] %>%
+  select(Child_PID = PID, gender, race, education_VIS1, income_VIS1, childage_VIS1) %>%
+  mutate(
+    education_VIS1 = round(education_VIS1),
+    Child_Age = childage_VIS1,
+    Location = "Syracuse",
+    Child_Race = case_when(race == 1 ~ "Black", race == 2 ~ "White"),
+    Child_Sex = ifelse(gender == 1, "M", "F"),
+    Edu_Max = case_when(
+      education_VIS1 %in% 1:2 ~ "Primary_Education",
+      education_VIS1 %in% 3:4 ~ "High_School",
+      education_VIS1 == 5 ~ "Some_College",
+      education_VIS1 == 6 ~ "Four_Year_College_Degree",
+      education_VIS1 %in% 7:8 ~ "Some_Grad_School"
+    ),
+    Mat_Income = case_when(
+      income_VIS1 <= 5 ~ "0_25k",
+      income_VIS1 %in% 6:7 ~ "25_49k",
+      income_VIS1 %in% 8:10 ~ "Over_49k"
+    )
+  ) %>%
+  select(-race, -gender, -education_VIS1, -income_VIS1, -childage_VIS1)
+
+# TEDDY -------------------------------------------------------------------
+TEDDY_SDOH <- TEDDY_data_list[["TEDDY_Epi"]] %>%
+  select(
+    Child_PID = PID, Sex, Race_Asian, Race_BlackorAfricanAmerican,
+    Race_NativeAmericanAlaskanNati, Race_NativeHawaiianorotherPaci,
+    Race_Unknownornotreported, Race_White, Ethnicity, education_dad_group3,
+    education_mom_group3, Child_BMI = bmi_1, draw_dte_agedys_1, cc
+  ) %>%
+  mutate(
+    Child_Sex = ifelse(Sex == "Male", "M", "F"),
+    Child_Race = case_when(
+      Ethnicity == 1 ~ "Hispanic",
+      Race_BlackorAfricanAmerican == 1 ~ "Black",
+      Race_Asian == 1 ~ "Asian",
+      Race_NativeHawaiianorotherPaci == 1 ~ "Pacific_Islander",
+      Race_NativeAmericanAlaskanNati == 1 ~ "Native_American",
+      Race_White == 1 ~ "White"
+    ),
+    Mat_Edu = case_when(
+      education_mom_group3 == 1 ~ "High_School",
+      education_mom_group3 == 2 ~ "Some_College",
+      education_mom_group3 == 3 ~ "Four_Year_College_Degree"
+    ),
+    Pat_Edu = case_when(
+      education_dad_group3 == 1 ~ "High_School",
+      education_dad_group3 == 2 ~ "Some_College",
+      education_dad_group3 == 3 ~ "Four_Year_College_Degree"
+    ),
+    Child_Age = draw_dte_agedys_1 / 365,
+    Location = case_when(
+      cc %in% 1:3 ~ "United_States",
+      cc == 4 ~ "Finland",
+      cc == 5 ~ "Germany",
+      cc == 6 ~ "Sweden"
+    ),
+    Site_Location = case_when(
+      cc == 1 ~ "Colorado",
+      cc == 2 ~ "Georiga",   # FIXME: typo → "Georgia"
+      cc == 3 ~ "Washington",
+      cc == 4 ~ "Finland",
+      cc == 5 ~ "Germany",
+      cc == 6 ~ "Sweden"
+    )
+  ) %>%
+  select(
+    -Sex, -Race_Asian, -Race_BlackorAfricanAmerican,
+    -Race_NativeAmericanAlaskanNati, -Race_NativeHawaiianorotherPaci,
+    -Race_Unknownornotreported, -Race_White, -Ethnicity,
+    -education_dad_group3, -education_mom_group3, -draw_dte_agedys_1, -cc
+  )
+
+save(TEDDY_SDOH, file = "../Input/Harmonized_Datasets/TEDDY_SDOH_Clean.RData")
+
+# TSIC --------------------------------------------------------------------
+TSIC_SDOH <- TSIC_data_list[["TSIC_Epi"]] %>%
+  select(
+    Child_PID = PID, Mat_Age = age, edu, ethnic, race, income,
+    Child_Age = agechild, chldsex, childethn, childrace, smhabits, typehme
+  ) %>%
+  mutate(
+    Location = "Midwestern_US",
+    Mat_Edu = case_when(
+      edu %in% 1:2 ~ "High_School",
+      edu %in% 3:4 ~ "Some_College",
+      edu == 5 ~ "Four_Year_College_Degree",
+      edu == 6 ~ "Some_Grad_School"
+    ),
+    Mat_Race = case_when(
+      ethnic == 1 ~ "Hispanic",
+      race == 1 ~ "White",
+      race == 2 ~ "Black",
+      race == 3 ~ "Asian",
+      race == 4 ~ "Native_American",
+      race == 5 ~ "Pacific_Islander",
+      race == 6 ~ "MultiRacial"
+    ),
+    Mat_Income = case_when(
+      income %in% 1:3 ~ "0_25k",
+      income == 4 ~ "25_49k",
+      income == 5 ~ "50_74k",
+      income == 6 ~ "75_99k",
+      income %in% 7:8 ~ "Over_100k"
+    ),
+    Child_Sex = ifelse(chldsex == 1, "M", "F"),
+    Home_Type = case_when(
+      typehme == 1 ~ "House",
+      typehme == 2 ~ "Mulifamily",  # CHECK: typo? "Multifamily"
+      typehme == 3 ~ "Apartment",
+      typehme == 4 ~ "Other"
+    ),
+    Child_Race = case_when(
+      childethn == 1 ~ "Hispanic",
+      childrace == 1 ~ "White",
+      childrace == 2 ~ "Black",
+      childrace == 3 ~ "Asian",
+      childrace == 4 ~ "Native_American",
+      childrace == 5 ~ "Pacific_Islander",
+      childrace == 6 ~ "MultiRacial"
+    ),
+    Mat_Smoking = case_when(
+      smhabits %in% 1:2 ~ 1,
+      smhabits == 3 ~ 0
+    )
+  ) %>%
+  select(-edu, -ethnic, -race, -income, -chldsex, -childethn, -childrace, -smhabits, -typehme)
+
+# USCEHC ------------------------------------------------------------------
+USCEHC_SDOH <- USCEHC_data_list[["USCEHC_Epi"]] %>%
+  select(Child_PID = CHEAR_PID, Child_BMI = BMI, Sex, Ethnicity, Parental_Education) %>%
+  mutate(
+    Location = "Southern_California",
+    Child_Race = case_when(
+      Ethnicity == "NHW" ~ "White",
+      Ethnicity == "HW" ~ "Hispanic",
+      TRUE ~ "Other"
+    ),
+    Child_Sex = ifelse(Sex == 1, "M", "F"),  # CHECK: verify coding
+    Max_Edu = case_when(
+      Parental_Education %in% 1:2 ~ "High_School",
+      Parental_Education == 3 ~ "Some_College",
+      Parental_Education == 4 ~ "Four_Year_College_Degree",
+      Parental_Education == 5 ~ "Some_Grad_School"
+    )
+  ) %>%
+  select(-Sex, -Ethnicity, -Parental_Education)
+
+# VAPS (no SDOH) ----------------------------------------------------------
+VAPS_SDOH <- VAPS_data_list[["VAPS_Epi"]] %>%
+  select(Child_PID = PID) %>%
+  mutate(Location = "United_States")
+
+# VDAART ------------------------------------------------------------------
+VDAART_SDOH <- VDAART_data_list[["VDAART_Epi"]] %>%
+  select(Child_PID = PID, cgender, crace, cethnicity, age_at_collection_days) %>%
+  mutate(
+    Child_Age = age_at_collection_days / 365,
+    Location = "United_States",
+    Child_Sex = ifelse(cgender == "Male", "M", "F"),
+    Child_Race = case_when(
+      cethnicity == "Hispanic or Latino" ~ "Hispanic",
+      crace == "Black, African American" ~ "Black",
+      crace == "Asian" ~ "Asian",
+      crace == "Native Hawaiian" ~ "Pacific_Islander",
+      crace == "White" ~ "White",
+      crace == "Other" ~ "Other"
+    )
+  ) %>%
+  select(-cgender, -cethnicity, -crace)
+
+# VIVA --------------------------------------------------------------------
+VIVA_SDOH <- VIVA_data_list[["VIVA_Epi"]] %>%
+  select(
+    Mat_PID = CHILD_PID, Mat_Age = age_mom_enroll_d, Mat_BMI = bmi_mom_prepreg_d,
+    race2_mom_epi_epia_d, education_mom_epi_epia_d, smokpreg_final_d, income_hh_epq_epqa_d,
+    female_d, race_child_3y_dx
+  ) %>%
+  mutate(
+    Location = "Massachusetts",
+    Child_Sex = ifelse(female_d == 1, "F", "M"),
+    Mat_Smoking = case_when(
+      smokpreg_final_d %in% c("former", "smoke preg") ~ 1,
+      smokpreg_final_d == "xnever" ~ 0
+    ),
+    Mat_Race = case_when(
+      race2_mom_epi_epia_d == "white" ~ "White",
+      race2_mom_epi_epia_d == "black" ~ "Black",
+      race2_mom_epi_epia_d == "hispa" ~ "Hispanic",
+      race2_mom_epi_epia_d == "asian" ~ "Asian",
+      race2_mom_epi_epia_d == "more than 1 race" ~ "MultiRacial",
+      race2_mom_epi_epia_d == "other" ~ "Other"
+    ),
+    Child_Race = case_when(
+      race_child_3y_dx == "white" ~ "White",
+      race_child_3y_dx == "black" ~ "Black",
+      race_child_3y_dx == "hispa" ~ "Hispanic",
+      race_child_3y_dx == "asian" ~ "Asian",
+      race_child_3y_dx == "more than 1 race" ~ "MultiRacial",
+      race_child_3y_dx == "other" ~ "Other",
+      race_child_3y_dx == "amid" ~ "Native_American"
+    ),
+    Mat_Income = case_when(
+      income_hh_epq_epqa_d <= 3 ~ "0_25k",
+      income_hh_epq_epqa_d == 4 ~ "25_49k",
+      income_hh_epq_epqa_d %in% 5:6 ~ "Over_49k"
+    ),
+    Mat_Edu = case_when(
+      education_mom_epi_epia_d == 1 ~ "Primary_School",
+      education_mom_epi_epia_d == 2 ~ "High_School",
+      education_mom_epi_epia_d == 3 ~ "Some_College",
+      education_mom_epi_epia_d == 4 ~ "Four_Year_College_Degree",
+      education_mom_epi_epia_d == 5 ~ "Some_Grad_School"
+    ),
+    Child_Age = 0
+  ) %>%
+  select(
+    -race2_mom_epi_epia_d, -education_mom_epi_epia_d, -smokpreg_final_d, -income_hh_epq_epqa_d,
+    -female_d, -race_child_3y_dx
+  )
+
+# ZIP ---------------------------------------------------------------------
+ZIP_SDOH <- ZIP_data_list[["ZIP_EPI_1"]] %>%
+  select(
+    Child_PID = CHILD_PID, Mat_PID = MOTHER_PID, Mat_Age = scr_ob_age, Site_Location = site,
+    sea_mstatus, sea_race, sea_degree_you, sea_degree_spouse, tri_resid_typ,
+    Mat_Smoking = tri_smoke_ind, State = tri_state, Country = tri_country
+  ) %>%
+  mutate(
+    Location = "Central/SouthAmerica",
+    Child_Age = 0,
+    Mat_Marital_Status = case_when(
+      sea_mstatus == 1 ~ "Single",
+      sea_mstatus == 2 ~ "Married",
+      sea_mstatus == 3 ~ "Divorced",
+      sea_mstatus == 4 ~ "Widow",
+      sea_mstatus == 5 ~ "Partner"
+    ),
+    Mat_Race = case_when(
+      sea_race == 1 ~ "White",
+      sea_race == 2 ~ "Black",
+      TRUE ~ "Hispanic"
+    ),
+    Mat_Edu = case_when(
+      sea_degree_you == 1 ~ "No_Education",
+      sea_degree_you %in% 2:4 ~ "Primary_Education",
+      sea_degree_you %in% 5:10 ~ "High_School",
+      sea_degree_you %in% 11:14 ~ "Some_College",
+      sea_degree_you == 15 ~ "Four_Year_College_Degree",
+      sea_degree_you %in% 16:18 ~ "Some_Grad_School"
+    ),
+    Pat_Edu = case_when(
+      sea_degree_spouse == 1 ~ "No_Education",
+      sea_degree_spouse %in% 2:4 ~ "Primary_School",
+      sea_degree_spouse %in% 5:10 ~ "High_School",
+      sea_degree_spouse %in% 11:14 ~ "Some_College",
+      sea_degree_spouse == 15 ~ "Four_Year_College_Degree",
+      sea_degree_spouse %in% 16:18 ~ "Some_Grad_School"
+    )
+  ) %>%
+  select(
+    -sea_mstatus, -sea_race, -sea_degree_you, -sea_degree_spouse, -tri_resid_typ, -Child_PID
+  )
+
+save(ZIP_SDOH, file = "../Input/Harmonized_Datasets/ZIP_SDOH_Clean.RData")
+
+# CTS ---------------------------------------------------------------------
+CTS_SDOH <- CTS_data_list[["CTS_EPI"]] %>%
+  select(Mat_PID = pid, race, ethnicity, age, ses, bmi) %>%
+  mutate(
+    Location = "California",
+    Mat_Race = case_when(
+      ethnicity == 1 ~ "Hispanic",
+      race == 1 ~ "Native_American",
+      race == 2 ~ "Asian",
+      race == 3 ~ "Pacific_Islander",
+      race == 4 ~ "Black",
+      race == 5 ~ "White",
+      race == 6 ~ "MultiRacial"
+    ),
+    Mat_Age = case_when(age == 1 ~ 45, age == 2 ~ 55, age == 3 ~ 65, age == 4 ~ 75)
+  ) %>%
+  select(Mat_PID, Location, Mat_Race, Mat_Age)
+
+# DCHS --------------------------------------------------------------------
+DCHS_SDOH <- DCHS_data_list[["DCHS_EPI"]] %>%
+  select(
+    Mat_PID = mother_pid, Child_PID = child_pid, sex, ethnicity,
+    maternal_education, parent_employ, maternal_income, Mat_Age = maternal_age_enr
+  ) %>%
+  mutate(
+    Location = "South_Africa",
+    Child_Sex = ifelse(sex == 1, "F", "M"),  # CHECK: verify coding
+    Child_Race = "South_African",
+    Mat_Race = "South_African",
+    Child_Age = 0,
+    Mat_Edu = case_when(
+      maternal_education == 0 ~ "Primary_Education",
+      maternal_education %in% 1:2 ~ "High_School",
+      maternal_education == 3 ~ "Some_College"
+    ),
+    Mat_Income = "0_25k"
+  ) %>%
+  select(Mat_PID, Child_PID, Location, Child_Sex, Child_Race, Mat_Edu, Mat_Age, Child_Age)
+
+# OBSS (adult cohort) -----------------------------------------------------
+OBSS_SDOH <- OBSS_data_list[["OBSS_EPI"]] %>%
+  select(Mat_PID = PID, sex, race, ethnicity, Mat_Age = age) %>% 
+  mutate(
+    Location = "Boston",
+    Adult_Sex = ifelse(sex == "Female", "F", "M"),
+    Mat_Race = case_when(
+      ethnicity == "Hispanic" ~ "Hispanic",
+      race == "White" ~ "White",
+      race == "Black" ~ "Black",
+      race == "Asian" ~ "Asian",
+      race == "Other" ~ "Other"
+    )
+  ) %>%
+  dplyr::filter(Adult_Sex == "F") %>% 
+  select(Mat_PID, Location, Mat_Race, Mat_Age)
+
+# ---------------------------
+# Merge & Post-processing
+# ---------------------------
+
+# Build a list of all *_SDOH data.frames in the environment
+if (exists("SDOH_Data_All")) rm(SDOH_Data_All)  # CHECK: rm() warns if object missing (wrapped in if)
+Pattern1 <- grep("SDOH$", names(.GlobalEnv), value = TRUE)
+bind_list <- do.call("list", mget(Pattern1))
+
+# Row-bind, adding Study id from list names
+SDOH_Data_All <- rbindlist(bind_list, use.names = TRUE, fill = TRUE, idcol = "Study")
+
+# Reorder factors and coerce numerics -------------------------------------
+# (Note: some columns might be absent for some studies; relevel will create factors when present)
+SDOH_Data_All <- SDOH_Data_All %>%
+  mutate(
+    Child_Sex = relevel(as.factor(Child_Sex), ref = "M"),
+    Location = relevel(as.factor(Location), ref = "United_States"),
+    Child_Race = relevel(as.factor(Child_Race), ref = "White"),
+    Max_Edu = relevel(as.factor(Max_Edu), ref = "Four_Year_College_Degree"),
+    Mat_Age = as.numeric(Mat_Age),
+    Pat_Age = as.numeric(Pat_Age),
+    Mat_Marital_Status = relevel(as.factor(Mat_Marital_Status), ref = "Married"),
+    Mat_Race = relevel(as.factor(Mat_Race), ref = "White"),
+    Pat_Race = relevel(as.factor(Pat_Race), ref = "White"),  
+    Mat_Edu = relevel(as.factor(Mat_Edu), ref = "Four_Year_College_Degree"),
+    Pat_Edu = relevel(as.factor(Pat_Edu), ref = "Four_Year_College_Degree"),
+    Mat_Income = relevel(as.factor(Mat_Income), ref = "0_25k")
+  )
+
+save(SDOH_Data_All,file = "../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+```
+
+```{r}
+
+```
+
