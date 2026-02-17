@@ -1,0 +1,1219 @@
+---
+title: "Cumulative_Conc_Plot"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(glmnet)
+library(caret)
+library(randomForest)
+library(e1071)
+library(xgboost)
+library(quantreg)
+library(scales)
+library(paletteer)
+library(data.table)
+library(gridExtra)
+library(grid)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggspatial)   # annotation_map_tile()
+library(maptiles)    # get_tiles()
+library(stars)
+library(scatterpie)
+library(rnaturalearth)
+library(rnaturalearthdata)
+
+```
+
+```{r}
+# load("../../Output/Final_Model_Child_SDOH_Metab_Quantile_Results_QuantData.RData")
+# Quant_Results <- Child_SDOH_Metab_Quantile_Results_with_predictions_highlow_allresults
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+```
+
+
+Exposure Classes
+-----
+
+```{r}
+#New Classifications
+#Trace elements
+Trace_Elements_Theme <- unique(c("As","Ba", "Be","Cd" ,"Co","Cs","Mn", 
+                  "Mo","Pb","Sb", "Tl","U", "W","Cr","Cu",
+                  "Hg" ,"Ni","Pt","Sn",
+                  "V","Zn", "Al", "Mg","Se"  ))
+
+
+length(Trace_Elements_Theme)
+#Phenols
+Phenols_Theme <- unique(c("BP3","BPA","BPF","BPS","DCP24","DCP25","TCC","TCS","BUPB","ETPB","MEPB","PRPB","BP1",
+                          "BP2","BP8","BPAF","BPAP","BPB","BPP","BPZ","DHB34","HB4",
+                          "OH4BP","OHETP","OHMEP","PCP","TCP245","TCP246","DCP","TCP24","PHE","PHEN"))
+length(Phenols_Theme)
+
+#Polycyclic_Aromatic_hydrocarbons 
+PAH_Theme <- unique(c("NAP1","NAP2","PYR1","FLUO2","PHEN1","PHEN2PHEN3","PHEN4","PHEN9","PHET","PHEN2",
+                      "PHEN3","FLUO2_FLUO3","PHEN2_PHEN3","FLU","FLUO","PYR","NAP"))
+
+length(PAH_Theme)
+
+#Phthalates
+Phthalates_Theme <- unique(c("MBZP","MCPP","MECPP","MEHHP","MEHP","MEOHP","MEP","MIBP","MNBP","MCMHP",
+                             "MCHP","MCHPP","MCINP","MCIOP","MCMHP","MHXP","MINP","MIPP","MMP","MOP","MPEP",
+                             "MCOCH","MHNCH","MINP","MCOP","MECPTP","MBZP","MCPP","MEHHTP","MIBP","MHPP","MBZ","MBP",
+                             "MCI","MCMH","MCO","MCP","MEC","MEH","MEHH","MEO","MEOH","MHN","MIB","MIN",
+                             "MNB"))
+
+length(Phthalates_Theme)
+
+#Parabens
+Parabens_Theme <- unique(c("BUPB","ETPB","MEPB","PRPB","BZPB","HEPB","BUP","ETP","PRP"))
+length(Parabens_Theme)
+
+#Smoking/Smoking
+Smoking_Theme <- unique(c("COTT","HCOTT","NICT","NNAL","COT"))
+length(Smoking_Theme)
+
+#Inflam
+Inflam_Theme <- unique(c("HAPTOGLOBIN","FLT3L","TIMP1","TIMP2","IL17F","GMCSF","IFNG","IL10","MIP3A",
+                         "IL12P70", "IL13","IL15","IL17A","IL22","IL9","IL1B","IL33","IL2","IL21",
+                         "IL4"," IL23","IL5","IL6","IL17EIL25","IL27","IL31","TNFA","TNFB","IL28A",
+                         "MMP1","MMP2","MMP7","MMP9","MMP10","CRP","LTE4","IL8","IL23"))
+
+length(Inflam_Theme)
+
+#Pesticide
+
+Pesticide_Theme <- unique(c("DEP","DETP","DMDP","DMP","DMTP","PBA",
+                            "TCP","DEDP","GPS","FPBA","PNP","IMPY","D24","AMPA",
+                            "MDA","T245","BHCH","HCB","PPDDE","PPDDT","TCHL","TNON",
+                            "OCHL","PPDDD"))
+
+length(Pesticide_Theme)
+
+#Volatile Organic Compounds
+VOC_Theme <- unique(c("HPMA","HPMA2","SPMA","HMPMA"))
+
+length(VOC_Theme)
+
+#Oxidative Stress Markers
+OXID_Theme <- unique(c("F2A8IP","F2A23D","F2AVI","F2A12I","OS8OHDG","OSMDA","OS8O","OSMD"))
+
+length(OXID_Theme)
+
+#PFAS
+PFAS_Theme <- unique(c("NMFOSAA","PFBS" ,"PFDA","PFDODA" ,
+                "PFDS" ,"PFHPA" ,"PFHXA" , "PFHXS" ,
+                "PFNA" , "PFOA" , "PFOS","PFOSA", "PFUNDA",
+                "NETFOSAA","PFPEA","ETFOSA","PFBA","PFPEA","PFHPS"))
+
+length(PFAS_Theme)
+
+#Flame Retardants
+Flame_Retardant_Theme <- unique(c("BDE47","BDE99","BDE100","BDCPP","DPHP","TBBA",
+                                  "BCETP","BCPP","DBUP","DBZP","DOCP","DPCP","BDE153",
+                                  "BDE154","BDE183","BDE28","BDE47","BDE17","BDE66",
+                                  "BDE85","BDE99","PBB153","BDE28","BDE85"))
+length(Flame_Retardant_Theme)
+
+PCB_Theme <- unique(c( "PCB105_PCB127","PCB110", "PCB114_PCB122","PCB118_PCB106", "PCB128", "PCB137",
+  "PCB138_PCB158","PCB146_PCB161", "PCB153","PCB156","PCB157","PCB167","PCB170","PCB172_PCB192", "PCB177",
+  "PCB180","PCB182_PCB187","PCB183", "PCB18_PCB17","PCB194",
+  "PCB195","PCB196_PCB203", "PCB199","PCB202","PCB206","PCB208","PCB209","PCB22",
+  "PCB31_PCB28", "PCB33_PCB20","PCB37","PCB41_PCB64","PCB44","PCB47_48_75",
+  "PCB49_PCB43","PCB52_PCB73","PCB5_PCB8","PCB70_PCB76","PCB73_PCB95","PCB74_PCB61",
+  "PCB85_PCB120","PCB90_101_89","PCB99"))
+length(PCB_Theme)
+
+#Bisdithiocarbamates 
+Bisdithiocarbamates_Theme <- unique(c("ETU","PTU"))
+
+#Cellular adhesion molecules 
+CAM_Theme <- unique(c("ICAM1","VCAM1","ESEL","PSEL"))
+
+#Lipids
+
+Lipids_Theme <- unique(c("CHOL","OXLDL","TG"))
+
+#Nutrients
+Nutrients_Theme <- unique(c("GAMTOC","ALPTOC","ZEAXAN","CRYPTO","LYCOPE","ALPCARO",
+                            "BETCARO","RET","FOL","ADIPO"))
+length(Nutrients_Theme)
+
+
+Lipid_Metab <- c("LEP")
+
+Thromboxane <- c("DHTHRM")
+
+
+Other_Theme <- c(Bisdithiocarbamates_Theme,CAM_Theme,Lipids_Theme,Nutrients_Theme,Lipid_Metab,Thromboxane)
+```
+
+
+
+
+
+```{r}
+
+
+Child_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  dplyr::select(-Mat_PID)
+
+length(unique(Child_Data_Targeted$Child_PID))
+
+# Child_Data_Targeted %>% 
+#     dplyr::filter(Analyte_Code == "As" ) %>% View 
+
+
+myanalytes <- unique(Child_Data_Targeted$Analyte_Code)
+child_analytes <- myanalytes
+
+child_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Child_PID","Study",curr_analyte,"Units")
+  
+  curr_data <- Child_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+    
+  child_list_Targeted[[i]] <- curr_data
+  names(child_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+```{r}
+Mat_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Mat_PID)) %>% 
+  dplyr::select(-Child_PID)%>% 
+  dplyr::filter(!is.na(Analyte_Code))
+myanalytes <- unique(Mat_Data_Targeted$Analyte_Code)
+
+length(unique(Mat_Data_Targeted$Mat_PID))
+
+mat_analytes <- myanalytes
+
+mat_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Mat_PID","Study",curr_analyte,"Units")
+  
+  curr_data <- Mat_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+    
+  mat_list_Targeted[[i]] <- curr_data
+  names(mat_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+
+Blood vs Urine
+```{r}
+# Targeted_Data_All %>% 
+#   dplyr::filter(str_detect(Chemical_Group , "BTE")) %>%
+#   dplyr::filter(Analyte_Code == "Ba") %>% 
+#   group_by(Study,Chemical_Group,Analyte_Code) %>% 
+#   summarise(n = n()) %>% 
+#   View
+# 
+
+```
+
+
+Cum Percent
+------
+
+
+
+#Trace Elements
+```{r}
+Trace_Elements_Data <- child_list_Targeted[Trace_Elements_Theme]
+Trace_Elements_Data_Mat <- mat_list_Targeted[Trace_Elements_Theme]
+
+newcols <- c("PID","Study","Conc","Units")
+Trace_Elements_Data <- lapply(Trace_Elements_Data, setNames, newcols)
+Trace_Elements_Data <- rbindlist( Trace_Elements_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+
+Trace_Elements_Data_Mat <- lapply(Trace_Elements_Data_Mat, setNames, newcols)
+Trace_Elements_Data_Mat <- rbindlist( Trace_Elements_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Trace_Elements_Data_All <- bind_rows(Trace_Elements_Data,Trace_Elements_Data_Mat)
+
+
+table(Trace_Elements_Data_All$Units)
+Trace_Elements_Data_All <- Trace_Elements_Data_All %>%
+  mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
+  mutate(Conc = ifelse(Units == "ug/dL",Conc * 10,Conc)) %>% 
+  arrange(Conc) %>%
+  group_by(Study) %>% 
+  dplyr::filter(!is.na(Conc)) %>% 
+  mutate(Cat = "Trace_Elements") %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) 
+
+```
+
+
+
+#Phenols
+```{r}
+
+Phenols_Data <- child_list_Targeted[Phenols_Theme]
+Phenols_Data_Mat <- mat_list_Targeted[Phenols_Theme]
+
+newcols <- c("PID","Study","Conc","Units")
+Phenols_Data <- Phenols_Data[lengths(Phenols_Data) != 0]
+Phenols_Data <- lapply(Phenols_Data, setNames, newcols)
+Phenols_Data <- rbindlist( Phenols_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Phenols_Data_Mat <- Phenols_Data_Mat[lengths(Phenols_Data_Mat) != 0]
+Phenols_Data_Mat <- lapply(Phenols_Data_Mat, setNames, newcols)
+Phenols_Data_Mat <- rbindlist( Phenols_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Phenols_Data_All <- bind_rows(Phenols_Data,Phenols_Data_Mat)
+
+
+table(Phenols_Data_All$Units)
+Phenols_Data_All <- Phenols_Data_All %>%
+  mutate(Conc = ifelse(Units == "ng/L",Conc/1000,Conc)) %>% 
+  arrange(Conc) %>%
+  group_by(Study) %>% 
+  dplyr::filter(!is.na(Conc)) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "Phenols")
+
+
+```
+
+
+#PAH
+```{r}
+
+PAH_Data <- child_list_Targeted[PAH_Theme]
+PAH_Data_Mat <- mat_list_Targeted[PAH_Theme]
+
+newcols <- c("PID","Study","Conc","Units")
+PAH_Data <- PAH_Data[lengths(PAH_Data) != 0]
+PAH_Data <- lapply(PAH_Data, setNames, newcols)
+PAH_Data <- rbindlist( PAH_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+PAH_Data_Mat <- PAH_Data_Mat[lengths(PAH_Data_Mat) != 0]
+PAH_Data_Mat <- lapply(PAH_Data_Mat, setNames, newcols)
+PAH_Data_Mat <- rbindlist( PAH_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+PAH_Data_All <- bind_rows(PAH_Data,PAH_Data_Mat)
+
+table(PAH_Data_All$Units)
+
+PAH_Data_All <- PAH_Data_All %>%
+  mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
+ mutate(Conc = ifelse(Units == "ng/L",Conc/ 1000,Conc)) %>% 
+  arrange(Conc) %>%
+  group_by(Study) %>% 
+  dplyr::filter(!is.na(Conc)) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "PAH")
+
+
+```
+
+#Phthalates
+```{r}
+Phthalates_Data <- child_list_Targeted[Phthalates_Theme]
+Phthalates_Data_Mat <- mat_list_Targeted[Phthalates_Theme]
+
+
+newcols <- c("PID","Study","Conc","Units")
+Phthalates_Data <- Phthalates_Data[lengths(Phthalates_Data) != 0]
+Phthalates_Data <- lapply(Phthalates_Data, setNames, newcols)
+Phthalates_Data <- rbindlist( Phthalates_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Phthalates_Data_Mat <- Phthalates_Data_Mat[lengths(Phthalates_Data_Mat) != 0]
+Phthalates_Data_Mat <- lapply(Phthalates_Data_Mat, setNames, newcols)
+Phthalates_Data_Mat <- rbindlist( Phthalates_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Phthalates_Data_All <- bind_rows(Phthalates_Data,Phthalates_Data_Mat)
+
+table(Phthalates_Data_All$Units)
+Phthalates_Data_All <- Phthalates_Data_All %>%
+      mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
+  mutate(Conc = ifelse(Units == "ng/L",Conc/ 1000,Conc)) %>% 
+    group_by(Study) %>% 
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "Phthalates")
+
+```
+
+
+#Parabens
+```{r}
+Parabens_Data <- child_list_Targeted[Parabens_Theme]
+Parabens_Data_Mat <- mat_list_Targeted[Parabens_Theme]
+
+newcols <- c("PID","Study","Conc","Units")
+Parabens_Data <- Parabens_Data[lengths(Parabens_Data) != 0]
+Parabens_Data <- lapply(Parabens_Data, setNames, newcols)
+Parabens_Data <- rbindlist( Parabens_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Parabens_Data_Mat <- Parabens_Data_Mat[lengths(Parabens_Data_Mat) != 0]
+Parabens_Data_Mat <- lapply(Parabens_Data_Mat, setNames, newcols)
+Parabens_Data_Mat <- rbindlist( Parabens_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Parabens_Data_All <- bind_rows(Parabens_Data,Parabens_Data_Mat)
+
+table(Parabens_Data_All$Units)
+Parabens_Data_All <- Parabens_Data_All %>%
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>%
+  group_by(Study) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "Parabens")
+
+```
+
+#Smoking
+```{r}
+Smoking_Data <- child_list_Targeted[Smoking_Theme]
+Smoking_Data_Mat <- mat_list_Targeted[Smoking_Theme]
+
+
+newcols <- c("PID","Study","Conc","Units")
+Smoking_Data <- Smoking_Data[lengths(Smoking_Data) != 0]
+Smoking_Data <- lapply(Smoking_Data, setNames, newcols)
+Smoking_Data <- rbindlist( Smoking_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Smoking_Data_Mat <- Smoking_Data_Mat[lengths(Smoking_Data_Mat) != 0]
+Smoking_Data_Mat <- lapply(Smoking_Data_Mat, setNames, newcols)
+Smoking_Data_Mat <- rbindlist( Smoking_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Smoking_Data_All <- bind_rows(Smoking_Data,Smoking_Data_Mat)
+
+table(Smoking_Data_All$Units)
+Smoking_Data_All <- Smoking_Data_All %>%
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+    group_by(Study) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "Smoking")
+
+```
+
+#Inflam
+```{r}
+Inflam_Data <- child_list_Targeted[Inflam_Theme]
+Inflam_Data_Mat <- mat_list_Targeted[Inflam_Theme]
+
+newcols <- c("PID","Study","Conc","Units")
+
+Inflam_Data <- Inflam_Data[lengths(Inflam_Data) != 0]
+Inflam_Data <- lapply(Inflam_Data, setNames, newcols)
+Inflam_Data <- rbindlist( Inflam_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Inflam_Data_Mat <- Inflam_Data_Mat[lengths(Inflam_Data_Mat) != 0]
+Inflam_Data_Mat <- lapply(Inflam_Data_Mat, setNames, newcols)
+Inflam_Data_Mat <- rbindlist( Inflam_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Inflam_Data_All <- bind_rows(Inflam_Data,Inflam_Data_Mat)
+
+table(Inflam_Data_All$Units)
+
+Inflam_Data_All <- Inflam_Data_All %>%
+  mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
+  mutate(Conc = ifelse(Units == "pg/mL",Conc/ 1000,Conc)) %>% 
+  mutate(Conc = ifelse(Units == "pg/ml",Conc/ 1000,Conc)) %>% 
+  mutate(Conc = ifelse(Units == "mg/L",Conc * 1000,Conc)) %>% 
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "Inflam")
+
+```
+
+
+#Pesticides
+```{r}
+Pesticide_Data <- child_list_Targeted[Pesticide_Theme]
+Pesticide_Data_Mat <- mat_list_Targeted[Pesticide_Theme]
+
+
+newcols <- c("PID","Study","Conc","Units")
+Pesticide_Data <- Pesticide_Data[lengths(Pesticide_Data) != 0]
+Pesticide_Data <- lapply(Pesticide_Data, setNames, newcols)
+Pesticide_Data <- rbindlist( Pesticide_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Pesticide_Data_Mat <- Pesticide_Data_Mat[lengths(Pesticide_Data_Mat) != 0]
+Pesticide_Data_Mat <- lapply(Pesticide_Data_Mat, setNames, newcols)
+Pesticide_Data_Mat <- rbindlist( Pesticide_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Pesticide_Data_All <- bind_rows(Pesticide_Data,Pesticide_Data_Mat) %>% 
+  filter(is.finite(Conc))
+
+table(Pesticide_Data_All$Units)
+Pesticide_Data_All <- Pesticide_Data_All %>%
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+    group_by(Study) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "Pesticide")
+
+```
+
+
+#VOC
+```{r}
+VOC_Data <- child_list_Targeted[VOC_Theme]
+VOC_Data_Mat <- mat_list_Targeted[VOC_Theme]
+
+newcols <- c("PID","Study","Conc","Units")
+
+VOC_Data <- VOC_Data[lengths(VOC_Data) != 0]
+VOC_Data <- lapply(VOC_Data, setNames, newcols)
+VOC_Data <- rbindlist( VOC_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+VOC_Data_Mat <- VOC_Data_Mat[lengths(VOC_Data_Mat) != 0]
+VOC_Data_Mat <- lapply(VOC_Data_Mat, setNames, newcols)
+VOC_Data_Mat <- rbindlist( VOC_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+VOC_Data_All <- bind_rows(VOC_Data,VOC_Data_Mat)
+
+table(VOC_Data_All$Units)
+VOC_Data_All <- VOC_Data_All %>%
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+    group_by(Study) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "VOC")
+
+```
+
+#OXID
+```{r}
+OXID_Data <- child_list_Targeted[OXID_Theme]
+OXID_Data_Mat <- mat_list_Targeted[OXID_Theme]
+
+newcols <- c("PID","Study","Conc","Units")
+OXID_Data <- OXID_Data[lengths(OXID_Data) != 0]
+OXID_Data <- lapply(OXID_Data, setNames, newcols)
+OXID_Data <- rbindlist( OXID_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+OXID_Data_Mat <- OXID_Data_Mat[lengths(OXID_Data_Mat) != 0]
+OXID_Data_Mat <- lapply(OXID_Data_Mat, setNames, newcols)
+OXID_Data_Mat <- rbindlist( OXID_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+OXID_Data_All <- bind_rows(OXID_Data,OXID_Data_Mat)
+
+table(OXID_Data_All$Units)
+
+OXID_Data_All <- OXID_Data_All %>%
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "OXID")
+
+```
+
+#PFAS
+```{r}
+PFAS_Data <- child_list_Targeted[PFAS_Theme]
+PFAS_Data_Mat <- mat_list_Targeted[PFAS_Theme]
+
+
+newcols <- c("PID","Study","Conc","Units")
+PFAS_Data <- PFAS_Data[lengths(PFAS_Data) != 0]
+PFAS_Data <- lapply(PFAS_Data, setNames, newcols)
+PFAS_Data <- rbindlist( PFAS_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+PFAS_Data_Mat <- PFAS_Data_Mat[lengths(PFAS_Data_Mat) != 0]
+PFAS_Data_Mat <- lapply(PFAS_Data_Mat, setNames, newcols)
+PFAS_Data_Mat <- rbindlist( PFAS_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+PFAS_Data_All <- bind_rows(PFAS_Data,PFAS_Data_Mat)
+
+table(PFAS_Data_All$Units)
+
+PFAS_Data_All <- PFAS_Data_All %>%
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+    group_by(Study) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "PFAS")
+
+```
+
+
+#Flame Retardants
+```{r}
+Flame_Retardant_Data <- child_list_Targeted[Flame_Retardant_Theme]
+Flame_Retardant_Data_Mat <- mat_list_Targeted[Flame_Retardant_Theme]
+
+
+
+newcols <- c("PID","Study","Conc","Units")
+Flame_Retardant_Data <- Flame_Retardant_Data[lengths(Flame_Retardant_Data) != 0]
+Flame_Retardant_Data <- lapply(Flame_Retardant_Data, setNames, newcols)
+Flame_Retardant_Data <- rbindlist( Flame_Retardant_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Flame_Retardant_Data_Mat <- Flame_Retardant_Data_Mat[lengths(Flame_Retardant_Data_Mat) != 0]
+Flame_Retardant_Data_Mat <- lapply(Flame_Retardant_Data_Mat, setNames, newcols)
+Flame_Retardant_Data_Mat <- rbindlist( Flame_Retardant_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Flame_Retardant_Data_All <- bind_rows(Flame_Retardant_Data,Flame_Retardant_Data_Mat)
+
+table(Flame_Retardant_Data_All$Units)
+
+Flame_Retardant_Data_All <- Flame_Retardant_Data_All %>%
+  mutate(Conc = ifelse(Units == "pg/mL",Conc/ 1000,Conc)) %>% 
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+    group_by(Study) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "Flame_Retardant")
+
+```
+
+#PCBS
+```{r}
+PCBs_Data_Mat <- mat_list_Targeted[PCB_Theme]
+
+
+
+newcols <- c("PID","Study","Conc","Units")
+PCBs_Data_Mat <- PCBs_Data_Mat[lengths(PCBs_Data_Mat) != 0]
+PCBs_Data_Mat <- lapply(PCBs_Data_Mat, setNames, newcols)
+PCBs_Data_Mat <- rbindlist( PCBs_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+PCBs_Data_All <- bind_rows(PCBs_Data_Mat)
+
+table(PCBs_Data_Mat$Units)
+
+PCBs_Data_All <- PCBs_Data_All %>%
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+    group_by(Study) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  mutate(Cat = "PCBs")
+
+```
+
+#Other
+```{r}
+Other_Data <- child_list_Targeted[Other_Theme]
+Other_Data_Mat <- mat_list_Targeted[Other_Theme]
+
+
+newcols <- c("PID","Study","Conc","Units")
+
+Other_Data <- Other_Data[lengths(Other_Data) != 0]
+Other_Data <- lapply(Other_Data, setNames, newcols)
+Other_Data <- rbindlist( Other_Data, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Other_Data_Mat <- Other_Data_Mat[lengths(Other_Data_Mat) != 0]
+Other_Data_Mat <- lapply(Other_Data_Mat, setNames, newcols)
+Other_Data_Mat <- rbindlist( Other_Data_Mat, use.names = TRUE, fill = TRUE,idcol = "Outcome" )
+
+Other_Data_All <- bind_rows(Other_Data,Other_Data_Mat)
+
+table(Other_Data_All$Units)
+
+Other_Data_All <- Other_Data_All %>%
+  arrange(Conc) %>%
+  dplyr::filter(!is.na(Conc)) %>% 
+  mutate(
+    cum_freq = cumsum(Conc),
+    cum_percent = cum_freq / sum(Conc) * 100
+  ) %>% 
+  #mutate(Conc = ifelse(Units == "pg/mL",Conc/ 1000,Conc)) %>% 
+  mutate(Cat = "Other")
+
+```
+
+Cum Percent Distribution Plot 
+------------
+
+```{r}
+# plot_data <- bind_rows(Trace_Elements_Data_All,Phenols_Data_All,PAH_Data_All,
+#                        Phthalates_Data_All,Parabens_Data_All,Smoking_Data_All,Inflam_Data_All,Pesticide_Data_All,
+#                        VOC_Data_All,OXID_Data_All,PFAS_Data_All,Flame_Retardant_Data_All,Other_Data_All)
+
+plot_data <- bind_rows(Trace_Elements_Data_All,Phenols_Data_All,PAH_Data_All,
+                       Phthalates_Data_All,Parabens_Data_All,Smoking_Data_All,Pesticide_Data_All,
+                       VOC_Data_All,PFAS_Data_All,Flame_Retardant_Data_All,PCBs_Data_All)
+
+length(unique(plot_data$Outcome))
+```
+
+
+
+
+```{r}
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+```
+
+By Cohort Cumulative Percent Plot
+----------
+
+
+
+```{r}
+
+plot_data <-   plot_data %>% 
+  mutate(across(everything(), ~ replace(., is.infinite(.), 0)))
+
+
+
+# med_x <- plot_data %>%
+#   group_by(Study) %>%
+#   arrange(Conc, .by_group = TRUE) %>%
+#   summarise(x_med = median(cum_percent, na.rm = TRUE), .groups = "drop")
+
+
+
+
+med_x <- plot_data %>%
+  group_by(Study) %>%
+  filter(cum_percent >= 50) %>%        # rows past 50%
+  dplyr::slice(1) %>%                  # first crossing per group
+  summarise(
+    median_conc   = first(Conc),
+    median_cumPct = first(cum_percent),
+    .groups = "drop"
+  ) %>%
+  arrange(median_conc, .by_group = TRUE)
+
+library(grid) 
+
+  
+# pdf(file = "../../../Output/Paper1_OutputV2//Plots/Cum_Concentration_Plot.pdf",height = 10,width = 8)
+# 
+# library(ggplot2)
+# 
+# ggplot(plot_data, aes(x = log1p(Conc), y = cum_percent, color = Cat, group = Cat)) +
+#   # Main lines
+#   geom_line(linewidth = 0.7, alpha = 0.9) +
+#   
+#   # Horizontal median reference line (per Study)
+#   geom_hline(
+#     data = med_x,
+#     aes(yintercept = median_cumPct),
+#     linetype   = "dashed",
+#     color      = "grey50",
+#     linewidth  = 0.6,
+#     inherit.aes = FALSE
+#   ) +
+#   
+#   # Colors
+#   scale_color_manual(values = mypal) +
+#   
+#   # Axes
+#   scale_x_continuous(
+#     expand = c(0.01, 0),
+#     limits = c(0, NA),
+#     breaks = scales::pretty_breaks(n = 5)
+#   ) +
+#   scale_y_continuous(
+#     limits = c(0, 100),
+#     breaks = seq(0, 100, by = 25)
+#     # if cum_percent is 0–1 instead of 0–100, use:
+#     # labels = scales::percent_format(accuracy = 1)
+#   ) +
+#   
+#   # Labels
+#   labs(
+#     title    = "Cumulative Percent Within Each Exposure Category",
+#     subtitle = "By study and exposure category",
+#     x        = "log(Concentration (ng/mL))",
+#     y        = "Cumulative percent of participants",
+#     color    = "Exposure category"
+#   ) +
+#   
+#   # Facets
+#   facet_wrap(~ Study, ncol = 4) +
+#   
+#   # Theme
+#   theme_classic(base_size = 13, base_family = "sans") +
+#   theme(
+#     # Plot title / subtitle
+#     plot.title   = element_text(face = "bold", size = 18, hjust = 0.5),
+#     plot.subtitle = element_text(size = 12, hjust = 0.5),
+#     
+#     # Axes
+#     axis.title.x = element_text(face = "bold", size = 13),
+#     axis.title.y = element_text(face = "bold", size = 13),
+#     axis.text.x  = element_text(size = 10, angle = 45, vjust = 1, hjust = 1),
+#     axis.text.y  = element_text(size = 10),
+#     axis.ticks   = element_line(linewidth = 0.3),
+#     
+#     # Light panel border/grid vibes
+#     panel.border = element_rect(color = "grey80", fill = NA, linewidth = 0.4),
+#     panel.grid.major.y = element_line(color = "grey92", linewidth = 0.3),
+#     panel.grid.minor.y = element_blank(),
+#     
+#     # Facet strips
+#     strip.background = element_rect(fill = "grey95", color = "grey80", linewidth = 0.4),
+#     strip.text       = element_text(size = 11, face = "bold"),
+#     panel.spacing.x  = unit(0.6, "lines"),
+#     panel.spacing.y  = unit(0.6, "lines"),
+#     
+#     # Legend
+#     legend.position   = "bottom",
+#     legend.title      = element_text(face = "bold", size = 12),
+#     legend.text       = element_text(size = 10),
+#     legend.key.width  = unit(1.2, "lines"),
+#     legend.key.height = unit(0.8, "lines")
+#   ) +
+#   guides(
+#     color = guide_legend(
+#       title.position = "top",
+#       nrow          = 1,
+#       override.aes  = list(linewidth = 1.5, alpha = 1)
+#     )
+#   )
+# 
+# 
+# dev.off()
+
+```
+
+
+
+
+
+Map
+------
+
+```{r}
+unique(SDOH_Data_All$Location)
+```
+
+
+```{r}
+lat_long_df <- tibble(
+  Location = c(
+    "Baltimore",
+    "Bangladesh",
+    "Central/South America",
+    "Denver",
+    "Ecuador",
+    "Los Angeles",
+    "Massachusetts",
+    "Mexico City",
+    "Michigan",
+    "New Hampshire",
+    "NorthEast US",
+    "Sacramento",
+    "Southern California",
+    "Suriname",
+    "Syracuse",
+    "Uganda",
+    "Washington State",
+    "Puerto Rico",
+    "Nicaragua",
+    "Germany",
+    "Finland",
+    "Sweden",
+    "South_Africa",
+    "Tobago",
+    "Chile",
+    "Brazil"
+  ),
+  Latitude = c(
+    39.2904, 23.6850, 4.5709, 39.7392, -1.8312,
+    34.0522, 42.4072, 19.4326, 44.3148,
+    43.1939, 40.7128, 38.5816, 34.0522, 3.9193,
+    43.0481, 1.3733, 47.7511, 18.2208, 12.8654,
+    51.1657, 61.9241, 60.1282, -30.5595,11.1828,-33.4489, -14.2350
+  ),
+  Longitude = c(
+    -76.6122, 90.3563, -74.2973, -104.9903, -78.1834,
+    -118.2437, -71.3824, -99.1332, -85.6024,
+    -71.5724, -74.0060, -121.4944, -118.2437, -56.0278,
+    -76.1474, 32.2903, -120.7401, -66.5901, -85.2072,
+    10.4515, 25.7482, 18.6435, 22.9375,-60.7340, -70.6693, -51.9253
+  )
+)
+
+```
+
+
+```{r}
+
+
+
+
+
+my_sf <- lat_long_df %>% 
+  st_as_sf(coords = c('Longitude', 'Latitude')) %>%
+  st_set_crs(4326) # using 4326 for lat/lon decimal 
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/HHEAR_Map.pdf",height = 8,width = 8)
+ggplot() +  
+  geom_sf(
+    data = world,
+    fill = "lightyellow",
+    color = "grey80",     # light outline
+    linewidth = 0.2       # thin borders
+  ) +
+  geom_sf(
+    data = my_sf,
+    size = 2,
+    color = "#6A89A7"
+  ) +
+  ggtitle("Map of Public HHEAR Studies") + 
+  theme_classic()
+dev.off()
+
+
+# tiler   <- get_tiles(my_sf, provider = "OpenStreetMap", zoom = 5)
+# tiler_stamen   <- get_tiles(my_sf, provider = "Esri.WorldTopoMap", zoom = 5)
+# 
+# # 2. Convert to an `sf` object that ggplot can draw
+# tile_sf <- st_as_stars(tiler) %>%  st_as_sf(as_points = FALSE, merge = TRUE)
+# tile_sf_stamen <- st_as_stars(tiler_stamen) %>%  st_as_sf(as_points = FALSE, merge = TRUE)
+# 
+# 
+# ggplot() +
+#   layer_spatial(tile_sf_stamen) +                       # the raster basemap
+#   geom_sf(data = world, fill = NA, colour = "grey40", linewidth = 0.3) +
+#   geom_sf(data = my_sf, size = 1.5, colour = "dodgerblue") +
+#   coord_sf(expand = FALSE) +
+#   theme_classic()
+# 
+
+```
+
+Where to put What
+
+```{r}
+SDOH_Data_All %>% 
+  #filter(str_detect(Study, str_c(SDOH_Studies, collapse = "|"))) %>% 
+  dplyr::select(Study,Location) %>% 
+  group_by(Study,Location) %>% 
+  summarise(n = n()) %>% View
+
+SDOH_Data_All %>% 
+  dplyr::filter(Study == "TEDDY_SDOH") %>% 
+  View
+
+Targeted_Data_All %>% 
+  group_by(Study,Sample_Collection_Year) %>% 
+  summarise(n = n()) %>% 
+  View
+
+```
+
+Small Tiles for Map
+------
+```{r}
+
+std_study <- function(x) {
+  stringr::str_remove(x, '[_]\\w+|:')  
+}
+
+sum_plot_data <- plot_data %>% 
+  group_by(Study,Cat) %>% 
+  summarise(n = n()) %>% 
+  mutate(Y = 1)
+
+Study_n <- SDOH_Data_All %>% 
+  #filter(str_detect(Study, str_c(SDOH_Studies, collapse = "|"))) %>% 
+  mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+  group_by(Study) %>% 
+  summarise(n_parts = n()) 
+
+
+plot_data_map <- left_join(sum_plot_data,Study_n, by = "Study") %>% 
+  mutate(Plot_Study = paste0(Study,":",n_parts))
+
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+```
+
+```{r}
+plot_data_map <- left_join(sum_plot_data,Study_n, by = "Study") %>% 
+  mutate(Plot_Study = paste0(Study,"\n(n = ", n_parts, ")"))
+
+```
+
+
+```{r}
+pdf(file = "../../../Output/Paper1_OutputV2//Plots/Chem_Cat_byStudy_Circle.pdf",height = 8,width = 25)
+
+
+
+pie_df <- plot_data_map %>%
+  mutate(Plot_Study = ifelse(Study == "nuMoM2b", "NUMOM2B",Study)) %>% 
+  count(Plot_Study, Cat, name = "n") %>%
+  group_by(Plot_Study) %>%
+  mutate(
+    total = sum(n),
+    prop  = n / total,
+    # label position around the ring
+    ypos  = cumsum(prop) - 0.5 * prop,
+    # show % only for slices >= 6%
+    lbl   = ifelse(prop >= 0.06, percent(prop, accuracy = 1), "")
+  ) %>%
+  ungroup()
+
+# 2) Center labels (one per facet)
+centers <- pie_df %>%
+  distinct(Plot_Study, total)
+
+
+levs <- pie_df %>% distinct(Plot_Study) %>% arrange(Plot_Study) %>% pull(Plot_Study)
+pie_df <- pie_df %>% mutate(Plot_Study = factor(Plot_Study, levels = levs))
+
+centers <- pie_df %>%
+  distinct(Plot_Study, total) %>%
+  mutate(idx = as.integer(Plot_Study))  # 1..n in facet order
+
+
+# 3) Beautiful faceted donuts
+ggplot(pie_df, aes(x = 2, y = prop, fill = Cat)) +
+  geom_col(width = 1, color = "white", linewidth = 0.4) +
+  coord_polar(theta = "y") +
+  # slice labels (optional, keep if you want)
+  # geom_text(aes(x = 2, y = ypos, label = lbl), size = 3.3, fontface = "bold", color = "white") +
+  # BIG facet index in the center
+  geom_text(
+    data = centers,
+    aes(x = 0, y = 0, label = idx),      # center of donut
+    inherit.aes = FALSE,
+    size = 6, fontface = "bold", color = "gray10"
+  ) +
+  # (optional) also show total under the index; uncomment to use
+  # geom_text(
+  #   data = centers,
+  #   aes(x = 0, y = 0, label = paste0("\n n=", total)),
+  #   inherit.aes = FALSE,
+  #   vjust = -0.5, size = 3.3, color = "gray30"
+  # ) +
+  #xlim(0.5, 2.5) +                       # makes the donut hole
+  facet_wrap(~ Plot_Study,nrow = 2) +
+  scale_fill_manual(values = mypal) +
+  labs(title = "Exposures Per Study", fill = "Exposure Category") +
+  theme_void(base_size = 12) +
+  theme(
+    strip.text = element_text(size = 12, face = "bold"),
+    panel.spacing = unit(1.5, "lines"),
+    legend.position = "bottom",
+  )
+
+dev.off()
+```
+
+```{r}
+
+study_number_map <- centers %>% 
+  mutate(
+    Study = sub("\\s*\\(.*$", "", Plot_Study),
+    Study = trimws(Study)  # just in case
+  ) %>% 
+  dplyr::select(Study,idx) 
+
+plot_data_withidx <- plot_data %>% 
+  mutate(Study = ifelse(Study == "nuMoM2b", "NUMOM2B",Study)) %>% 
+  left_join(.,study_number_map,by = "Study") %>% 
+  mutate(Study_num = paste0(Study, ":",idx))
+
+
+
+pdf(file = "../../../Output/Paper1_OutputV2//Plots/Cum_Concentration_Plot.pdf",height = 13,width = 8)
+
+
+cum_conc <- ggplot(plot_data_withidx, aes(x = log1p(Conc), y = cum_percent, color = Cat, group = Cat)) +
+  # Main lines
+  geom_line(linewidth = 0.7, alpha = 0.9) +
+  
+  # Horizontal median reference line (per Study)
+  geom_hline(
+    data = med_x,
+    aes(yintercept = median_cumPct),
+    linetype   = "dashed",
+    color      = "grey50",
+    linewidth  = 0.6,
+    inherit.aes = FALSE
+  ) +
+  
+  # Colors
+  scale_color_manual(values = mypal) +
+  
+  # Axes
+  scale_x_continuous(
+    expand = c(0.01, 0),
+    limits = c(0, NA),
+    breaks = scales::pretty_breaks(n = 5)
+  ) +
+  scale_y_continuous(
+    limits = c(0, 100),
+    breaks = seq(0, 100, by = 25)
+    # if cum_percent is 0–1 instead of 0–100, use:
+    # labels = scales::percent_format(accuracy = 1)
+  ) +
+  
+  # Labels
+  labs(
+    title    = "Cumulative Percent Within Each Exposure Category",
+    subtitle = "By study and exposure category",
+    x        = "log(Concentration (ng/mL))",
+    y        = "Cumulative percent of participants",
+    color    = "Exposure category"
+  ) +
+  
+  # Facets
+  facet_wrap(~ Study_num, ncol = 4) +
+  
+  # Theme
+  theme_classic(base_size = 13, base_family = "sans") +
+  theme(
+    # Plot title / subtitle
+    plot.title   = element_text(face = "bold", size = 18, hjust = 0.5),
+    plot.subtitle = element_text(size = 12, hjust = 0.5),
+    
+    # Axes
+    axis.title.x = element_text(face = "bold", size = 13),
+    axis.title.y = element_text(face = "bold", size = 13),
+    axis.text.x  = element_text(size = 10, angle = 45, vjust = 1, hjust = 1),
+    axis.text.y  = element_text(size = 10),
+    axis.ticks   = element_line(linewidth = 0.3),
+    
+    # Light panel border/grid vibes
+    panel.border = element_rect(color = "grey80", fill = NA, linewidth = 0.4),
+    panel.grid.major.y = element_line(color = "grey92", linewidth = 0.3),
+    panel.grid.minor.y = element_blank(),
+    
+    # Facet strips
+    strip.background = element_rect(fill = "grey95", color = "grey80", linewidth = 0.4),
+    strip.text       = element_text(size = 11, face = "bold"),
+    panel.spacing.x  = unit(0.6, "lines"),
+    panel.spacing.y  = unit(0.6, "lines"),
+    
+    # Legend
+    legend.position   = "bottom",
+    legend.title      = element_text(face = "bold", size = 12),
+    legend.text       = element_text(size = 10),
+    legend.key.width  = unit(1.2, "lines"),
+    legend.key.height = unit(0.8, "lines")
+  ) +
+  guides(
+    color = guide_legend(
+      title.position = "top",
+      nrow          = 1,
+      override.aes  = list(linewidth = 1.5, alpha = 1)
+    )
+  )
+
+print(cum_conc)
+dev.off()
+
+save(cum_conc, file = "../../../Output/Paper1_OutputV2/Plots/cum_conc_plot.RData")
+```
+
+```{r}
+length(unique(plot_data$Outcome))
+length(unique(plot_data$Cat))
+
+plot_data %>% 
+  group_by(Study) %>% 
+  summarise(n_unique = n_distinct(Outcome)) %>% 
+  View
+  
+  
+plot_data %>%
+  group_by(Study,Cat) %>%
+  summarise(mean_value = mean(Conc, na.rm = TRUE)) %>%
+  mutate(fold_change = mean_value / min(mean_value)) %>% 
+  View
+
+plot_data %>% 
+  dplyr::filter(Outcome == "As") %>% 
+  group_by(Study) %>% 
+  summarise(mean_conc = mean(Conc,na.rm = T)) %>% 
+  View
+
+fold_change <-15.3440896 /
+               0.2058554
+
+```
+
+```{r}
+chem_table <- plot_data %>% 
+  group_by(Study,Outcome) %>%
+  summarise(n = n()) %>% 
+  summarise(All_Chems = paste(Outcome, collapse = ", ")) 
+
+write_csv(chem_table, file ="../../../Output/Paper1_OutputV2/Plots/chem_table_bystudy.csv")
+```
+

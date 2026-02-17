@@ -1,0 +1,57 @@
+---
+title: "Reference_Intervals"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(paletteer)
+library(patchwork)
+```
+
+
+Input Data
+------------
+
+```{r}
+ 
+
+
+load("../../../Output/Paper1_OutputV2/Plots/year_hist.RData")
+load("../../../Output/Paper1_OutputV2/Plots/conc_year.RData")
+load("../../../Output/Paper1_OutputV2/Plots/year_outcome_scatter.RData")
+
+```
+
+
+
+```{r}
+design <- "
+AB
+CC
+"
+
+
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Time_PatchPlot.pdf",height = 20,width = 20)
+patch <- year_hist  + year_outcome_scatter + sum_yr  
+patch + 
+  plot_layout(design = design, heights = c(1, 2)) +
+  #plot_layout(guides = "collect") +    
+  plot_annotation(
+  title = 'Time Helps Explain Exposomic Variation',
+  tag_levels = "A"
+)  &
+  theme(plot.tag = element_text(size = 20))
+dev.off()
+```
+```{r}
+
+```
+

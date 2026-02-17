@@ -1,0 +1,1207 @@
+---
+title: "Reference_Intervals"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(paletteer)
+library(officer)
+library(flextable)
+library(ggrepel)
+library(patchwork)
+library(scales)
+library(ggtext)
+```
+
+
+Input Data
+------------
+
+```{r}
+ 
+
+#load("../../Output/Child_SDOH_Metab_Quantile_Results.RData")
+#Reg_Results <- Child_SDOH_Metab_Quantile_Results
+load("../../../Output/Paper1_OutputV2/Pooled_Output/Mat_Mat_Age_Quantile_Results.RData")
+load("../../../Output/Paper1_OutputV2/Pooled_Output/Child_Child_Age_Quantile_Results.RData")
+load("../../../Output/Paper1_OutputV2/Pooled_Output/Child_Child_Sex_Quantile_Results.RData")
+
+#Mat_Quant_Results <- Mat_All_Exposure_Quantile_Results
+#Quant_Results <- Child_All_Exposure_Quantile_Results
+
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+load("../../Final_Quantile_Reg_Pipeline/NHANES_Replication/Output/NHANES_Subset_Intervals.RData")
+
+```
+
+
+```{r}
+#Locations <- read_csv("../../../Input/Study_Lat_Longs.csv")
+
+load("../../../Input/Harmonized_Datasets/TEDDY_SDOH_Clean.RData")
+load("../../../Input/Harmonized_Datasets/ZIP_SDOH_Clean.RData")
+
+ZIP_Data <- ZIP_SDOH %>% 
+    mutate(Country = ifelse(
+    is.na(Country),
+    Country[match(Site_Location, Site_Location[!is.na(Country)])],
+    Country
+  )) %>% 
+  mutate(Study = "ZIP") %>% 
+  dplyr::select(Mat_PID,Study,Location = Country) 
+
+
+TEDDY_Data <- TEDDY_SDOH %>% 
+  mutate(Study = "TEDDY") %>% 
+  dplyr::select(Child_PID,Study,Location) 
+
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
+                                    Location == "NorthEast_US" ~ "United_States",
+                                    Location == "New_Hampshire" ~ "United_States",
+                                    Location == "Washington_State" ~ "United_States",
+                                    Location == "Midwestern_US" ~ "United_States",
+                                    Location == "Denver" ~ "United_States",
+                                    Location == "Baltimore" ~ "United_States",
+                                    Location == "Sacramento" ~ "United_States",
+                                    Location == "Southern_California" ~ "United_States",
+                                    Location == "Syracuse" ~ "United_States",
+                                    Location == "Michigan" ~ "United_States",
+                                    Location == "California" ~ "United_States",
+                                    Location == "SanFrancisco" ~ "United_States",
+                                    Location == "Massachusetts" ~ "United_States",
+                                    TRUE ~ "Worldwide")) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+  Mat_Edu %in% c("No_Education",
+                 "Primary_Education",
+                 "Primary_School",
+                 "High_School") ~ "No_College",
+  Mat_Edu %in% c("Some_College",
+                 "Four_Year_College_Degree",
+                 "Some_Grad_School") ~ "Some_College",
+  Mat_Edu == "Not_Reported" ~ NA
+)) %>% 
+  mutate(Mat_Income_Binary = case_when(
+  Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
+  Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
+                "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
+  TRUE ~ NA
+)) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+  dplyr::filter(Study != "ZIP") %>% 
+  dplyr::filter(Study != "TEDDY") %>% 
+  dplyr::select(Child_PID,Mat_PID,Study,Location)
+
+
+
+
+Child_SDOH <- bind_rows(ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Child_PID) ),TEDDY_Data ) %>% 
+  dplyr::select(-Mat_PID)
+
+Mat_SDOH <- bind_rows(ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Mat_PID)), ZIP_Data) %>% 
+  dplyr::select(-Child_PID)
+
+```
+
+
+```{r}
+ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(Location == "New_Hampshire") %>% View
+```
+
+
+
+
+
+Create Intervals
+--------------
+```{r}
+
+#Choose Social Exposures to create intervals from
+Ref_Vars <- c("Child_Sex","Child_Age")
+
+#names(Quant_Results[[1]])[names(Quant_Results[[1]]) %>% str_detect(.,paste0(Ref_Vars,collapse = "|"))]
+Final_Intervals <- list()
+for(j in seq_along(Child_Child_Age_Quantile_Results)){
+#print(j)
+  
+names(Child_Child_Age_Quantile_Results)[j]
+  Quant_1 <- Child_Child_Age_Quantile_Results[[j]][[1]]
+  Quant_2 <- Child_Child_Sex_Quantile_Results[[j]][[1]]
+
+  if(is.character(Quant_1)){
+    next
+  }else{
+    Quant_Age <- Quant_1[["Quantile_Results"]][[2]] 
+
+  }
+  
+  if(is.character(Quant_2)){
+    next
+  }else{
+    Quant_Sex <- Quant_2[["Quantile_Results"]][[2]] 
+
+  }
+  
+  Curr_Quant <- list(Quant_Age,Quant_Sex)
+  
+  #Curr_Quant <- Quant_Results[[j]][c(Ref_Vars)]
+  #Curr_Quant <- Filter(is.list, Curr_Quant)
+
+  All_Weighted_Averages <- list()
+  for(i in seq_along(Curr_Quant)){
+    #print(i)
+    #Select quantiles
+    #Quant_Data <- Curr_Quant[[i]][[2]][[1]]
+      Quant_Data <- Curr_Quant[[i]]
+
+    Tau_Data <- Curr_Quant[[i]] %>% as.data.frame(.)
+    
+    names(Tau_Data) <- c("Tau05","Tau25","Tau50","Tau75","Tau95")
+    
+   #All_Data <- bind_cols(Quant_Data,Tau_Data) 
+  
+   #Take a weighted average of quantile calculated from social exposures which creates the intervals
+   weighted_averages <- numeric()
+    for (col_name in c("Tau05","Tau25","Tau50","Tau75","Tau95")) {
+          value_counts <- table(Tau_Data[[col_name]])
+          values <- as.numeric(names(value_counts))
+          weights <- as.numeric(value_counts)
+          
+          weighted_avg <- sum(values * weights) / sum(weights)
+          
+          weighted_averages[col_name] <- weighted_avg
+      }
+    All_Weighted_Averages[[i]] <- weighted_averages
+   names(All_Weighted_Averages)[i] <- names(Curr_Quant[i])
+   W_Avg_Df <- bind_rows(All_Weighted_Averages) 
+   
+   column_means <- sapply(W_Avg_Df[, c("Tau05","Tau25","Tau50","Tau75","Tau95")], mean, na.rm = TRUE) %>%
+     t(.) %>% 
+     as.data.frame(.) %>% 
+     mutate(Outcome = names(Child_Child_Age_Quantile_Results)[j] ) %>% 
+     dplyr::select(Outcome,everything())
+
+   Final_Intervals[[j]] <- column_means
+   names(Final_Intervals)[j] <-names(Child_Child_Age_Quantile_Results)[j]
+   
+   }
+
+
+}
+```
+
+```{r}
+
+#Choose Social Exposures to create intervals from
+#names(Quant_Results[[1]])[names(Quant_Results[[1]]) %>% str_detect(.,paste0(Ref_Vars,collapse = "|"))]
+Final_Intervals_Mat <- list()
+for(j in seq_along(Mat_Mat_Age_Quantile_Results)){
+#print(j)
+  
+names(Mat_Mat_Age_Quantile_Results)[j]
+  Quant_1 <- Mat_Mat_Age_Quantile_Results[[j]][[1]]
+
+  if(is.character(Quant_1)){
+    next
+  }else{
+    Quant_Age <- Quant_1[["Quantile_Results"]][[2]] 
+
+  }
+  
+ 
+  Curr_Quant <- list(Quant_Age)
+  
+  #Curr_Quant <- Quant_Results[[j]][c(Ref_Vars)]
+  #Curr_Quant <- Filter(is.list, Curr_Quant)
+
+  All_Weighted_Averages <- list()
+  for(i in seq_along(Curr_Quant)){
+    #print(i)
+    #Select quantiles
+    #Quant_Data <- Curr_Quant[[i]][[2]][[1]]
+      Quant_Data <- Curr_Quant[[i]]
+
+    Tau_Data <- Curr_Quant[[i]] %>% as.data.frame(.)
+    
+    names(Tau_Data) <- c("Tau05","Tau25","Tau50","Tau75","Tau95")
+    
+   #All_Data <- bind_cols(Quant_Data,Tau_Data) 
+  
+   #Take a weighted average of quantile calculated from social exposures which creates the intervals
+   weighted_averages <- numeric()
+    for (col_name in c("Tau05","Tau25","Tau50","Tau75","Tau95")) {
+          value_counts <- table(Tau_Data[[col_name]])
+          values <- as.numeric(names(value_counts))
+          weights <- as.numeric(value_counts)
+          
+          weighted_avg <- sum(values * weights) / sum(weights)
+          
+          weighted_averages[col_name] <- weighted_avg
+      }
+    All_Weighted_Averages[[i]] <- weighted_averages
+   names(All_Weighted_Averages)[i] <- names(Curr_Quant[i])
+   W_Avg_Df <- bind_rows(All_Weighted_Averages) 
+   
+   column_means <- sapply(W_Avg_Df[, c("Tau05","Tau25","Tau50","Tau75","Tau95")], mean, na.rm = TRUE) %>%
+     t(.) %>% 
+     as.data.frame(.) %>% 
+     mutate(Outcome = names(Mat_Mat_Age_Quantile_Results)[j] ) %>% 
+     dplyr::select(Outcome,everything())
+
+   Final_Intervals_Mat[[j]] <- column_means
+   names(Final_Intervals_Mat)[j] <-names(Mat_Mat_Age_Quantile_Results)[j]
+   
+   }
+
+
+}
+```
+
+
+```{r}
+Final_Intervals_Df_Adjusted <- bind_rows(Final_Intervals) %>%
+    mutate(across(where(is.numeric), ~ round(., 3))) %>% 
+  mutate(IQR = Tau75 - Tau25)  %>% 
+  mutate(Max_Min = Tau95 - Tau05) %>% 
+  mutate(
+      IQR_unadj = IQR,
+      IQR = ifelse(IQR >= 20, 20, IQR),
+      Max_Min_unadj = Max_Min,
+      Max_Min = ifelse(Max_Min >= 50, 50, Max_Min),
+      Flag = as.factor(ifelse(IQR >= 20, 1, 0))
+    ) %>% 
+    mutate(Max_Min_Log = log10(Max_Min + 1),
+           IQR_Log = log10(IQR+ 1)) 
+
+
+Final_Intervals_Df_Adjusted_Mat <- bind_rows(Final_Intervals_Mat) %>%
+    mutate(across(where(is.numeric), ~ round(., 3)))%>% 
+  mutate(IQR = Tau75 - Tau25) %>% 
+  mutate(Max_Min = Tau95 - Tau05) %>% 
+  mutate(
+      IQR_unadj = IQR,
+      IQR = ifelse(IQR >= 20, 20, IQR),
+      Max_Min_unadj = Max_Min,
+      Max_Min = ifelse(Max_Min >= 50, 50, Max_Min),
+      Flag = as.factor(ifelse(IQR >= 20, 1, 0))
+    ) %>% 
+    mutate(Max_Min_Log = log10(Max_Min + 1),
+           IQR_Log = log10(IQR+ 1)) 
+
+
+
+```
+
+
+```{r}
+
+```
+
+
+
+
+Process Targeted
+-------
+
+```{r}
+std_study <- function(x) {
+  stringr::str_remove(x, '[_]\\w+|:')  # CHECK: ensure this collapse is intended
+}
+
+to_ng_per_mL <- function(value, units) {
+  dplyr::case_when(
+    is.na(units)          ~ value,          # assume already ng/mL if missing
+    units == "ng/mL"      ~ value,
+    units == "ug/dL"      ~ value * 10,     # 1 ug/dL = 10 ng/mL
+    units %in% c("ng/L")  ~ value / 1000,   # 1 ng/L = 0.001 ng/mL
+    units %in% c("pg/mL","pg/ml") ~ value / 1000,  # 1000 pg/mL = 1 ng/mL
+    units == "mg/L"       ~ value * 1000,   # 1 mg/L = 1000 ng/mL
+    TRUE ~ value          # CHECK: any other units present?
+  )
+}
+Child_Data_Targeted <- Targeted_Data_All %>%
+  filter(!is.na(Child_PID)) %>%                           # keep child samples
+  mutate(
+    Units = if_else(is.na(Units), "ng/mL", Units),        # default units
+    Concentration = to_ng_per_mL(Concentration, Units)    # normalize units
+  ) %>%
+  select(-Mat_PID) %>%                                    # not needed for child
+  filter(!is.na(Analyte_Code)) %>%                        # require analyte code
+  group_by(Study, Child_PID, Analyte_Code) %>%            # average replicates
+  summarise(Concentration = mean(Concentration, na.rm = TRUE), .groups = "drop")
+
+child_analytes <- sort(unique(Child_Data_Targeted$Analyte_Code))  # vector of analytes
+
+# Build a list of per-analyte wide data.frames keyed by Child_PID ---------
+child_list_Targeted <- purrr::map(
+  child_analytes,
+  ~ Child_Data_Targeted %>%
+    filter(Analyte_Code == .x) %>%                         # one analyte
+    mutate(Study = std_study(Study)) %>%                   # standardize label
+    select(Study, Child_PID, Analyte_Code, Concentration) %>%
+    tidyr::pivot_wider(names_from = Analyte_Code, values_from = Concentration) %>%
+    select(Child_PID, Study, all_of(.x))                   # only current analyte col
+) %>%
+  rlang::set_names(child_analytes)
+
+# MATERNAL targeted data: long -> wide per-analyte list -------------------
+Mat_Data_Targeted <- Targeted_Data_All %>%
+  filter(!is.na(Mat_PID)) %>%                              # keep maternal samples
+  select(-Child_PID) %>%
+  mutate(
+    Units = if_else(is.na(Units), "ng/mL", Units),
+    Concentration = to_ng_per_mL(Concentration, Units)
+  ) %>%
+  filter(!is.na(Analyte_Code)) %>%
+  group_by(Study, Mat_PID, Analyte_Code) %>%
+  summarise(Concentration = mean(Concentration, na.rm = TRUE), .groups = "drop") %>%
+  mutate(across(everything(), ~ replace(., is.infinite(.), NA_real_)))  
+
+mat_analytes <- sort(unique(Mat_Data_Targeted$Analyte_Code))
+
+mat_list_Targeted <- purrr::map(
+  mat_analytes,
+  ~ Mat_Data_Targeted %>%
+    filter(Analyte_Code == .x) %>%
+    mutate(Study = std_study(Study)) %>%
+    select(Study, Mat_PID, Analyte_Code, Concentration) %>%
+    tidyr::pivot_wider(names_from = Analyte_Code, values_from = Concentration) %>%
+    select(Mat_PID, Study, all_of(.x))
+) %>%
+  rlang::set_names(mat_analytes)
+save(mat_list_Targeted, file = "../../../HHEAR_Man1_App/mat_list_Targeted.RData")
+save(child_list_Targeted, file = "../../../HHEAR_Man1_App/child_list_Targeted.RData")
+
+```
+
+
+```{r}
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+all_plot_data_NHANES <- all_plot_data
+all_interval_data_NHANES <- all_interval_data
+error_df_NHANES <- error_df
+
+
+over_three_studies <- list()
+myanalytes <- Final_Intervals_Df_Adjusted$Outcome
+#pdf(file = "../../../Output/Final_Paper1_Output/Plots/Child_Ref_Intervals.pdf",height = 6,width = 6)
+for(i in seq_along(myanalytes)){
+  
+  curr_interval <- Final_Intervals_Df_Adjusted %>% 
+      dplyr::filter(Outcome == myanalytes[[i]]) 
+  
+  curr_data <- child_list_Targeted[[myanalytes[[i]]]] %>% 
+    mutate(Above_75 = ifelse(!!sym(myanalytes[[i]]) >= curr_interval$Tau75 * 2,1,0)) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(plot_value = ifelse(Above_75 == 1,curr_interval$Tau75 * 2 + 1,!!sym(myanalytes[[i]])),
+           ID = as.numeric(ID))
+    error_y <- mean(curr_data$ID,na.rm = T)
+    bar_height = nrow(curr_data) + 500
+    curr_analyte <- myanalytes[[i]]
+
+  if(length(unique(curr_data$Study)) >= 3){
+    
+    over_three_studies[[i]] <- curr_data
+    names(over_three_studies)[i] <- curr_analyte
+    
+  }
+    
+ }   #Curr_I2 <- curr_interval$I_2
+    
+
+Short_Names <- c("Ba","Be","Cd","Co","COTT","Cs","MBZP","MCPP","MEHHP","MEHP","MEOHP","MIBP","Mo",
+                 "NAP1","NAP2","Pb","PFHXS","PFNA","PFOA","PFOS","PFOSA","PYR1","Sb","TCP","Tl","U","Hg","PFDA")
+
+
+Child_Over3 <- over_three_studies %>% keep( ~ !is.null(.) ) 
+
+lookup <- all_plot_data_NHANES %>% 
+  group_by(curr_analyte,HHEAR_Name) %>% 
+  summarise(n = n())
+
+rename_vec <- setNames(lookup$curr_analyte,lookup$HHEAR_Name)
+set.seed(123)
+all_plot_data_NHANES_subset <- all_plot_data_NHANES %>% 
+  mutate(Study = "NHANES") %>% 
+  rename(any_of(rename_vec)) %>% 
+  dplyr::select(-curr_analyte,-ID,-PID,-SDDSRVYR,-curr_desc) %>% 
+  dplyr::rename(curr_analyte = HHEAR_Name) %>% 
+  group_by(curr_analyte) %>%              
+  slice_sample(n = 500) %>%       
+  ungroup()
+
+```
+
+```{r}
+NHANES_Overlap_ChildList <- Child_Over3[names(Child_Over3) %in% Short_Names]
+
+myanalytes <- names(NHANES_Overlap_ChildList)
+#myanalytes <- names(Child_Over3)
+
+plot_data_list <- list()
+interval_data_list <- list()
+
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[[i]]
+
+  curr_interval <- Final_Intervals_Df_Adjusted %>% 
+    filter(Outcome == curr_analyte)
+
+  curr_data <- child_list_Targeted[[curr_analyte]] %>% 
+    mutate(Above_75 = ifelse(!!sym(curr_analyte) >= curr_interval$Tau75 * 2, 1, 0)) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(
+      #plot_value = ifelse(Above_75 == 1, curr_interval$Tau75 * 2 + 1, !!sym(curr_analyte)),
+      plot_value = !!sym(curr_analyte),
+      ID = as.numeric(ID),
+      curr_analyte = curr_analyte
+    )
+
+  # Store the data only if there are less than 3 studies
+ 
+    plot_data_list[[curr_analyte]] <- curr_data
+
+    interval_data_list[[curr_analyte]] <- curr_interval %>%
+      mutate(curr_analyte = curr_analyte)
+  
+}
+
+# Combine all data into single dataframes
+all_plot_data <- bind_rows(plot_data_list)
+all_interval_data <- bind_rows(interval_data_list)
+
+# Compute error_y and bar_height by analyte
+error_df <- all_plot_data %>%
+  group_by(curr_analyte) %>%
+  summarise(
+    error_y = mean(ID, na.rm = TRUE),
+    bar_height = n() + 500,
+    .groups = "drop"
+  )
+
+all_interval_data <- all_interval_data %>%
+  left_join(error_df, by = "curr_analyte")
+
+max_ids <- all_plot_data %>%
+  group_by(curr_analyte) %>%                                  # <- your grouping var
+  summarise(max_id = suppressWarnings(max(as.numeric(ID), na.rm = TRUE)),
+            .groups = "drop") %>%
+  mutate(max_id = ifelse(is.finite(max_id), max_id, 0))  # handle all-NA case
+
+# 2) Add continuing IDs to the second df
+all_plot_data_NHANES_subset2 <- all_plot_data_NHANES_subset %>%
+  left_join(max_ids, by = "curr_analyte") %>%
+  group_by(curr_analyte) %>%
+  mutate(ID = max_id + row_number()) %>%
+  select(-max_id) %>%
+  ungroup()
+
+# 3) Bind together
+HHEAR_NHANES_Plot_Data <- bind_rows(all_plot_data, all_plot_data_NHANES_subset2) %>% 
+  dplyr::filter(!is.na(ID))
+
+
+
+Location_Mapping <- tibble::tibble(
+  Location = c("NorthEast_US", "Washington_State", "Bangladesh", 
+               "Chile","Finland","Germany","Sweden",
+               "South_Africa","Uganda","Tobago","Ecuador","Puerto Rico","Brazil","Nicaragua",
+               "Guatemala"),
+  New_Location = c("Boston", "Yakima Valley,Washington", "Pabna,Bangladesh", 
+                   "Santiago,Chile","Turku,Finland","Munich,Germany","Malmö,Sweden",
+                   "Cape Town,South Africa","Kampala,Uganda","Tobago,Trinidad and Tobago",
+                   "Pedro Moncayo, Ecuador","Northern Karst,Puerto Rico","Bahia, Brazil",
+                   "Managua,Nicaragua","Suchitepéquez,Guatemala")
+)
+
+
+Location_Plotdata_Child <- left_join(HHEAR_NHANES_Plot_Data,Child_SDOH,by = c("Child_PID","Study")) %>% 
+  mutate(Location = ifelse(Study == "NHANES","NHANES-USA",Location))  %>% 
+  left_join(.,Location_Mapping, by = "Location") %>% 
+  mutate(Location = coalesce(New_Location,Location)) %>% 
+  mutate(Location = factor(Location, levels = c(
+    # 1) National
+    "NHANES-USA",
+
+    # 2) U.S. Locations
+    "Baltimore",
+    "Denver",
+    "Sacramento",
+    "Syracuse",
+    "Boston",
+    "New_York",
+    "United_States",
+    "Yakima Valley,Washington",
+
+    # 3) International Locations
+    "Pabna,Bangladesh",
+    "Santiago,Chile",
+    "Pedro Moncayo, Ecuador",
+    "Turku,Finland",
+    "Munich,Germany",
+    "Mexico_City",
+    "Cape Town,South Africa",
+    "Malmö,Sweden",
+    "Kampala,Uganda",
+    "Tobago,Trinidad and Tobago",
+
+    # 4) Optional: NA last
+    "NA"
+  ))) %>% 
+  dplyr::filter(!is.na(Location)) %>% 
+  dplyr::filter(str_detect(curr_analyte,c("Ba|MBZP|PFOA|TCP")))
+
+
+
+Location_interval_data_Child <- Location_Plotdata_Child %>% 
+  group_by(curr_analyte) %>%
+  summarise(n_unique_locations = n_distinct(Location)/2) %>% 
+  mutate(level_height = n_unique_locations *2) %>% 
+  left_join(all_interval_data,.,by = c("Outcome" = "curr_analyte")) %>% 
+  dplyr::filter(str_detect(Outcome,c("Ba|MBZP|PFOA|TCP")))
+
+
+
+#save(Location_Plotdata_Child,file = "../../../HHEAR_Man1_App/Child_Plot_Data_Shiny.RData")
+#save(Location_interval_data_Child,file = "../../../HHEAR_Man1_App/Child_Interval_Data_Shiny.RData")
+
+```
+
+```{r}
+
+location_colors <- c(
+  # --- National anchors ---
+  "NHANES-USA"      = "#C51B7D",
+  "United_States"   = "#3C3C3C",
+
+  # --- U.S. East Coast / Northeast (cool deep blues) ---
+  "Boston"          = "#08306B",
+  "Massachusetts"   = "#08519C",
+  "New_Hampshire"   = "#2171B5",
+  "New_York"        = "#2171C1",
+  "Baltimore"       = "#6BAED6",
+  "Michigan"        = "#C6DBEF",  
+  "Syracuse"        = "#9ECAE1",
+
+  # --- U.S. West Coast (distinct teals/greens) ---
+  "California"       = "#00441B",
+  "Los_Angeles"      = "#1B7837",
+  "Sacramento"       = "#5AAE61",
+  "Yakima Valley,Washington" = "#A6DBA0",
+
+  # --- U.S. Mountain/Plains (olive) ---
+  "Denver"           = "#B8DE29",
+
+  # --- Caribbean (aqua) ---
+  "Northern Karst,Puerto Rico"      = "#00A7C2",
+
+  # --- Latin America (warm reds/oranges) ---
+  "Mexico_City"      = "#D7301F",
+  "Suchitepéquez,Guatemala"        = "#FC8D59",
+  "Managua,Nicaragua"        = "#FDBB84",
+  "Suriname"         = "#FDD49E",
+  "Bahia, Brazil"           = "#BD0026",
+  "Santiago,Chile"            = "#F46D43",
+  "Pedro Moncayo, Ecuador"          = "#FDAE61",
+  "Tobago,Trinidad and Tobago"           = "#FDAA68",
+
+      # --- Europe (greens) ---
+     "Turku,Finland" = "#B197FC",  # lavender violet
+    "Munich,Germany" = "#C4A7E7",  # muted lilac
+    "Malmö,Sweden"  = "#D7BCE8" ,  # pale orchid
+
+
+  # --- Africa (earth tones) ---
+  "Cape Town,South Africa"     = "#8C510A",
+  "Kampala,Uganda"           = "#BF812D",
+
+  # --- South Asia ---
+  "Pabna,Bangladesh"       = "#A50F15",
+
+  # --- Missing ---
+  "NA"               = "#9E9E9E"
+)
+
+
+mypal <- paletteer_d("ggsci::default_igv")
+
+```
+
+
+
+
+
+Plot Maternal Interval
+----
+```{r}
+
+#mypal <- paletteer_d("ggsci::planetexpress_futurama")
+
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+
+over_three_studies_mat <- list()
+myanalytes <- Final_Intervals_Df_Adjusted_Mat$Outcome
+for(i in seq_along(myanalytes)){
+  
+  curr_interval <- Final_Intervals_Df_Adjusted_Mat %>% 
+      dplyr::filter(Outcome == myanalytes[[i]]) 
+  
+  curr_data <- mat_list_Targeted[[myanalytes[[i]]]] %>% 
+    mutate(Above_75 = ifelse(!!sym(myanalytes[[i]]) >= curr_interval$Tau75 * 2,1,0)) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(plot_value = ifelse(Above_75 == 1,curr_interval$Tau75 * 2 + 1,!!sym(myanalytes[[i]])),
+           ID = as.numeric(ID))
+
+    error_y <- mean(curr_data$ID,na.rm = T)
+    bar_height = nrow(curr_data) + 500
+    curr_analyte <- myanalytes[[i]]
+    
+
+      if(length(unique(curr_data$Study)) >= 3){
+    
+    over_three_studies_mat[[i]] <- curr_data
+    names(over_three_studies_mat)[i] <- curr_analyte
+    
+  }
+
+
+  
+}
+```
+
+```{r}
+Mat_Over3 <- over_three_studies_mat %>% keep( ~ !is.null(.) )
+
+```
+
+
+
+```{r}
+
+NHANES_Overlap_MatList <- Mat_Over3[names(Mat_Over3) %in% Short_Names]
+
+myanalytes <- names(NHANES_Overlap_MatList)
+
+#myanalytes <- names(Mat_Over3)
+
+
+plot_data_list <- list()
+interval_data_list <- list()
+
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[[i]]
+
+  curr_interval <- Final_Intervals_Df_Adjusted_Mat %>% 
+    filter(Outcome == curr_analyte)
+
+  curr_data <- mat_list_Targeted[[curr_analyte]] %>% 
+    mutate(Above_75 = ifelse(!!sym(curr_analyte) >= curr_interval$Tau75 * 2, 1, 0)) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(
+     #plot_value = ifelse(Above_75 == 1, curr_interval$Tau75 * 2 + 1, !!sym(curr_analyte)),
+      plot_value = !!sym(curr_analyte),
+      ID = as.numeric(ID),
+      curr_analyte = curr_analyte
+    )
+
+  # Store the data only if there are less than 3 studies
+ 
+    plot_data_list[[curr_analyte]] <- curr_data
+
+    interval_data_list[[curr_analyte]] <- curr_interval %>%
+      mutate(curr_analyte = curr_analyte)
+  
+}
+
+# Combine all data into single dataframes
+all_plot_data <- bind_rows(plot_data_list)
+all_interval_data <- bind_rows(interval_data_list)
+
+# Compute error_y and bar_height by analyte
+error_df <- all_plot_data %>%
+  group_by(curr_analyte) %>%
+  summarise(
+    error_y = mean(ID, na.rm = TRUE),
+    bar_height = n() + 500,
+    .groups = "drop"
+  )
+
+all_interval_data <- all_interval_data %>%
+  left_join(error_df, by = "curr_analyte")
+
+
+```
+
+```{r}
+max_ids <- all_plot_data %>%
+  group_by(curr_analyte) %>%                                  # <- your grouping var
+  summarise(max_id = suppressWarnings(max(as.numeric(ID), na.rm = TRUE)),
+            .groups = "drop") %>%
+  mutate(max_id = ifelse(is.finite(max_id), max_id, 0))  # handle all-NA case
+
+# 2) Add continuing IDs to the second df
+all_plot_data_NHANES_subset2 <- all_plot_data_NHANES_subset %>%
+  left_join(max_ids, by = "curr_analyte") %>%
+  group_by(curr_analyte) %>%
+  mutate(ID = max_id + row_number()) %>%
+  select(-max_id) %>%
+  ungroup()
+
+# 3) Bind together
+HHEAR_NHANES_Plot_Data <- bind_rows(all_plot_data, all_plot_data_NHANES_subset2) %>% 
+  dplyr::filter(!is.na(ID))
+
+
+
+
+Location_Plotdata_Mat <- left_join(HHEAR_NHANES_Plot_Data,Mat_SDOH,by = c("Mat_PID","Study")) %>% 
+  mutate(Location = ifelse(Study == "NHANES","NHANES-USA",Location))  %>% 
+  left_join(.,Location_Mapping, by = "Location") %>% 
+  mutate(Location = coalesce(New_Location,Location)) %>% 
+  mutate(Location = factor(Location, levels = c(
+    # 1) National
+    "NHANES-USA",
+    
+    # 2) U.S. Locations
+    "Boston",
+    "California",
+    "Los_Angeles",
+    "Massachusetts",
+    "Michigan",
+    "New_Hampshire",
+    "Northern Karst,Puerto Rico",
+    "Sacramento",
+    "United_States",
+    
+    # 3) International Locations
+    "Bahia, Brazil",
+    "Suchitepéquez,Guatemala",
+    "Mexico_City",
+    "Managua,Nicaragua",
+    "Cape Town,South Africa",
+    "Suriname",
+    
+    # 4) Optional: NA last
+    "NA"
+  ))) %>% 
+  dplyr::filter(!is.na(Location)) %>% 
+ dplyr::filter(str_detect(curr_analyte,c("Ba|MBZP|PFOA|TCP")))
+
+
+Location_interval_data_Mat <- Location_Plotdata_Mat %>% 
+  group_by(curr_analyte) %>%
+  summarise(n_unique_locations = n_distinct(Location)/2) %>% 
+  mutate(level_height = n_unique_locations *2) %>% 
+  left_join(all_interval_data,.,by = c("Outcome" = "curr_analyte")) %>% 
+ dplyr::filter(str_detect(Outcome,c("Ba|MBZP|PFOA|TCP")))
+
+#save(Location_Plotdata_Mat,file = "../../../HHEAR_Man1_App/Mat_Plot_Data_Shiny.RData")
+#save(Location_interval_data_Mat,file = "../../../HHEAR_Man1_App/Mat_Interval_Data_Shiny.RData")
+
+
+unique(Location_Plotdata_Mat$curr_analyte)
+```
+
+
+
+
+
+
+```{r}
+bind_rows(
+  Location_Plotdata_Child %>% 
+  #mutate(NHANES_HHEAR = ifelse(Location == "NHANES-USA","NHANES","HHEAR")) %>% 
+  group_by(Location,curr_analyte) %>% 
+  summarise(mean = mean(plot_value,na.rm =T)) %>% 
+  mutate(Population = "Child") ,
+
+Location_Plotdata_Mat %>% 
+    dplyr::filter(ID != 2309) %>% 
+
+  #mutate(NHANES_HHEAR = ifelse(Location == "NHANES-USA","NHANES","HHEAR")) %>% 
+  group_by(Location,curr_analyte) %>% 
+  summarise(mean = mean(plot_value,na.rm =T)) %>% 
+  mutate(Population = "Adult") 
+) %>% 
+  dplyr::filter(Location != "NHANES-USA") %>% 
+  #dplyr::filter(Population == "Child") %>% 
+  group_by(Population,curr_analyte) %>% 
+  summarise(mean_conc = mean(mean,na.rm = T)) %>% 
+  View
+```
+
+
+```{r}
+library(dplyr)
+
+# 1. Compute means per location (what you already did)
+loc_means <- Location_Plotdata_Child %>%
+  group_by(Location, curr_analyte) %>%
+  summarise(
+    mean_value = median(plot_value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# 2. Function: percentile of one location's mean in another's distribution
+mean_percentile <- function(data, analyte, ref_location, target_location) {
+
+  ref_dist <- data %>%
+    filter(curr_analyte == analyte,
+           Location == ref_location) %>%
+    pull(plot_value)
+
+  target_mean <- loc_means %>%
+    filter(curr_analyte == analyte,
+           Location == target_location) %>%
+    pull(mean_value)
+
+  tibble(
+    analyte = analyte,
+    reference_location = ref_location,
+    target_location = target_location,
+    target_mean = target_mean,
+    percentile_in_reference =
+      mean(ref_dist <= target_mean, na.rm = TRUE)
+  )
+}
+
+
+
+Location_Plotdata_Child %>% 
+  #mutate(NHANES_HHEAR = ifelse(Location == "NHANES-USA","NHANES","HHEAR")) %>% 
+  group_by(Location,curr_analyte) %>% 
+  summarise(mean = median(plot_value,na.rm =T)) %>% 
+  mutate(Population = "Child") %>% View
+ # Example:
+mean_percentile(
+  Location_Plotdata_Child,
+  analyte = "TCP",
+  ref_location = "NHANES-USA",
+  target_location = "Baltimore"
+) %>% View
+
+```
+
+
+```{r}
+# Child_ByCountry_patch <- Child_ByCountry + 
+#   theme(axis.text.x = element_text(size = 12,face = "bold"),
+#         axis.title.x = element_text(size = 20,face = "bold"),
+#         axis.title.y = element_text(size = 20,face = "bold"))
+# 
+# Mat_ByCountry_patch <- Mat_ByCountry + 
+#   theme(axis.text.x = element_text(size = 12,face = "bold"),
+#         axis.title.x = element_text(size = 20,face = "bold"),
+#         axis.title.y = element_text(size = 20,face = "bold"))
+# 
+# pdf(file = "../../../Output/Final_Paper1_Output/Plots/ByCountry_All.pdf",height = 8,width =15)
+# patch_plot <- Child_ByCountry_patch/Mat_ByCountry_patch 
+# patch_plot + 
+#   #plot_layout(guides = "collect") +    
+#   plot_annotation(
+#   title = 'Exposome Intervals for Child and Adult Populations',
+#   tag_levels = "A"
+# ) & 
+#   theme(plot.tag = element_text(size = 20),
+#         plot.title = element_text(size = 26))
+# dev.off()
+
+```
+
+```{r}
+
+
+
+
+region_order <- c(
+  "National","US Northeast","US West","US Mountains/Plains","Caribbean",
+  "Latin America","Europe","Africa","South Asia"
+)
+
+
+# Location_Mapping <- tibble::tibble(
+#   Location = c("NorthEast_US", "Washington_State", "Bangladesh", 
+#                "Chile","Finland","Germany","Sweden",
+#                "South_Africa","Uganda","Tobago","Ecuador","Puerto Rico","Brazil","Nicaragua",
+#                "Guatemala"),
+#   New_Location = c("Boston", "Yakima Valley,Washington", "Pabna,Bangladesh", 
+#                    "Santiago,Chile","Turku,Finland","Munich,Germany","Malmö,Sweden",
+#                    "Cape Town,South Africa","Kampala,Uganda","Tobago,Trinidad and Tobago",
+#                    "Pedro Moncayo, Ecuador","Northern Karst,Puerto Rico","Bahia, Brazil",
+#                    "Managua,Nicaragua","Suchitepéquez,Guatemala")
+# )
+
+ordered_levels <- c(
+  "NHANES-USA", "United_States",
+  "Boston","Massachusetts","New_Hampshire","New_York","Boston","Baltimore","Syracuse","Michigan",
+  "California","Los_Angeles","Sacramento","Yakima Valley,Washington",
+  "Denver",
+  "Northern Karst,Puerto Rico","Tobago,Trinidad and Tobago",
+  "Mexico_City","Suchitepéquez,Guatemala","Managua,Nicaragua","Suriname","Bahia, Brazil","Santiago,Chile","Pedro Moncayo, Ecuador",
+  "Turku,Finland","Munich,Germany","Malmö,Sweden",
+  "Cape Town,South Africa","Kampala,Uganda",
+  "Pabna,Bangladesh"
+)
+Location_Plotdata <- bind_rows(
+Location_Plotdata_Child %>% 
+  mutate(Population = "Child"),
+
+Location_Plotdata_Mat %>% 
+  mutate(Population = "Adult")
+) %>% 
+    mutate(
+    facet_label = paste0(Population, " - ", curr_analyte),
+    facet_label = factor(facet_label,
+                         levels = c(
+                           paste0("Child - ", unique(curr_analyte)),
+                           paste0("Adult - ", unique(curr_analyte))
+                         ))
+  ) %>% 
+  mutate(NHANES_Flag = as.factor(ifelse(Location == "NHANES-USA",1,0))) %>% 
+mutate(
+    Location = factor(Location,
+      levels = c(
+        "NHANES-USA", "United_States",
+        "Boston", "Massachusetts", "New_Hampshire","New_York", "NorthEast_US", "Baltimore", "Syracuse", "Michigan",
+        "California", "Los_Angeles", "Sacramento", "Yakima Valley,Washington",
+        "Denver",
+        "Northern Karst,Puerto Rico",
+        "Tobago,Trinidad and Tobago",
+        "Mexico_City", "Suchitepéquez,Guatemala", "Managua,Nicaragua", "Suriname", "Bahia, Brazil", "Santiago,Chile", "Pedro Moncayo, Ecuador",
+       "Turku,Finland","Munich,Germany","Malmö,Sweden",
+        "Cape Town,South Africa", "Kampala,Uganda",
+        "Pabna,Bangladesh"
+      )
+    )
+  ) %>%
+  mutate(
+    Region_Group = case_when(
+      Location %in% c("NHANES-USA","United_States") ~ "National",
+      Location %in% c("Boston","Massachusetts","New_Hampshire","NorthEast_US","Baltimore","Syracuse","Michigan") ~ "US Northeast",
+      Location %in% c("California","Los_Angeles","Sacramento","Yakima Valley,Washington") ~ "US West",
+      Location %in% c("Denver") ~ "US Mountains/Plains",
+      Location %in% c("Northern Karst,Puerto Rico","Tobago,Trinidad and Tobago") ~ "Caribbean",
+      Location %in% c("Mexico_City","Suchitepéquez,Guatemala","Managua,Nicaragua","Suriname",
+                      "Bahia, Brazil","Santiago,Chile","Pedro Moncayo, Ecuador") ~ "Latin America",
+      Location %in% c("Turku,Finland","Munich,Germany","Malmö,Sweden") ~ "Europe",
+      Location %in% c("Cape Town,South Africa", "Kampala,Uganda") ~ "Africa",
+      Location %in% c("Pabna,Bangladesh") ~ "South Asia",
+      TRUE ~ "Other"
+    )
+  )
+
+legend_df <- Location_Plotdata %>%
+  distinct(Location, Region_Group) %>%
+  mutate(
+    r_ord = match(Region_Group, region_order),
+    l_ord = match(as.character(Location), ordered_levels)
+  ) %>%
+  arrange(r_ord, l_ord) %>%
+  group_by(Region_Group) %>%
+  mutate(
+    is_first = row_number() == 1,
+ pretty = ifelse(
+    is_first,
+    paste0("<b>", Region_Group, "</b><br/>", "&nbsp;&nbsp;", gsub("_"," ", as.character(Location))),
+    paste0("&nbsp;&nbsp;", gsub("_"," ", as.character(Location)))
+  )
+  ) %>%
+  ungroup() 
+
+
+
+
+Location_interval_data <- bind_rows(
+Location_interval_data_Child %>% 
+  mutate(Population = "Child"),
+
+Location_interval_data_Mat%>% 
+  mutate(Population = "Adult")
+) %>% 
+    mutate(
+    facet_label = paste0(Population, " - ", curr_analyte),
+    facet_label = factor(facet_label,
+                         levels = c(
+                           paste0("Child - ", unique(curr_analyte)),
+                           paste0("Adult - ", unique(curr_analyte))
+                         ))
+  )
+
+#unique(Location_Plotdata$Location)
+```
+
+```{r}
+
+
+
+```
+
+
+
+
+```{r}
+
+legend_breaks <- legend_df$Location
+legend_labels <- setNames(legend_df$pretty, legend_df$Location)
+
+
+label_log1p <- function(breaks) {
+  label_number(
+    accuracy = 0.1,
+    trim = TRUE,
+    scale_cut = cut_si("")   # e.g., 1k, 10k, 1M
+  )(expm1(breaks))
+}
+
+# choose breaks on the log1p scale
+x_breaks <- 0:7  # since you limit x to [0,7]
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Comb_ByCountry_All.pdf",height = 8,width =14)
+all_plot <- ggplot() +
+  # jittered observations
+  geom_jitter(
+    data = Location_Plotdata,
+    aes(x = log1p(plot_value), y = Location, color = Location, size = NHANES_Flag),
+    width = 0, height = 0.15,alpha = 0.35
+  ) +
+  scale_size_manual(values = c("0" = 0.75, "1" = 2.2)) +
+
+  # 50% point
+  geom_point(
+    data = Location_interval_data,
+    aes(y = n_unique_locations, x = log1p(Tau50)),
+    color = "#1A5354", size = 2.6
+  ) +
+
+  # 25–75% interval (thick)
+  geom_errorbarh(
+    data = Location_interval_data,
+    aes(y = n_unique_locations, xmin = log1p(Tau25), xmax = log1p(Tau75)),
+    height = Location_interval_data$level_height,
+    color = "#1A5354", linewidth = 1.4, alpha = 0.95
+  ) +
+
+  # 5–95% interval (thin)
+  geom_errorbarh(
+    data = Location_interval_data,
+    aes(y = n_unique_locations, xmin = log1p(Tau05), xmax = log1p(Tau95)),
+    height = Location_interval_data$level_height / 2,
+    color = "#1A5354", linewidth = 0.9, alpha = 0.55
+  ) +
+
+  #left-side location labels next to each interval
+  # geom_text(
+  #   data = Location_Plotdata,
+  #   aes(y = n_unique_locations, x = 0 - 0.05, label = Location),
+  #   hjust = 1, vjust = 0.5, size = 3.6, fontface = "bold", color = "grey15"
+  # ) +
+
+  # colors
+  #scale_color_manual(values = location_colors, guide = "legend", drop = FALSE) +
+  scale_color_manual(
+    values = location_colors,
+    breaks = legend_breaks,
+    labels = legend_labels,
+    guide = guide_legend(title = NULL, byrow = TRUE)
+  ) +
+
+  # x-axis: keep 0–7 on log1p scale, but label on original scale
+  scale_x_continuous(
+    limits = c(0, 7),
+    breaks = x_breaks,
+    labels = label_log1p(x_breaks),
+    expand = expansion(mult = c(0.06, 0.02))
+  ) +
+
+  # y-axis removed (we draw our own labels)
+  #scale_y_continuous(expand = expansion(mult = c(0.04, 0.08))) +
+
+  facet_wrap(~ facet_label, scales = "free_y", nrow = 2) +
+
+  labs(
+    title = "Exposure Intervals by Location Across Child and Adult Populations",
+    subtitle = "Points: observations (log1p scale). Dot: median (Tau50). Thick bar: IQR (Tau25–Tau75). Thin bar: 5–95%.",
+    x = "Concentration (original scale)",
+    y = NULL,
+    color = "Location"
+  ) +
+
+  theme_classic(base_size = 12) +
+  theme(
+    # Title block
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.subtitle = element_text(size = 12),
+
+    # Facet strips
+    strip.background = element_rect(fill = "#F2F2F2", color = NA),
+    strip.text = element_text(size = 14, face = "bold"),
+
+    # Gridlines to aid reading across
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor = element_blank(),
+
+    # Axes
+    axis.title.x = element_text(size = 13, face = "bold"),
+    axis.text.x = element_text(size = 11, face = "bold"),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line.y = element_blank(),
+
+    # Legend
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_markdown(size = 10),
+    legend.box = "vertical",
+    legend.key.height = unit(10, "mm"),
+    legend.key.width  = unit(8, "mm"),
+
+    # Panel spacing
+    panel.spacing = unit(10, "pt")
+  ) +
+  guides(
+    color = guide_legend(
+      nrow = 4,
+      byrow = TRUE,
+      label.hjust = 0,
+      label.theme = ggtext::element_markdown(size = 14, lineheight = 1.15),
+      override.aes = list(size = 3.2, alpha = 1)
+    ),
+    size = "none"
+  ) +
+
+  coord_cartesian(clip = "off")  # allow left-side labels to breathe
+
+print(all_plot)
+dev.off()
+
+#save(all_plot,file = "../../../Output/Paper1_OutputV2/Plots/All_Country_Intervals.RData")
+```
+
+```{r}
+
+```
+

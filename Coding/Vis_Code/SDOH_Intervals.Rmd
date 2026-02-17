@@ -960,7 +960,7 @@ save(Plot_Dfs_Child,file = "../../../HHEAR_Man1_App/Child_SDOH_Plot_Dfs.RData")
 mystudies  <- unique(Mat_SDOH$Study)
 myanalytes <- unique(Final_Intervals_Df_Adjusted_Mat$Outcome)
 
-pdf(file = "../../../Output/Final_Paper1_Output/Plots/Mat_Facet_SDOH_Intervals.pdf", height = 16, width = 16)
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Mat_Facet_SDOH_Intervals.pdf", height = 16, width = 16)
 
 plots <- list()            # collect everything here
 plot_idx <- 0
@@ -1135,7 +1135,7 @@ unique(Child_Data_Targeted$Study)
 plots <- list()            # collect everything here
 plot_idx <- 0
 
-pdf(file = "../../../Output/Final_Paper1_Output/Plots/Child_Facet_SDOH_Intervals.pdf", height = 16, width = 16)
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Child_Facet_SDOH_Intervals.pdf", height = 16, width = 16)
 
 for (i in seq_along(mystudies)) {
 
@@ -1292,8 +1292,8 @@ plots_child <- plots
 
 
 ```{r}
-save(plots_child, file = "../../../HHEAR_Man1_App/Child_SDOH_Plots.RData")
-save(plots_mat, file = "../../../HHEAR_Man1_App/Mat_SDOH_Plots.RData")
+#save(plots_child, file = "../../../HHEAR_Man1_App/Child_SDOH_Plots.RData")
+#save(plots_mat, file = "../../../HHEAR_Man1_App/Mat_SDOH_Plots.RData")
 
 ```
 
@@ -1346,25 +1346,6 @@ race_plot <- plots_mat[["MADRES__Mat_Race"]]
 ```
 
 
-```{r}
-pdf(file = "../../../Output/Final_Paper1_Output/Plots/Within_Cohort_Figure.pdf",height = 20,width = 15)
-
-# layout <- "
-# AB
-# CD
-# "
-patch <-  income_plot / race_plot + 
-  plot_annotation(
-    title = "Within Cohort Variation",
-    tag_levels = "A"
-  ) & 
-  theme(plot.tag = element_text(size = 20),
-        plot.title = element_text(size = 26))
-#patch[[4]] <- patch[[4]] + theme(plot.tag = element_blank())
-
-print(patch)
-dev.off()
-```
 
 
 Get Manuscript Numbers 
@@ -1431,12 +1412,17 @@ myanalytes <- unique(Final_Intervals_Df_Adjusted_Mat$Outcome)
 Plots For Patch
 ----
 ```{r}
-mystudies <- "MADRES"
+mystudies <- "CCREOH"
+
+unique(Mat_Data_Targeted %>% 
+  dplyr::filter(Study == "CCREOH_Targeted") %>% 
+  pull(Analyte_Code))
+  
 
 plots <- list()            # collect everything here
 plot_idx <- 0
 
-analytes_tokeep <- c("As","Co","W","Sn")
+analytes_tokeep <- c("Cd","Hg","Mn","Pb")
 for (i in seq_along(mystudies)) {
 
   # SDOH for this cohort
@@ -1590,7 +1576,7 @@ for (i in seq_along(mystudies)) {
 }
 
 madres_plots <- plots
-save(madres_plots, file = "../../../Output/Final_Paper1_Output/madres_plots.RData")
+save(madres_plots, file = "../../../Output/Paper1_OutputV2/madres_plots.RData")
 
 ```
 

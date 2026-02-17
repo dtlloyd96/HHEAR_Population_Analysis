@@ -1,0 +1,396 @@
+---
+title: "Quant_Reg_Results_Plots"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(paletteer)
+library(data.table)
+library(ggdist)
+library(ggrepel)
+library(missMDA)
+library(FactoMineR)
+library(factoextra)
+library(patchwork)
+library(ggpubr)
+library(scico)
+library(ggalluvial)
+library(RColorBrewer)
+
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("ComplexHeatmap")
+
+library(ComplexHeatmap)
+```
+
+
+
+
+Input Data
+------------
+
+```{r}
+ 
+
+load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+
+```
+
+```{r}
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
+                                    Location == "NorthEast_US" ~ "United_States",
+                                    Location == "New_Hampshire" ~ "United_States",
+                                    Location == "Washington_State" ~ "United_States",
+                                    Location == "Midwestern_US" ~ "United_States",
+                                    Location == "Denver" ~ "United_States",
+                                    Location == "Baltimore" ~ "United_States",
+                                    Location == "Sacramento" ~ "United_States",
+                                    Location == "Southern_California" ~ "United_States",
+                                    Location == "Syracuse" ~ "United_States",
+                                    Location == "Michigan" ~ "United_States",
+                                    Location == "California" ~ "United_States",
+                                    Location == "SanFrancisco" ~ "United_States",
+                                    Location == "Massachusetts" ~ "United_States",
+                                    TRUE ~ "Worldwide")) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+  Mat_Edu %in% c("No_Education",
+                 "Primary_Education",
+                 "Primary_School",
+                 "High_School") ~ "No_College",
+  Mat_Edu %in% c("Some_College",
+                 "Four_Year_College_Degree",
+                 "Some_Grad_School") ~ "Some_College",
+  Mat_Edu == "Not_Reported" ~ NA
+)) %>% 
+  mutate(Mat_Income_Binary = case_when(
+  Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
+  Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
+                "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
+  TRUE ~ NA
+)) %>% 
+  dplyr::select(Child_PID,Mat_PID,Study,Mat_Age,Mat_Race,
+                Mat_Edu,Child_Sex,Child_Race,Mat_Income,
+                Mat_Edu_Binary,Child_Age,Mat_Income_Binary,
+                Mat_Child_Comb_Race) %>% 
+  mutate(Study =  str_remove(Study, '[_]\\w+|:'))
+
+
+```
+
+```{r}
+length(unique(ExWAS_SDOH_Exposures$Child_PID))
+length(unique(ExWAS_SDOH_Exposures$Mat_PID))
+
+```
+
+
+```{r}
+demo_long <- ExWAS_SDOH_Exposures %>%
+  dplyr::select(Mat_PID,Child_PID,Study,Mat_Edu, Mat_Race, Child_Race,Mat_Income,Child_Sex) %>% 
+  pivot_longer(
+    cols = c(Mat_Edu, Mat_Race, Child_Race,Mat_Income,Child_Sex),
+    names_to  = "Feature",
+    values_to = "Category"
+  )
+
+props <- demo_long %>%
+  count(Study, Feature, Category) %>%
+  group_by(Study, Feature) %>%
+  mutate(prop = n / sum(n)) %>%
+  ungroup() %>% 
+  dplyr::filter(Study != "AIRWEIGHS")
+
+```
+
+
+
+```{r}
+SDOH_Data_All %>% 
+  dplyr::filter(Study == "TEDDY_SDOH") %>% View
+```
+
+```{r}
+mypal24 <- c(
+  # yellows / golds
+  "#FED439FF",  # soft gold
+  "#D2AF81FF",  # warm sand
+  "#E3C78AFF",  # pale ochre
+
+  # blues
+  "#709AE1FF",  # muted periwinkle
+  "#197EC0FF",  # strong blue
+  "#71D0F5FF",  # light sky
+  "#4F7CCBFF",  # mid denim
+
+  # greens / teals
+  "#D5E4A2FF",  # pale green
+  "#46732EFF",  # olive
+  "#075149FF",  # deep teal
+  "#1A9993FF",  # turquoise
+  "#5FB7A6FF",  # soft seafoam
+
+  # oranges / corals
+  "#FD7446FF",  # coral orange
+  "#F05C3BFF",  # red-orange
+  "#F4A261FF",  # peach
+
+  # reds / maroons
+  "#C80813FF",  # deep red
+  "#91331FFF",  # brick
+  "#B44A3AFF",  # muted rust
+
+  # purples / pinks
+  "#370335FF",  # deep plum
+  "#8E5AAEFF",  # muted violet
+  "#FD8CC1FF",  # soft pink
+  "#C77DBBFF",  # dusty rose
+
+  # neutrals
+  "#8A9197FF"   # cool gray
+)
+
+```
+
+
+```{r}
+plot_prop_diversity <- function(prop_df, plot_title = "Distribution of categories",myfeature,text_size) {
+  # Expect columns: Study, Feature (optional), Category, prop
+  
+  mypal <- mypal24
+
+  
+  prop_df <- prop_df %>% 
+  dplyr::filter(Feature == myfeature) %>% 
+  dplyr::filter(!is.na(Category))
+
+  # Winner (largest class) per Study (+ Feature if present)
+  grp_vars <- intersect(c("Study", "Feature"), names(prop_df))
+
+  winners <- prop_df %>%
+    group_by(across(all_of(grp_vars))) %>%
+    slice_max(prop, n = 1, with_ties = FALSE) %>%
+    ungroup()
+
+  p <- ggplot(prop_df, aes(x = prop, y = Study, fill = Category)) +
+    # base bars (soft)
+    geom_col(width = 0.72, color = "white", linewidth = 0.25, alpha = 0.35) +
+    # winners re-drawn (pops)
+    geom_col(
+      data = winners,
+      #aes(x = prop, y = Study, fill = Category),
+      aes(x = prop, y = Study),fill = mypal24[3],
+      width = 0.72, color = "white", linewidth = 0.25, alpha = 1,
+      inherit.aes = FALSE
+    ) +
+    # winner outline for crisp emphasis
+    geom_col(
+      data = winners,
+      aes(x = prop, y = Study),
+      width = 0.72, fill = NA, color = "grey15", linewidth = 0.7,
+      inherit.aes = FALSE
+    ) +
+    geom_text(
+      data = winners,
+      aes(x = prop, y = Study, label = Category),
+      inherit.aes = FALSE,
+      hjust = 1.05,          # slightly inside the bar
+      color = "gray15",
+      size = text_size,
+      fontface = "bold"
+  ) +
+    scale_x_continuous(
+      labels = scales::percent_format(accuracy = 1),
+      expand = expansion(mult = c(0, 0.02))
+    ) +
+    guides(fill = guide_legend(nrow = 2, byrow = TRUE)) +
+    labs(
+      y = "Study",
+      x = "Percent of individuals",
+      fill = "Category",
+      title = plot_title
+    ) +
+    scale_fill_manual(values = mypal) +
+    theme_minimal(base_size = 12) +
+    theme(
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold"),
+      plot.title = element_text(face = "bold", size = 16, hjust = 0),
+      axis.title.x = element_text(face = "bold"),
+      axis.title.y = element_text(face = "bold"),
+      legend.position = "none",
+      legend.title = element_text(face = "bold")
+    )
+  return(p)
+}
+
+# Example:
+
+```
+
+
+```{r}
+mat_race_plot <- plot_prop_diversity(prop_df = props, plot_title = "Distribution of Adult Race",myfeature = "Mat_Race",text_size = 3.5)
+child_df <- props %>% dplyr::filter(!str_detect(Study ,paste0(c("MEBCO","MDUC","CCREOH"),collapse = "|"))) 
+child_race_plot <- plot_prop_diversity(prop_df = child_df, "Distribution of Child Race",myfeature = "Child_Race",text_size = 3.5)
+mat_edu_plot <- plot_prop_diversity(prop_df = props, "Distribution of Adult Education",myfeature = "Mat_Edu",text_size = 2)
+mat_income_plot <- plot_prop_diversity(prop_df = props, "Distribution of Adult Income",myfeature = "Mat_Income",text_size = 3.5)
+
+```
+
+```{r}
+patch <- (mat_race_plot + child_race_plot) / (mat_edu_plot + mat_income_plot) +
+  plot_annotation(tag_levels = "i")
+
+demo_patch <- patch
+save(demo_patch,file = "../../../Output/Paper1_OutputV2/Plots/Demo_Patch.RData")
+
+```
+
+
+```{r}
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Demo_Patch.pdf",height = 10,width = 10)
+print(patch)
+dev.off()
+```
+
+
+```{r}
+props %>% 
+  dplyr::filter(!is.na(Category)) %>% 
+  group_by(Study) %>%
+  summarise(
+    Features = paste(sort(unique(Feature)), collapse = ", "),
+    .groups = "drop"
+  ) %>% 
+  View
+```
+
+
+```{r}
+
+SDOH_Data_All %>% 
+  mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+  dplyr::filter(Study != "AIRWEIGHS") %>% 
+  group_by(Study) %>% 
+  summarise(n = n()) %>% 
+  pull(n) %>% sum(.)
+
+
+study_n_perc <- SDOH_Data_All %>% 
+  mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+  dplyr::filter(Study != "AIRWEIGHS") %>% 
+  group_by(Study) %>% 
+  summarise(n = n(),
+            n_perc = round((n/21870) * 100,2)) %>% 
+  arrange(desc(n))
+
+write_csv(study_n_perc, file = "/Users/dillon/Downloads/study_n_perc.csv")
+```
+
+```{r}
+study_feature_n <- props %>% 
+  dplyr::filter(!is.na(Category)) %>% 
+  mutate(Levels_n = paste0(Category,"(",n,")")) %>% 
+  group_by(Study,Feature) %>%
+  summarise(
+    Features = paste(sort(unique(Levels_n)), collapse = ", "),
+    .groups = "drop"
+  ) %>% 
+  mutate(Feature_Cat = paste0(Feature,"(",Features,")")) %>% 
+  group_by(Study) %>% 
+  summarise(Feature_Final = paste0(Feature_Cat,collapse = ":")) 
+write_csv(study_feature_n, file = "/Users/dillon/Downloads/study_feature_n.csv")
+
+```
+
+```{r}
+unique(SDOH_Data_All$Location)
+```
+```{r}
+us_values <- c(
+  "United_States",
+  "Syracuse",
+  "California",
+  "Massachusetts",
+  "Sacramento",
+  "Washington_State",
+  "Baltimore",
+  "New_York",
+  "NorthEast_US",
+  "Boston",
+  "Los_Angeles",
+  "New_Hampshire",
+  "SanFrancisco",
+  "Michigan",
+  "Southern_California",
+  "Denver",
+  "Midwestern_US"
+)
+SDOH_Data_All %>%
+  mutate(
+    Geo_Class = if_else(Location %in% us_values, "US", "Worldwide")
+  ) %>% 
+  dplyr::filter(!is.na(Child_PID)) %>% 
+  group_by(Geo_Class) %>% 
+  summarise(n = n()) %>% View
+
+```
+
+
+```{r}
+demo_long %>%
+  ungroup() %>% 
+  dplyr::filter(Study != "AIRWEIGHS") %>% 
+  group_by(Feature,Category) %>%
+  summarise(n = n()) %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  View
+```
+
+```{r}
+length(unique(SDOH_Data_All$Mat_PID))
+```
+
+```{r}
+
+df_first_unique <- ExWAS_SDOH_Exposures %>%
+  group_by(Child_PID) %>%
+  dplyr::slice(1) %>% 
+  ungroup()
+
+table(df_first_unique$Child_Sex)
+
+sd(df_first_unique$Child_Age,na.rm = T)
+
+
+table(df_first_unique$Mat_Edu_Binary)
+```
+
+```{r}
+SDOH_Data_All %>% 
+  dplyr::select(Child_PID,Mat_PID,Child_Age,Mat_Age,Child_Sex,Mat_Income,Mat_Edu,Mat_Race) %>% 
+  dplyr::filter(!is.na(Child_PID)) %>% 
+  View
+```
+

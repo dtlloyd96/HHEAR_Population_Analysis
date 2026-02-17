@@ -1,0 +1,75 @@
+---
+title: "Figure3Patchplot"
+output: html_document
+date: "2025-10-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(patchwork)
+```
+
+```{r}
+load( "../../../Output/Paper1_OutputV2/Plots/r2_barplot_pooled.RData")
+load("../../../Output/Paper1_OutputV2/Plots/All_Country_Intervals.RData")
+
+load("../../../Output/Paper1_OutputV2/Plots/Avg_World_Map.RData")
+
+# load("../../../Output/Final_Paper1_Output/teddy_intervals.RData")
+# load("../../../Output/Final_Paper1_Output/r2_barplot_TEDDY.RData")
+# load( "../../../Output/Final_Paper1_Output/TEDDY_map.RData")
+# load("../../../Output/Final_Paper1_Output/r2_barplot_zip.RData")
+# load( "../../../Output/Final_Paper1_Output/zip_map.RData")
+# load( "../../../Output/Final_Paper1_Output/zip_intervals.RData")
+
+```
+
+```{r}
+# average_map <- average_map +
+#   theme(plot.margin = ggplot2::margin(2, 4, 0, 2))
+# r2_barplot_pooled_Cohort <- r2_barplot_pooled_Cohort +
+#   theme(plot.margin = ggplot2::margin(2, 2, 0, 4))
+# all_plot <- all_plot +
+#   theme(plot.margin = ggplot2::margin(0, 4, 2, 4))
+# average_map <- average_map +
+#   coord_sf(expand = FALSE) 
+
+
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Figure3_All.pdf",height = 17,width =18)
+patch <- (average_map | r2_barplot_pooled_Cohort + ggtitle("Demographic Explanatory Power")) / all_plot 
+patch + 
+    plot_layout(heights = c(2, 3)) +
+  #plot_layout(guides = "collect") +    
+  plot_annotation(
+  title = 'Geography as the Primary Driver of Exposomic Variation',
+  tag_levels = "A"
+)  &
+  theme(plot.tag = element_text(size = 20),
+        plot.title = element_text(size = 15)) 
+  #theme(panel.background = element_rect(fill = NA, colour = "red"))
+dev.off()
+```
+
+
+
+
+```{r}
+pdf(file = "../../../Output/Final_Paper1_Output/Plots/Figure4_All.pdf",height = 20,width =13)
+patch <- (TEDDY_map  | r2_barplot_TEDDY + ggtitle("Demographic Explanatory Power")) / teddy_intervals / (zip_map | r2_barplot_zip+ ggtitle("Demographic Explanatory Power")) / zip_intervals
+patch + 
+  #plot_layout(guides = "collect") +    
+  plot_annotation(
+  title = 'Geography as the Primary Driver of Exposomic Variation In TEDDY',
+  tag_levels = "A"
+)  &
+  theme(plot.tag = element_text(size = 20),
+        plot.title = element_text(size = 15))+
+  plot_layout( widths = c(2, 1,1,2,1,1),heights = c(1,2))
+dev.off()
+```
+
+```{r}
+
+```
+

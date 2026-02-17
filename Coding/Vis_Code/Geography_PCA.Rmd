@@ -1,0 +1,1496 @@
+---
+title: "Cumulative_Conc_Plot"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(glmnet)
+library(scales)
+library(paletteer)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(FactoMineR)
+library(missMDA)
+library(geosphere)
+library(ggridges)
+```
+
+```{r}
+# load("../../Output/Final_Model_Child_SDOH_Metab_Quantile_Results_QuantData.RData")
+# Quant_Results <- Child_SDOH_Metab_Quantile_Results_with_predictions_highlow_allresults
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+rm(Child_SDOH_Metab_Quantile_Results,Child_SDOH_Metab_Quantile_Results_with_predictions)
+load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+```
+
+
+Exposure Classes
+-----
+
+```{r}
+#New Classifications
+#Trace elements
+Trace_Elements_Theme <- unique(c("As","Ba", "Be","Cd" ,"Co","Cs","Mn", 
+                  "Mo","Pb","Sb", "Tl","U", "W","Cr","Cu",
+                  "Hg" ,"Ni","Pt","Sn",
+                  "V","Zn", "Al", "Mg","Se"  ))
+
+
+length(Trace_Elements_Theme)
+#Phenols
+Phenols_Theme <- unique(c("BP3","BPA","BPF","BPS","DCP24","DCP25","TCC","TCS","BUPB","ETPB","MEPB","PRPB","BP1",
+                          "BP2","BP8","BPAF","BPAP","BPB","BPP","BPZ","DHB34","HB4",
+                          "OH4BP","OHETP","OHMEP","PCP","TCP245","TCP246","DCP","TCP24","PHE","PHEN"))
+length(Phenols_Theme)
+
+#Polycyclic_Aromatic_hydrocarbons 
+PAH_Theme <- unique(c("NAP1","NAP2","PYR1","FLUO2","PHEN1","PHEN2PHEN3","PHEN4","PHEN9","PHET","PHEN2",
+                      "PHEN3","FLUO2_FLUO3","PHEN2_PHEN3","FLU","FLUO","PYR","NAP"))
+
+length(PAH_Theme)
+
+#Phthalates
+Phthalates_Theme <- unique(c("MBZP","MCPP","MECPP","MEHHP","MEHP","MEOHP","MEP","MIBP","MNBP","MCMHP",
+                             "MCHP","MCHPP","MCINP","MCIOP","MCMHP","MHXP","MINP","MIPP","MMP","MOP","MPEP",
+                             "MCOCH","MHNCH","MINP","MCOP","MECPTP","MBZP","MCPP","MEHHTP","MIBP","MHPP","MBZ","MBP",
+                             "MCI","MCMH","MCO","MCP","MEC","MEH","MEHH","MEO","MEOH","MHN","MIB","MIN",
+                             "MNB"))
+
+length(Phthalates_Theme)
+
+#Parabens
+Parabens_Theme <- unique(c("BUPB","ETPB","MEPB","PRPB","BZPB","HEPB","BUP","ETP","PRP"))
+length(Parabens_Theme)
+
+#Smoking/Smoking
+Smoking_Theme <- unique(c("COTT","HCOTT","NICT","NNAL","COT"))
+length(Smoking_Theme)
+
+#Inflam
+Inflam_Theme <- unique(c("HAPTOGLOBIN","FLT3L","TIMP1","TIMP2","IL17F","GMCSF","IFNG","IL10","MIP3A",
+                         "IL12P70", "IL13","IL15","IL17A","IL22","IL9","IL1B","IL33","IL2","IL21",
+                         "IL4"," IL23","IL5","IL6","IL17EIL25","IL27","IL31","TNFA","TNFB","IL28A",
+                         "MMP1","MMP2","MMP7","MMP9","MMP10","CRP","LTE4","IL8","IL23"))
+
+length(Inflam_Theme)
+
+#Pesticide
+
+Pesticide_Theme <- unique(c("DEP","DETP","DMDP","DMP","DMTP","PBA",
+                            "TCP","DEDP","GPS","FPBA","PNP","IMPY","D24","AMPA",
+                            "MDA","T245","BHCH","HCB","PPDDE","PPDDT","TCHL","TNON",
+                            "OCHL","PPDDD"))
+
+length(Pesticide_Theme)
+
+#Volatile Organic Compounds
+VOC_Theme <- unique(c("HPMA","HPMA2","SPMA","HMPMA"))
+
+length(VOC_Theme)
+
+#Oxidative Stress Markers
+OXID_Theme <- unique(c("F2A8IP","F2A23D","F2AVI","F2A12I","OS8OHDG","OSMDA","OS8O","OSMD"))
+
+length(OXID_Theme)
+
+#PFAS
+PFAS_Theme <- unique(c("NMFOSAA","PFBS" ,"PFDA","PFDODA" ,
+                "PFDS" ,"PFHPA" ,"PFHXA" , "PFHXS" ,
+                "PFNA" , "PFOA" , "PFOS","PFOSA", "PFUNDA",
+                "NETFOSAA","PFPEA","ETFOSA","PFBA","PFPEA","PFHPS"))
+
+length(PFAS_Theme)
+
+#Flame Retardants
+Flame_Retardant_Theme <- unique(c("BDE47","BDE99","BDE100","BDCPP","DPHP","TBBA",
+                                  "BCETP","BCPP","DBUP","DBZP","DOCP","DPCP","BDE153",
+                                  "BDE154","BDE183","BDE28","BDE47","BDE17","BDE66",
+                                  "BDE85","BDE99","PBB153","BDE28","BDE85"))
+length(Flame_Retardant_Theme)
+
+PCB_Theme <- unique(c( "PCB105_PCB127","PCB110", "PCB114_PCB122","PCB118_PCB106", "PCB128", "PCB137",
+  "PCB138_PCB158","PCB146_PCB161", "PCB153","PCB156","PCB157","PCB167","PCB170","PCB172_PCB192", "PCB177",
+  "PCB180","PCB182_PCB187","PCB183", "PCB18_PCB17","PCB194",
+  "PCB195","PCB196_PCB203", "PCB199","PCB202","PCB206","PCB208","PCB209","PCB22",
+  "PCB31_PCB28", "PCB33_PCB20","PCB37","PCB41_PCB64","PCB44","PCB47_48_75",
+  "PCB49_PCB43","PCB52_PCB73","PCB5_PCB8","PCB70_PCB76","PCB73_PCB95","PCB74_PCB61",
+  "PCB85_PCB120","PCB90_101_89","PCB99"))
+length(PCB_Theme)
+
+#Bisdithiocarbamates 
+Bisdithiocarbamates_Theme <- unique(c("ETU","PTU"))
+
+#Cellular adhesion molecules 
+CAM_Theme <- unique(c("ICAM1","VCAM1","ESEL","PSEL"))
+
+#Lipids
+
+Lipids_Theme <- unique(c("CHOL","OXLDL","TG"))
+
+#Nutrients
+Nutrients_Theme <- unique(c("GAMTOC","ALPTOC","ZEAXAN","CRYPTO","LYCOPE","ALPCARO",
+                            "BETCARO","RET","FOL","ADIPO"))
+length(Nutrients_Theme)
+
+
+Lipid_Metab <- c("LEP")
+
+Thromboxane <- c("DHTHRM")
+
+
+Other_Theme <- c(Bisdithiocarbamates_Theme,CAM_Theme,Lipids_Theme,Nutrients_Theme,Lipid_Metab,Thromboxane)
+```
+
+
+```{r}
+
+load("../../../Input/Harmonized_Datasets/TEDDY_SDOH_Clean.RData")
+load("../../../Input/Harmonized_Datasets/ZIP_SDOH_Clean.RData")
+
+ZIP_Data <- ZIP_SDOH %>% 
+    mutate(Country = ifelse(
+    is.na(Country),
+    Country[match(Site_Location, Site_Location[!is.na(Country)])],
+    Country
+  )) %>% 
+  mutate(Study = "ZIP") %>% 
+  dplyr::select(Mat_PID,Study,Location = Country) 
+
+
+TEDDY_Data <- TEDDY_SDOH %>% 
+  mutate(Study = "TEDDY") %>% 
+  dplyr::select(Child_PID,Study,Location) 
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
+                                    Location == "NorthEast_US" ~ "United_States",
+                                    Location == "New_Hampshire" ~ "United_States",
+                                    Location == "Washington_State" ~ "United_States",
+                                    Location == "Midwestern_US" ~ "United_States",
+                                    Location == "Denver" ~ "United_States",
+                                    Location == "Baltimore" ~ "United_States",
+                                    Location == "Sacramento" ~ "United_States",
+                                    Location == "Southern_California" ~ "United_States",
+                                    Location == "Syracuse" ~ "United_States",
+                                    Location == "Michigan" ~ "United_States",
+                                    Location == "California" ~ "United_States",
+                                    Location == "SanFrancisco" ~ "United_States",
+                                    Location == "Massachusetts" ~ "United_States",
+                                    TRUE ~ "Worldwide")) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+  Mat_Edu %in% c("No_Education",
+                 "Primary_Education",
+                 "Primary_School",
+                 "High_School") ~ "No_College",
+  Mat_Edu %in% c("Some_College",
+                 "Four_Year_College_Degree",
+                 "Some_Grad_School") ~ "Some_College",
+  Mat_Edu == "Not_Reported" ~ NA
+)) %>% 
+  mutate(Mat_Income_Binary = case_when(
+  Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
+  Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
+                "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
+  TRUE ~ NA
+)) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+  dplyr::filter(Study != "ZIP") %>% 
+  dplyr::filter(Study != "TEDDY") %>% 
+  dplyr::select(Child_PID,Mat_PID,Study,Location)
+
+
+
+
+Child_SDOH <- bind_rows(ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Child_PID) ),TEDDY_Data ) %>% 
+  dplyr::select(-Mat_PID)
+
+Mat_SDOH <- bind_rows(ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Mat_PID)), ZIP_Data) %>% 
+  dplyr::select(-Child_PID)
+```
+
+
+
+```{r}
+
+
+Child_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
+  mutate(
+    Concentration = case_when(
+      Units == "ug/dL" ~ Concentration * 10,
+      Units == "ng/L"  ~ Concentration / 1000,
+      Units == "pg/mL" ~ Concentration / 1000,
+      Units == "pg/ml" ~ Concentration / 1000,
+      Units == "mg/L"  ~ Concentration * 1000,
+      TRUE             ~ Concentration     # keep as is if no match
+    )
+  ) %>% 
+  dplyr::select(-Mat_PID) %>% 
+  group_by(Study,Child_PID,Analyte_Code) %>% 
+  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+  ungroup()
+
+# Child_Data_Targeted %>% 
+#   dplyr::filter(Analyte_Code == "As") %>% View
+
+myanalytes <- unique(Child_Data_Targeted$Analyte_Code)
+child_analytes <- myanalytes
+
+child_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Child_PID","Study",curr_analyte)
+  
+  curr_data <- Child_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+  
+  child_list_Targeted[[i]] <- curr_data
+  names(child_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+```{r}
+Mat_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Mat_PID)) %>% 
+  dplyr::select(-Child_PID) %>% 
+  mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
+  mutate(
+    Concentration = case_when(
+      Units == "ug/dL" ~ Concentration * 10,
+      Units == "ng/L"  ~ Concentration / 1000,
+      Units == "pg/mL" ~ Concentration / 1000,
+      Units == "pg/ml" ~ Concentration / 1000,
+      Units == "mg/L"  ~ Concentration * 1000,
+      TRUE             ~ Concentration     # keep as is if no match
+    )
+  ) %>% 
+  dplyr::filter(!is.na(Analyte_Code)) %>% 
+  group_by(Study,Mat_PID,Analyte_Code) %>% 
+  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+  mutate(across(everything(), ~ replace(., is.infinite(.), 0)))
+#Mat_Data_Targeted <- Targeted_Data_All %>% 
+ # dplyr::filter(!is.na(Mat_PID)) %>% 
+ # dplyr::select(-Child_PID) %>% 
+ # dplyr::filter(!is.na(Analyte_Code)) %>% 
+ # group_by(Study,Mat_PID,Analyte_Code) %>% 
+ # summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+ # mutate(across(everything(), ~ replace(., is.infinite(.), 0)))
+
+
+myanalytes <- unique(Mat_Data_Targeted$Analyte_Code)
+
+mat_analytes <- myanalytes
+
+mat_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  #print(i)
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Mat_PID","Study",curr_analyte)
+  
+  curr_data <- Mat_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+  
+  mat_list_Targeted[[i]] <- curr_data
+  names(mat_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+```{r}
+Fast_Merge <- function(mylist = All_Perc,ID_Col = "Child_PID"){
+  
+
+  results_df <- mylist[[1]] %>% 
+   dplyr::select(-any_of("Units")) %>% 
+   group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    #summarise(value = mean(col_name,na.rm = T))
+  
+
+  for(i in 2:length(mylist)){
+    
+    #print(i)
+    
+    curr_df <- mylist[[i]] %>% 
+   dplyr::select(-any_of("Units")) %>% 
+      group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    
+    #names(curr_df) <- c(ID_Col,"Study",metab_new)
+    results_df <- full_join(results_df, curr_df, by = c(ID_Col,"Study"))
+
+  }
+  
+  return(results_df)  
+}
+
+```
+
+```{r}
+Child_All_Exposures <- Fast_Merge(child_list_Targeted,ID_Col = "Child_PID")
+Mat_All_Exposures <- Fast_Merge(mat_list_Targeted,ID_Col = "Mat_PID") %>% 
+    mutate(across(where(is.numeric), ~ifelse(is.infinite(.), NA, .)))
+
+
+```
+
+```{r}
+Location_Data_Child <- left_join(Child_All_Exposures,Child_SDOH,by = c("Child_PID","Study")) %>% 
+  mutate(Location = ifelse(Study == "NHANES","NHANES-USA",Location))  %>% 
+  mutate(Location = factor(Location, levels = c(
+    # 1) National
+    "NHANES-USA",
+
+    # 2) U.S. Locations
+    "Baltimore",
+    "Denver",
+    "Sacramento",
+    "Syracuse",
+    "NorthEast_US",
+    "United_States",
+    "Washington_State",
+
+    # 3) International Locations
+    "Bangladesh",
+    "Chile",
+    "Ecuador",
+    "Finland",
+    "Germany",
+    "Mexico_City",
+    "South_Africa",
+    "Sweden",
+    "Uganda",
+
+    # 4) Optional: NA last
+    "NA"
+  ))) %>% 
+  dplyr::filter(!is.na(Location)) %>% 
+  dplyr::select(Child_PID,Study,Location,everything())
+
+Location_Data_Mat <- left_join(Mat_All_Exposures,Mat_SDOH,by = c("Mat_PID","Study")) %>% 
+  mutate(Location = ifelse(Study == "NHANES","NHANES-USA",Location))  %>% 
+  mutate(Location = factor(Location, levels = c(
+    # 1) National
+    "NHANES-USA",
+    
+    # 2) U.S. Locations
+    "Boston",
+    "California",
+    "Los_Angeles",
+    "Massachusetts",
+    "Michigan",
+    "New_Hampshire",
+    "Puerto Rico",
+    "Sacramento",
+    "United_States",
+    
+    # 3) International Locations
+    "Brazil",
+    "Guatemala",
+    "Mexico_City",
+    "Nicaragua",
+    "South_Africa",
+    "Suriname",
+    
+    # 4) Optional: NA last
+    "NA"
+  ))) %>% 
+  dplyr::filter(!is.na(Location))%>% 
+  dplyr::select(Mat_PID,Study,Location,everything())
+
+```
+
+```{r}
+
+
+Location_Data_Child_means <- Location_Data_Child %>%
+  dplyr::select(-Child_PID) %>% 
+  group_by(Location, Study) %>%
+  summarise(
+    across(
+      where(is.numeric),
+      ~ mean(.x, na.rm = TRUE),
+      .names = "mean_{.col}"
+    ),
+    .groups = "drop"
+  ) %>% 
+  mutate(Population = "Child")
+
+
+global_mean_vec <- Location_Data_Child %>%
+  dplyr::select(-Child_PID) %>% 
+  select(where(is.numeric)) %>%
+  summarise(across(everything(), ~ mean(.x, na.rm = TRUE))) %>%
+  as.list() %>%
+  unlist(use.names = TRUE)
+
+
+
+Child_Exp_Means <- Location_Data_Child_means %>%
+  mutate(
+    across(starts_with("mean_"), ~ {
+      raw <- sub("^mean_", "", cur_column())
+      m   <- global_mean_vec[[raw]]
+      ifelse(is.na(.x) | is.na(m) | m == 0, NA_real_, 100 * abs(.x - m) / m)
+    }, .names = "absdev_pct_{.col}"),
+    across(starts_with("mean_"), ~ {
+      raw <- sub("^mean_", "", cur_column())
+      m   <- global_mean_vec[[raw]]
+      ifelse(is.na(.x) | is.na(m) | m == 0, NA_real_, 100 * ((.x - m) / m))
+    }, .names = "signeddev_pct_{.col}")
+  ) %>% 
+  dplyr::select(Location,Study,contains("signeddev_pct_")) %>% 
+  mutate(Population = "Child")
+
+
+
+```
+
+```{r}
+
+Location_Data_Mat_means <- Location_Data_Mat %>%
+  dplyr::select(-Mat_PID) %>% 
+  group_by(Location, Study) %>%
+  summarise(
+    across(
+      where(is.numeric),
+      ~ mean(.x, na.rm = TRUE),
+      .names = "mean_{.col}"
+    ),
+    .groups = "drop"
+  ) %>% 
+  mutate(Population = "Adult")
+
+
+
+global_mean_vec <- Location_Data_Mat %>%
+  dplyr::select(-Mat_PID) %>% 
+  select(where(is.numeric)) %>%
+  summarise(across(everything(), ~ mean(.x, na.rm = TRUE))) %>%
+  as.list() %>%
+  unlist(use.names = TRUE)
+
+
+
+Mat_Exp_Means <- Location_Data_Mat_means %>%
+  mutate(
+    across(starts_with("mean_"), ~ {
+      raw <- sub("^mean_", "", cur_column())
+      m   <- global_mean_vec[[raw]]
+      ifelse(is.na(.x) | is.na(m) | m == 0, NA_real_, 100 * abs(.x - m) / m)
+    }, .names = "absdev_pct_{.col}"),
+    across(starts_with("mean_"), ~ {
+      raw <- sub("^mean_", "", cur_column())
+      m   <- global_mean_vec[[raw]]
+      ifelse(is.na(.x) | is.na(m) | m == 0, NA_real_, 100 * ((.x - m) / m))
+    }, .names = "signeddev_pct_{.col}")
+  ) %>% 
+  dplyr::select(Location,Study,contains("signeddev_pct_"))%>% 
+  mutate(Population = "Adult")
+
+```
+
+```{r}
+All_Exp_Means <- bind_rows(Child_Exp_Means,Mat_Exp_Means) %>% 
+  dplyr::select(Location,Study,Population,everything())
+
+
+cols_to_keep <- All_Exp_Means %>%
+  summarise(across(everything(), ~ sum(!is.na(.x)))) %>%   # count non-NA per column
+  pivot_longer(everything(), names_to = "col", values_to = "non_na_count") %>%
+  filter(non_na_count > 3) %>%
+  pull(col)
+
+All_Exp_Means <- All_Exp_Means %>% 
+    select(all_of(cols_to_keep)) 
+
+
+```
+
+Plot On Map
+----
+```{r}
+coords_lookup <- tibble::tribble(
+  ~Location,             ~Latitude,        ~Longitude,
+  "Baltimore",           39.2992,    -76.6094,
+  "Denver",              39.7392,    -104.9903,
+  "Sacramento",          38.5758,    -121.4789,   # from latlong.net :contentReference[oaicite:0]{index=0}
+  "Syracuse",            43.0481,    -76.1474,
+  "NorthEast_US",        43.0000,    -75.0000,   # approximate centre of NE US
+  "United_States",       39.8283,    -98.5795,   # approximate geographic centre
+  "Washington_State",    47.7511,    -120.7401,  # from latlong.net :contentReference[oaicite:1]{index=1}
+  "Bangladesh",          23.6849,     90.3563,   # from coordinatesfinder :contentReference[oaicite:2]{index=2}
+  "Chile",              -35.6751,    -71.5430,
+  "Ecuador",             -1.8312,     -78.1834,
+  "Finland",             61.9241,     25.7482,
+  "Germany",             51.1657,     10.4515,
+  "Mexico_City",         19.4326,     -99.1332,
+  "South_Africa",       -30.5595,     22.9375,
+  "Sweden",              60.1282,     18.6435,
+  "Uganda",               1.3733,     32.2903,
+  "Boston",              42.3601,     -71.0589,
+  "California",          36.7783,    -119.4179,
+  "Los_Angeles",         34.0522,    -118.2437,
+  "Massachusetts",       42.4072,     -71.3824,
+  "Michigan",            44.7183,     -85.4023,
+  "New_Hampshire",       44.0000,     -71.5000,   # from latlong.net :contentReference[oaicite:3]{index=3}
+  "Puerto Rico",         18.2208,     -66.5901,
+  "Brazil",             -14.2350,     -51.9253,
+  "Guatemala",           15.7835,     -90.2308,
+  "Nicaragua",          12.8654,     -85.2072,
+  "Suriname",            4.0000,     -56.0000    # from maps of world :contentReference[oaicite:4]{index=4}
+)
+
+geo_hierarchy <- tibble::tribble(
+  ~Location,                       ~L0_Site,             ~L1_StateProvince, ~L2_Country,        ~L3_MacroRegion,
+  "United_States",                 NA,                   NA,                "United States",    "North America",
+  "Boston",                        "Boston",             "Massachusetts",   "United States",    "North America",
+  "Massachusetts",                 NA,                   "Massachusetts",   "United States",    "North America",
+  "New_Hampshire",                 NA,                   "New Hampshire",   "United States",    "North America",
+  "Baltimore",                     "Baltimore",          "Maryland",        "United States",    "North America",
+  "Syracuse",                      "Syracuse",           "New York",        "United States",    "North America",
+  "Michigan",                      NA,                   "Michigan",        "United States",    "North America",
+  "California",                    NA,                   "California",      "United States",    "North America",
+  "Los_Angeles",                   "Los Angeles",        "California",      "United States",    "North America",
+  "Sacramento",                    "Sacramento",         "California",      "United States",    "North America",
+  "Yakima Valley,Washington",      "Yakima Valley",      "Washington",      "United States",    "North America",
+  "Denver",                        "Denver",             "Colorado",        "United States",    "North America",
+  "Northern Karst,Puerto Rico",    "Northern Karst",     NA,     "United States",    "North America",
+  "Mexico_City",                   "Mexico City",        NA,                "Mexico",           "North America",
+  "Suchitepéquez,Guatemala",       "Suchitepéquez",      NA,                "Guatemala",        "Central America",
+  "Managua,Nicaragua",             "Managua",            NA,                "Nicaragua",        "Central America",
+  "Suriname",                      NA,                   NA,                "Suriname",         "South America",
+  "Bahia, Brazil",                 "Bahia",              NA,           "Brazil",           "South America",
+  "Santiago,Chile",                "Santiago",           NA,                "Chile",            "South America",
+  "Pedro Moncayo, Ecuador",        "Pedro Moncayo",      NA,                "Ecuador",          "South America",
+  "Turku,Finland",                 "Turku",              NA,                "Finland",          "Europe",
+  "Munich,Germany",                "Munich",             NA,         "Germany",          "Europe",
+  "Malmö,Sweden",                  "Malmö",              NA,           "Sweden",           "Europe",
+  "Cape Town,South Africa",        "Cape Town",         NA,    "South Africa",     "Africa",
+  "Kampala,Uganda",                "Kampala",            NA,                "Uganda",           "Africa",
+  "Pabna,Bangladesh",              "Pabna",             NA,         "Bangladesh",       "South Asia"
+) %>%
+  mutate(
+    # A helpful canonical version for plotting / joins (optional)
+    Location_clean = Location %>%
+      str_replace_all("_", " ") %>%
+      str_squish()
+  )
+
+```
+
+Location and Raw Data Plot
+------
+```{r}
+df_long_child <- Location_Data_Child %>%
+  pivot_longer(
+    cols = -(Child_PID:Location),
+    names_to = "analyte",
+    values_to = "value"
+  ) %>%
+  filter(!is.na(value)) %>%
+  group_by(analyte) %>%
+  mutate(
+    log_value = log10(value + 1e-6),
+    z_value   = as.numeric(scale(log_value))
+  ) %>%
+  ungroup()
+
+df_long_mat <- Location_Data_Mat %>%
+  pivot_longer(
+    cols = -(Mat_PID:Location),
+    names_to = "analyte",
+    values_to = "value"
+  ) %>%
+  filter(!is.na(value)) %>%
+  group_by(analyte) %>%
+  mutate(
+    log_value = log10(value + 1e-6),
+    z_value   = as.numeric(scale(log_value))
+  ) %>%
+  ungroup()
+
+df_long <- bind_rows(df_long_child,df_long_mat)
+ind_exposome <- df_long %>%
+  group_by(Child_PID, Location) %>%
+  summarise(
+    exposome_IQR = IQR(z_value, na.rm = TRUE),
+    n_analytes   = n(),
+    .groups = "drop"
+  ) %>%
+  filter(n_analytes >= 2) %>% 
+  group_by(Location) %>%
+  summarise(
+    median_IQR = median(exposome_IQR),
+    IQR_IQR    = IQR(exposome_IQR),
+    n_people   = n()
+  )
+
+
+
+loc_iqr <- df_long %>%
+  mutate(Category = case_when(
+    analyte %in% Trace_Elements_Theme ~ "TraceElements",
+    analyte %in% Phenols_Theme ~ "Phenols",
+    analyte %in% Phthalates_Theme ~ "Phthalates",
+    analyte %in% PAH_Theme ~ "PAH",
+    analyte %in% PCB_Theme ~ "PCB",
+    analyte %in% Parabens_Theme ~ "Parabens",
+    analyte %in% Smoking_Theme ~ "Smoking",
+    analyte %in% Inflam_Theme ~ NA,
+    analyte %in% Pesticide_Theme ~ "Pesticides",
+    analyte %in% VOC_Theme ~ "VOCs",
+    analyte %in% OXID_Theme ~ NA,
+    analyte %in% Flame_Retardant_Theme ~ "FlameRetardants",
+    analyte %in% Other_Theme ~ NA,
+    analyte %in% PFAS_Theme ~ "PFAS"
+  )) %>% 
+    dplyr::filter(!is.na(Category)) %>% 
+    group_by(Location,Category) %>%
+  summarise(
+    exposome_IQR = IQR(log_value, na.rm = TRUE),
+    exposome_MAD = mad(log_value, na.rm = TRUE),
+    n_obs = n()
+  )    
+
+
+
+```
+
+
+
+
+
+```{r}
+
+Location_Mapping <- tibble::tibble(
+  Location = c("NorthEast_US", "Washington_State", "Bangladesh", 
+               "Chile","Finland","Germany","Sweden",
+               "South_Africa","Uganda","Tobago","Ecuador","Puerto Rico","Brazil","Nicaragua",
+               "Guatemala"),
+  New_Location = c("Boston", "Yakima Valley,Washington", "Pabna,Bangladesh", 
+                   "Santiago,Chile","Turku,Finland","Munich,Germany","Malmö,Sweden",
+                   "Cape Town,South Africa","Kampala,Uganda","Tobago,Trinidad and Tobago",
+                   "Pedro Moncayo, Ecuador","Northern Karst,Puerto Rico","Bahia, Brazil",
+                   "Managua,Nicaragua","Suchitepéquez,Guatemala")
+)
+
+
+location_colors <- c(
+  # --- National anchors ---
+  "NHANES-USA"      = "#C51B7D",
+  "United_States"   = "#3C3C3C",
+
+  # --- U.S. East Coast / Northeast (cool deep blues) ---
+  "Boston"          = "#08306B",
+  "Massachusetts"   = "#08519C",
+  "New_Hampshire"   = "#2171B5",
+  "New_York"        = "#2171C1",
+  "Baltimore"       = "#6BAED6",
+  "Michigan"        = "#C6DBEF",  
+  "Syracuse"        = "#9ECAE1",
+
+  # --- U.S. West Coast (distinct teals/greens) ---
+  "California"       = "#00441B",
+  "Los_Angeles"      = "#1B7837",
+  "Sacramento"       = "#5AAE61",
+  "Yakima Valley,Washington" = "#A6DBA0",
+
+  # --- U.S. Mountain/Plains (olive) ---
+  "Denver"           = "#B8DE29",
+
+  # --- Caribbean (aqua) ---
+  "Northern Karst,Puerto Rico"      = "#00A7C2",
+
+  # --- Latin America (warm reds/oranges) ---
+  "Mexico_City"      = "#D7301F",
+  "Suchitepéquez,Guatemala"        = "#FC8D59",
+  "Managua,Nicaragua"        = "#FDBB84",
+  "Suriname"         = "#FDD49E",
+  "Bahia, Brazil"           = "#BD0026",
+  "Santiago,Chile"            = "#F46D43",
+  "Pedro Moncayo, Ecuador"          = "#FDAE61",
+  "Tobago,Trinidad and Tobago"           = "#FDAA68",
+
+      # --- Europe (greens) ---
+     "Turku,Finland" = "#B197FC",  # lavender violet
+    "Munich,Germany" = "#C4A7E7",  # muted lilac
+    "Malmö,Sweden"  = "#D7BCE8" ,  # pale orchid
+
+
+  # --- Africa (earth tones) ---
+  "Cape Town,South Africa"     = "#8C510A",
+  "Kampala,Uganda"           = "#BF812D",
+
+  # --- South Asia ---
+  "Pabna,Bangladesh"       = "#A50F15",
+
+  # --- Missing ---
+  "NA"               = "#9E9E9E"
+)
+
+```
+
+
+```{r}
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+vi_data <- df_long %>%
+  mutate(Category = case_when(
+    analyte %in% Trace_Elements_Theme ~ "TraceElements",
+    analyte %in% Phenols_Theme ~ "Phenols",
+    analyte %in% Phthalates_Theme ~ "Phthalates",
+    analyte %in% PAH_Theme ~ "PAH",
+    analyte %in% PCB_Theme ~ "PCB",
+    analyte %in% Parabens_Theme ~ "Parabens",
+    analyte %in% Smoking_Theme ~ "Smoking",
+    analyte %in% Inflam_Theme ~ NA,
+    analyte %in% Pesticide_Theme ~ "Pesticides",
+    analyte %in% VOC_Theme ~ "VOCs",
+    analyte %in% OXID_Theme ~ NA,
+    analyte %in% Flame_Retardant_Theme ~ "FlameRetardants",
+    analyte %in% Other_Theme ~ NA,
+    analyte %in% PFAS_Theme ~ "PFAS"
+  )) %>% 
+    dplyr::filter(!is.na(Category))  %>% 
+  left_join(.,Location_Mapping, by = "Location") %>% 
+  mutate(Location = coalesce(New_Location,Location)) %>% 
+  mutate(Location = factor(Location, levels = c(
+    # 1) National
+    "NHANES-USA",
+
+    # 2) U.S. Locations
+    "Baltimore",
+    "Denver",
+    "Sacramento",
+    "Syracuse",
+    "Boston",
+    "New_York",
+    "United_States",
+    "Yakima Valley,Washington",
+
+    # 3) International Locations
+    "Pabna,Bangladesh",
+    "Santiago,Chile",
+    "Pedro Moncayo, Ecuador",
+    "Turku,Finland",
+    "Munich,Germany",
+    "Mexico_City",
+    "Cape Town,South Africa",
+    "Malmö,Sweden",
+    "Kampala,Uganda",
+    "Tobago,Trinidad and Tobago",
+
+    # 4) Optional: NA last
+    "NA"
+  ))) %>% 
+  dplyr::filter(!is.na(Location)) 
+  
+
+# 1) Order locations by median concentration (across all categories)
+loc_order <- vi_data %>%
+  group_by(Location) %>%
+  summarise(loc_med = median(log_value, na.rm = TRUE), .groups = "drop") %>%
+  arrange(loc_med) %>%
+  pull(Location)
+
+vi_data2 <- vi_data %>%
+  mutate(
+    Location = factor(Location, levels = loc_order),
+    Category = factor(Category)
+  )
+
+vi_data3 <- vi_data2 %>%
+  mutate(
+    Category = fct_reorder(Category, log_value, .fun = median, na.rm = TRUE),
+    Location = factor(Location)  # keep your existing order, or reorder similarly if you want
+  )
+
+vi_data4 <- left_join(vi_data3,geo_hierarchy, by = "Location") 
+
+ridge_plot <- ggplot(
+  vi_data3,
+  aes(
+    x = log_value,
+    y = Category,
+    fill = Location
+  )
+) +
+  # Ridges with built-in quantile lines (median + quartiles)
+  ggridges::geom_density_ridges(
+    alpha = 0.78,
+    scale = 1.05,
+    rel_min_height = 0.01,
+    color = "white",
+    linewidth = 0.25
+    #quantile_lines = TRUE,
+    #quantiles = c(0.25, 0.5, 0.75),
+    #quantile_line_size = 0.35
+  ) +
+  # Fill colors for locations
+  scale_fill_manual(
+    values = location_colors,
+    guide = guide_legend(
+      title = NULL,
+      byrow = TRUE,
+      nrow = 6,
+      override.aes = list(alpha = 1)
+    )
+  ) +
+  # Subtle global reference line
+  geom_vline(
+    xintercept = median(vi_data3$log_value, na.rm = TRUE),
+    linetype = "dashed",
+    linewidth = 0.45,
+    alpha = 0.55
+  ) +
+  # Labels
+  labs(
+    x = expression(log[10]*"(concentration)"),
+    y = NULL,
+    title = "Raw exposure distributions differ by location"
+  ) +
+  # Theme polish
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.key.height = unit(0.35, "cm"),
+    legend.key.width  = unit(0.7, "cm"),
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "gray35"),
+    panel.grid.major.x = element_line(color = "gray92", linewidth = 0.35),
+    panel.grid.minor = element_blank(),
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+
+
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Summary_Ridge.pdf", height = 11,width = 8)
+print(ridge_plot)
+dev.off()
+```
+
+
+```{r}
+vi_hier <- vi_data4 %>%
+  pivot_longer(
+    cols = c(L0_Site, L1_StateProvince, L2_Country, L3_MacroRegion),
+    names_to = "Geo_Level",
+    values_to = "Geo_Unit"
+  ) %>%
+  filter(!is.na(Geo_Unit))
+
+vi_hier2 <- vi_hier %>%
+  group_by(Geo_Level, Geo_Unit) %>%
+  mutate(med = median(log_value, na.rm = TRUE)) %>%
+  ungroup() %>%
+  group_by(Geo_Level) %>%
+  mutate(Geo_Unit_ord = fct_reorder(Geo_Unit, med)) %>%
+    mutate(Geo_Unit_ord = fct_rev(Geo_Unit_ord)) %>% 
+  ungroup()
+
+vi_hier2_pretty <- vi_hier2 %>%
+  mutate(
+    # Clean the hierarchy names (facetless legend)
+    Geo_Level_pretty = case_when(
+      str_detect(Geo_Level, "^L0") ~ "Site",
+      str_detect(Geo_Level, "^L1") ~ "State/Province",
+      str_detect(Geo_Level, "^L2") ~ "Country",
+      str_detect(Geo_Level, "^L3") ~ "Macroregion",
+      TRUE ~ Geo_Level
+    ),
+
+    # Clean unit names (remove leading "L0_" / "L1_" / ... / "LX_")
+    Geo_Unit_pretty = Geo_Unit_ord %>%
+      as.character() %>%
+      str_replace("^L\\d+_", "") %>%   # removes L0_, L1_, L2_, L3_
+      str_replace("^LX_", "") %>%      # in case you literally have LX_
+      str_squish() %>%
+      factor(levels = levels(Geo_Unit_ord)) # keep your existing order
+  )
+
+# Optional: if you want the legend ordered small -> large
+vi_hier2_pretty <- vi_hier2_pretty %>%
+  mutate(
+    Geo_Level_pretty = factor(
+      Geo_Level_pretty,
+      levels = c("Site", "State/Province", "Country", "Macroregion")
+    )
+  )
+
+ridge_plot_hier <- ggplot(
+  vi_hier2_pretty,
+  aes(x = log_value, y = Geo_Unit_pretty, fill = Geo_Level_pretty)
+) +
+  ggridges::geom_density_ridges(
+    alpha = 0.82,
+    scale = 1.05,
+    rel_min_height = 0.01,
+    color = "white",
+    linewidth = 0.25
+  ) +
+  # # Optional: add a median tick per ridge (very helpful visually)
+  # stat_summary(
+  #   fun = median,
+  #   geom = "point",
+  #   size = 0.9,
+  #   alpha = 0.85,
+  #   color = "black"
+  # ) +
+  # # Optional: global median reference
+  # geom_vline(
+  #   xintercept = median(vi_hier2_pretty$log_value, na.rm = TRUE),
+  #   linetype = "dashed",
+  #   linewidth = 0.45,
+  #   alpha = 0.45
+  # ) +
+  guides(
+    fill = guide_legend(
+      title = NULL,
+      nrow = 1,
+      byrow = TRUE,
+      override.aes = list(alpha = 1)
+    )
+  ) +
+  labs(
+    x = expression(log[10]*"(concentration)"),
+    y = NULL,
+    title = "Exposure distributions across the geographic hierarchy"
+    #subtitle = "Ridges show distributions; points mark medians; dashed line is the global median"
+  ) +
+  scale_fill_manual(values = mypal) +
+  theme_classic(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    legend.key.height = unit(0.35, "cm"),
+    legend.key.width  = unit(0.8, "cm"),
+
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "gray35"),
+
+    # cleaner grid: x only
+    panel.grid.major.x = element_line(color = "gray92", linewidth = 0.35),
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor = element_blank(),
+
+    axis.text.y = element_text(size = 9),
+    axis.text.x = element_text(size = 10),
+
+    axis.line.y = element_blank(),
+    axis.ticks.y = element_blank()
+  )
+
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Hier_Summary_Ridge.pdf", height = 14,width = 8)
+print(ridge_plot_hier)
+dev.off()
+
+```
+
+
+```{r}
+vi_data <- df_long %>%
+  mutate(Category = case_when(
+    analyte %in% Trace_Elements_Theme ~ "TraceElements",
+    analyte %in% Phenols_Theme ~ "Phenols",
+    analyte %in% Phthalates_Theme ~ "Phthalates",
+    analyte %in% PAH_Theme ~ "PAH",
+    analyte %in% PCB_Theme ~ "PCB",
+    analyte %in% Parabens_Theme ~ "Parabens",
+    analyte %in% Smoking_Theme ~ "Smoking",
+    analyte %in% Inflam_Theme ~ NA,
+    analyte %in% Pesticide_Theme ~ "Pesticides",
+    analyte %in% VOC_Theme ~ "VOCs",
+    analyte %in% OXID_Theme ~ NA,
+    analyte %in% Flame_Retardant_Theme ~ "FlameRetardants",
+    analyte %in% Other_Theme ~ NA,
+    analyte %in% PFAS_Theme ~ "PFAS"
+  )) %>% 
+    dplyr::filter(!is.na(Category))  %>% 
+  left_join(.,Location_Mapping, by = "Location") %>% 
+  mutate(Location = coalesce(New_Location,Location)) %>% 
+  mutate(Location = factor(Location, levels = c(
+    # 1) National
+    "NHANES-USA",
+
+    # 2) U.S. Locations
+    "Baltimore",
+    "Denver",
+    "Sacramento",
+    "Syracuse",
+    "Boston",
+    "New_York",
+    "United_States",
+    "Yakima Valley,Washington",
+
+    # 3) International Locations
+    "Pabna,Bangladesh",
+    "Santiago,Chile",
+    "Pedro Moncayo, Ecuador",
+    "Turku,Finland",
+    "Munich,Germany",
+    "Mexico_City",
+    "Cape Town,South Africa",
+    "Malmö,Sweden",
+    "Kampala,Uganda",
+    "Tobago,Trinidad and Tobago",
+
+    # 4) Optional: NA last
+    "NA"
+  ))) %>% 
+  dplyr::filter(!is.na(Location)) 
+
+
+analyte_iqr <- vi_data %>%
+  group_by(Location, Category, analyte) %>%
+  summarise(
+    iqr_log = IQR(log_value, na.rm = TRUE),
+    n = sum(!is.na(log_value)),
+    .groups = "drop"
+  ) 
+
+
+iqr_ridge <- ggplot(analyte_iqr, aes(x = iqr_log, y = Category, fill = Location)) +
+  geom_density_ridges(alpha = 0.8, scale = 1.1, color = "white", linewidth = 0.25) +
+  theme_classic(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold")
+  ) +
+    scale_fill_manual(
+    values = location_colors,
+    guide = guide_legend(
+      title = NULL,
+      byrow = TRUE,
+      nrow = 6,
+      override.aes = list(alpha = 1)
+    )
+  ) +
+  labs(
+    x = "IQR of log10(concentration) (per analyte)",
+    y = NULL,
+    title = "Distribution of analyte variability by location within category"
+  )
+
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/IQR_Summary_Ridge.pdf", height = 11,width = 8)
+print(iqr_ridge)
+dev.off()
+
+```
+
+
+Rank Plot
+-----
+```{r}
+
+All_Means <- bind_rows(Location_Data_Child_means,Location_Data_Mat_means) %>% 
+    left_join(.,coords_lookup, by = "Location") %>% 
+  dplyr::select(Location,Latitude,Longitude,Study,Population,everything())  %>% 
+  left_join(.,Location_Mapping, by = "Location") %>% 
+  mutate(Location = coalesce(New_Location,Location)) %>% 
+mutate(
+    Location = factor(Location,
+      levels = c(
+        "NHANES-USA", "United_States",
+        "Boston", "Massachusetts", "New_Hampshire","New_York", "NorthEast_US", "Baltimore", "Syracuse", "Michigan",
+        "California", "Los_Angeles", "Sacramento", "Yakima Valley,Washington",
+        "Denver",
+        "Northern Karst,Puerto Rico",
+        "Tobago,Trinidad and Tobago",
+        "Mexico_City", "Suchitepéquez,Guatemala", "Managua,Nicaragua", "Suriname", "Bahia, Brazil", "Santiago,Chile", "Pedro Moncayo, Ecuador",
+       "Turku,Finland","Munich,Germany","Malmö,Sweden",
+        "Cape Town,South Africa", "Kampala,Uganda",
+        "Pabna,Bangladesh"
+      )
+    )
+  ) %>%
+  mutate(
+    Region_Group = case_when(
+      Location %in% c("NHANES-USA","United_States") ~ "National",
+      Location %in% c("Boston","Massachusetts","New_Hampshire","NorthEast_US","Baltimore","Syracuse","Michigan") ~ "US Northeast",
+      Location %in% c("California","Los_Angeles","Sacramento","Yakima Valley,Washington") ~ "US West",
+      Location %in% c("Denver") ~ "US Mountains/Plains",
+      Location %in% c("Northern Karst,Puerto Rico","Tobago,Trinidad and Tobago") ~ "Caribbean",
+      Location %in% c("Mexico_City","Suchitepéquez,Guatemala","Managua,Nicaragua","Suriname",
+                      "Bahia, Brazil","Santiago,Chile","Pedro Moncayo, Ecuador") ~ "Latin America",
+      Location %in% c("Turku,Finland","Munich,Germany","Malmö,Sweden") ~ "Europe",
+      Location %in% c("Cape Town,South Africa", "Kampala,Uganda") ~ "Africa",
+      Location %in% c("Pabna,Bangladesh") ~ "South Asia",
+      TRUE ~ "Other"
+    )
+  )
+
+
+
+df_long <- All_Means %>%
+  pivot_longer(
+    cols = starts_with("mean_"),
+    names_to = "analyte",
+    values_to = "mean_value"
+  ) %>%
+  filter(!is.na(mean_value),
+         !is.na(Longitude),
+         !is.na(Latitude))
+
+
+rank_df <- df_long %>%
+  group_by(analyte) %>%
+  mutate(
+    n_sites = n(),
+    site_rank = rank(mean_value, ties.method = "average"),
+    norm_rank = ifelse(
+      n_sites > 1,
+      (site_rank - 1) / (n_sites - 1),
+      NA_real_
+    )
+  ) %>%
+  ungroup()
+
+rank_summary <- rank_df %>%
+  group_by(Location) %>%
+  summarise(
+    median_norm_rank = median(norm_rank, na.rm = TRUE),
+    iqr_norm_rank    = IQR(norm_rank, na.rm = TRUE),
+    Latitude  = first(Latitude),
+    Longitude = first(Longitude)
+  )
+
+ggplot(rank_summary,
+       aes(x = reorder(Location, median_norm_rank),
+           y = median_norm_rank)) +
+  geom_point(size = 3) +
+  geom_errorbar(
+    aes(ymin = median_norm_rank - iqr_norm_rank/2,
+        ymax = median_norm_rank + iqr_norm_rank/2),
+    width = 0.2
+  ) +
+  coord_flip() +
+  theme_classic(base_size = 12) +
+  labs(
+    x = "Site",
+    y = "Median rank across analytes",
+    title = "Sites occupy widely varying ranks across analytes"
+  )
+
+unique(rank_summary$Location)
+
+```
+
+```{r}
+
+rank_long <- left_join(rank_df,geo_hierarchy, by = "Location") %>% 
+  tidyr::pivot_longer(
+    cols = c(L0_Site, L1_StateProvince, L2_Country, L3_MacroRegion),
+    names_to  = "Geo_Level",
+    values_to = "Geo_Unit"
+  ) %>%
+  filter(!is.na(Geo_Unit)) %>% 
+  group_by(Geo_Level, Geo_Unit) %>%
+  summarise(
+    median_norm_rank = median(norm_rank, na.rm = TRUE),
+    iqr_norm_rank    = IQR(norm_rank, na.rm = TRUE),
+    n_obs            = sum(!is.na(norm_rank)),
+    Latitude         = median(Latitude,  na.rm = TRUE),
+    Longitude        = median(Longitude, na.rm = TRUE),
+    .groups = "drop"
+  ) 
+
+iqr_by_level <- rank_long %>%
+  group_by(Geo_Level) %>%
+  summarise(
+    median_IQR = median(iqr_norm_rank, na.rm = TRUE),
+    mean_IQR   = mean(iqr_norm_rank,   na.rm = TRUE),
+    p25_IQR    = quantile(iqr_norm_rank, 0.25, na.rm = TRUE),
+    p75_IQR    = quantile(iqr_norm_rank, 0.75, na.rm = TRUE),
+    n_units    = n()
+  )
+
+rank_by_region <- ggplot(
+  rank_long,
+  aes(
+    x = reorder(Geo_Unit, median_norm_rank),
+    y = median_norm_rank
+  )
+) +
+  geom_point(size = 2.8) +
+  geom_errorbar(
+    aes(
+      ymin = median_norm_rank - iqr_norm_rank / 2,
+      ymax = median_norm_rank + iqr_norm_rank / 2
+    ),
+    width = 0.25,
+    alpha = 0.8
+  ) +
+  coord_flip() +
+  facet_wrap(~ Geo_Level, scales = "free_y", ncol = 1) +
+  theme_classic(base_size = 12) +
+  labs(
+    x = NULL,
+    y = "Median normalized rank across analytes",
+    title = "Exposure rank heterogeneity decreases with geographic aggregation",
+    subtitle = "Points show median rank; error bars show IQR"
+  )
+
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Rank_ByRegion.pdf", height = 11,width = 8)
+print(rank_by_region)
+dev.off()
+
+```
+
+```{r}
+
+
+rank_ridge_df <- rank_long %>%
+  filter(!is.na(median_norm_rank), !is.na(Geo_Unit), !is.na(Geo_Level)) %>%
+  group_by(Geo_Level, Geo_Unit) %>%
+  mutate(med = median(median_norm_rank, na.rm = TRUE)) %>%
+  ungroup() %>%
+  # ordering within each facet by median (like your original plot)
+  group_by(Geo_Level) %>%
+  mutate(Geo_Unit_ord = fct_reorder(Geo_Unit, med)) %>%
+  ungroup()
+
+rank_by_region_ridge <- ggplot(
+  rank_ridge_df,
+  aes(x = median_norm_rank, y = Geo_Unit_ord, fill = Geo_Level)
+) +
+  geom_density_ridges(
+    alpha = 0.8,
+    scale = 1.1,
+    color = "white",
+    linewidth = 0.25,
+    rel_min_height = 0.01
+  ) +
+  facet_wrap(~ Geo_Level, scales = "free_y", ncol = 1) +
+  theme_classic(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold")
+  ) +
+  labs(
+    x = "Normalized rank (per analyte)",
+    y = NULL,
+    title = "Exposure rank heterogeneity decreases with geographic aggregation",
+    subtitle = "Ridges show the distribution of per-analyte normalized ranks within each geographic unit"
+  )
+
+rank_by_region_ridge
+
+```
+
+
+```{r}
+
+plot_df <- rank_df %>% 
+  mutate(analyte = str_remove(analyte, "mean_")) %>% 
+    mutate(Category = case_when(
+    analyte %in% Trace_Elements_Theme ~ "TraceElements",
+    analyte %in% Phenols_Theme ~ "Phenols",
+    analyte %in% Phthalates_Theme ~ "Phthalates",
+    analyte %in% PAH_Theme ~ "PAH",
+    analyte %in% PCB_Theme ~ "PCB",
+    analyte %in% Parabens_Theme ~ "Parabens",
+    analyte %in% Smoking_Theme ~ "Smoking",
+    analyte %in% Inflam_Theme ~ NA,
+    analyte %in% Pesticide_Theme ~ "Pesticides",
+    analyte %in% VOC_Theme ~ "VOCs",
+    analyte %in% OXID_Theme ~ NA,
+    analyte %in% Flame_Retardant_Theme ~ "FlameRetardants",
+    analyte %in% Other_Theme ~ NA,
+    analyte %in% PFAS_Theme ~ "PFAS"
+  )) %>% 
+    dplyr::filter(!is.na(Category)) 
+
+ggplot(plot_df, aes(x = Category, y = Location, fill = site_rank)) +
+  geom_tile() +
+  scale_fill_viridis_c(direction = -1) +
+  theme_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(
+    fill = "Rank",
+    title = "Site-specific exposure patterns vary across analytes"
+  )
+
+```
+
+
+
+```{r}
+df_long %>% 
+  mutate(analyte = str_remove(analyte, "mean_")) %>% 
+    mutate(Category = case_when(
+    analyte %in% Trace_Elements_Theme ~ "TraceElements",
+    analyte %in% Phenols_Theme ~ "Phenols",
+    analyte %in% Phthalates_Theme ~ "Phthalates",
+    analyte %in% PAH_Theme ~ "PAH",
+    analyte %in% PCB_Theme ~ "PCB",
+    analyte %in% Parabens_Theme ~ "Parabens",
+    analyte %in% Smoking_Theme ~ "Smoking",
+    analyte %in% Inflam_Theme ~ NA,
+    analyte %in% Pesticide_Theme ~ "Pesticides",
+    analyte %in% VOC_Theme ~ "VOCs",
+    analyte %in% OXID_Theme ~ NA,
+    analyte %in% Flame_Retardant_Theme ~ "FlameRetardants",
+    analyte %in% Other_Theme ~ NA,
+    analyte %in% PFAS_Theme ~ "PFAS"
+  )) %>% 
+    dplyr::filter(!is.na(Category)) %>% 
+  mutate(log_mean = log(mean_value)) %>% 
+  View
+
+```
+
+
+Orginal Map Plot
+----
+```{r}
+
+Plot_Data <-  All_Exp_Means %>% 
+  dplyr::select(Location,Study,Population,everything()) %>%
+  pivot_longer(
+    cols = starts_with("signeddev_pct_mean_"),
+    names_to = "Analyte",
+    values_to = "SignedDevPct",
+    names_pattern = "^signeddev_pct_mean_(.*)$"  # strip prefix to get analyte name
+  ) %>% 
+  group_by(Location) %>% 
+  summarise(mean_dev = mean(SignedDevPct,na.rm = T)) %>% 
+  left_join(.,coords_lookup, by = "Location") %>% 
+  mutate(Plot_Perc = case_when(
+    mean_dev <= quantile(mean_dev, 1/3, na.rm = TRUE) ~ "Lowest Tertile",
+    mean_dev <= quantile(mean_dev, 2/3, na.rm = TRUE) ~ "Middle Tertile",
+    TRUE ~ "Highest Tertile"
+  )) %>% 
+    mutate(Plot_Perc = fct_relevel(Plot_Perc, "Lowest Tertile", "Middle Tertile", "Highest Tertile"))
+
+```
+
+```{r}
+
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+lims <- quantile(Plot_Data$SignedDevPct, c(.02, .98), na.rm = TRUE)
+
+coord_quickmap(
+  xlim = c(-130, 150),   # longitude range (west to east)
+  ylim = c(-60, 75),     # latitude range (south to north)
+  expand = FALSE
+)
+
+# 3A) Map a single analyte (e.g., Arsenic "As")
+average_map <- ggplot() +
+  borders("world", colour = "grey80", fill = "lightyellow") +
+  geom_point(
+    data = Plot_Data,
+    aes(x = Longitude, y = Latitude, color = Plot_Perc),
+    size = 5
+  ) +
+  scale_color_manual(values = c("#075149FF","#F05C3BFF","#C80813FF")) +
+  # scale_color_gradient2(
+  #   low = "#1A9993FF", mid = "grey", high = "#FD7446FF", midpoint = 0,
+  #   limits = lims, oob = scales::squish,
+  #   labels = scales::percent_format(scale = 1)
+  # ) +
+coord_quickmap(
+  xlim = c(-130, 120),   # longitude range (west to east)
+  ylim = c(-60, 75),     # latitude range (south to north)
+  expand = FALSE
+) +
+  labs(
+    title = "Average Deviation from Global Mean for All Exposures",
+    color = "Total Exposure Levels",
+    subtitle = "+ above mean, − below mean"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(axis.line.x = element_blank(),
+          axis.line.y = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+         legend.position = "bottom")
+
+print(average_map)
+save(average_map, file = "../../../Output/Paper1_OutputV2/Plots/Avg_World_Map.RData")
+
+```
+
+```{r}
+# pdf(file = "../../../Output/Paper1_OutputV2/Plots/HHEAR_Map.pdf",height = 8,width = 10)
+# 
+# average_map <- ggplot() +
+#   borders("world", colour = "grey80", fill = "lightyellow") +
+#   geom_point(
+#     data = Plot_Data,
+#     aes(x = Longitude, y = Latitude),
+#     size = 3,
+#     color = "dodgerblue"
+#   ) +
+#   #scale_color_manual(values = c("#075149FF","#F05C3BFF","#C80813FF")) +
+#   # scale_color_gradient2(
+#   #   low = "#1A9993FF", mid = "grey", high = "#FD7446FF", midpoint = 0,
+#   #   limits = lims, oob = scales::squish,
+#   #   labels = scales::percent_format(scale = 1)
+#   # ) +
+# coord_quickmap(
+#   xlim = c(-130, 120),   # longitude range (west to east)
+#   ylim = c(-60, 75),     # latitude range (south to north)
+#   expand = FALSE
+# )  + 
+#   theme_classic() +
+#   theme(axis.line.x.bottom = element_blank(),
+#         axis.line.y  = element_blank(),
+#         axis.text.y = element_blank(),
+#         axis.text.x = element_blank(),
+#         axis.ticks = element_blank(),
+#         axis.title = element_blank())
+# 
+# print(average_map)
+# 
+# dev.off()
+```
+

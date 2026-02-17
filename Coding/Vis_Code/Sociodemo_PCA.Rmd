@@ -27,7 +27,6 @@ library(ggridges)
 # load("../../Output/Final_Model_Child_SDOH_Metab_Quantile_Results_QuantData.RData")
 # Quant_Results <- Child_SDOH_Metab_Quantile_Results_with_predictions_highlow_allresults
 load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
-rm(Child_SDOH_Metab_Quantile_Results,Child_SDOH_Metab_Quantile_Results_with_predictions)
 load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
 
 ```
@@ -231,101 +230,70 @@ Mat_SDOH <- bind_rows(ExWAS_SDOH_Exposures %>%
 ```{r}
 
 
-Child_Data_Targeted <- Targeted_Data_All %>% 
-  dplyr::filter(!is.na(Child_PID) ) %>% 
-  mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
-  mutate(
-    Concentration = case_when(
-      Units == "ug/dL" ~ Concentration * 10,
-      Units == "ng/L"  ~ Concentration / 1000,
-      Units == "pg/mL" ~ Concentration / 1000,
-      Units == "pg/ml" ~ Concentration / 1000,
-      Units == "mg/L"  ~ Concentration * 1000,
-      TRUE             ~ Concentration     # keep as is if no match
-    )
-  ) %>% 
-  dplyr::select(-Mat_PID) %>% 
-  group_by(Study,Child_PID,Analyte_Code) %>% 
-  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
-  ungroup()
-
-# Child_Data_Targeted %>% 
-#   dplyr::filter(Analyte_Code == "As") %>% View
-
-myanalytes <- unique(Child_Data_Targeted$Analyte_Code)
-child_analytes <- myanalytes
-
-child_list_Targeted <- list()
-for(i in seq_along(myanalytes)){
-  
-  curr_analyte <- myanalytes[i]
-  mycols <- c("Child_PID","Study",curr_analyte)
-  
-  curr_data <- Child_Data_Targeted %>% 
-    rownames_to_column("RN") %>% 
-    dplyr::filter(Analyte_Code == curr_analyte) %>% 
-    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
-    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
-    dplyr::select(all_of(mycols))
-  
-  child_list_Targeted[[i]] <- curr_data
-  names(child_list_Targeted)[i] <- curr_analyte
-  
+std_study <- function(x) {
+  stringr::str_remove(x, '[_]\\w+|:')  # CHECK: ensure this collapse is intended
 }
-
-
-```
-
-```{r}
-Mat_Data_Targeted <- Targeted_Data_All %>% 
-  dplyr::filter(!is.na(Mat_PID)) %>% 
-  dplyr::select(-Child_PID) %>% 
-  mutate(Units = ifelse(is.na(Units),"ng/mL",Units)) %>% 
-  mutate(
-    Concentration = case_when(
-      Units == "ug/dL" ~ Concentration * 10,
-      Units == "ng/L"  ~ Concentration / 1000,
-      Units == "pg/mL" ~ Concentration / 1000,
-      Units == "pg/ml" ~ Concentration / 1000,
-      Units == "mg/L"  ~ Concentration * 1000,
-      TRUE             ~ Concentration     # keep as is if no match
-    )
-  ) %>% 
-  dplyr::filter(!is.na(Analyte_Code)) %>% 
-  group_by(Study,Mat_PID,Analyte_Code) %>% 
-  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
-  mutate(across(everything(), ~ replace(., is.infinite(.), 0)))
-#Mat_Data_Targeted <- Targeted_Data_All %>% 
- # dplyr::filter(!is.na(Mat_PID)) %>% 
- # dplyr::select(-Child_PID) %>% 
- # dplyr::filter(!is.na(Analyte_Code)) %>% 
- # group_by(Study,Mat_PID,Analyte_Code) %>% 
- # summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
- # mutate(across(everything(), ~ replace(., is.infinite(.), 0)))
-
-
-myanalytes <- unique(Mat_Data_Targeted$Analyte_Code)
-
-mat_analytes <- myanalytes
-
-mat_list_Targeted <- list()
-for(i in seq_along(myanalytes)){
-  #print(i)
-  curr_analyte <- myanalytes[i]
-  mycols <- c("Mat_PID","Study",curr_analyte)
-  
-  curr_data <- Mat_Data_Targeted %>% 
-    rownames_to_column("RN") %>% 
-    dplyr::filter(Analyte_Code == curr_analyte) %>% 
-    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
-    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
-    dplyr::select(all_of(mycols))
-  
-  mat_list_Targeted[[i]] <- curr_data
-  names(mat_list_Targeted)[i] <- curr_analyte
-  
+to_ng_per_mL <- function(value, units) {
+  dplyr::case_when(
+    is.na(units)          ~ value,          # assume already ng/mL if missing
+    units == "ng/mL"      ~ value,
+    units == "ug/dL"      ~ value * 10,     # 1 ug/dL = 10 ng/mL
+    units %in% c("ng/L")  ~ value / 1000,   # 1 ng/L = 0.001 ng/mL
+    units %in% c("pg/mL","pg/ml") ~ value / 1000,  # 1000 pg/mL = 1 ng/mL
+    units == "mg/L"       ~ value * 1000,   # 1 mg/L = 1000 ng/mL
+    TRUE ~ value          # CHECK: any other units present?
+  )
 }
+Child_Data_Targeted <- Targeted_Data_All %>%
+  filter(!is.na(Child_PID)) %>%                           # keep child samples
+  mutate(
+    Units = if_else(is.na(Units), "ng/mL", Units),        # default units
+    Concentration = to_ng_per_mL(Concentration, Units)    # normalize units
+  ) %>%
+  select(-Mat_PID) %>%                                    # not needed for child
+  filter(!is.na(Analyte_Code)) %>%                        # require analyte code
+  group_by(Study, Child_PID, Analyte_Code) %>%            # average replicates
+  summarise(Concentration = mean(Concentration, na.rm = TRUE), .groups = "drop")
 
+child_analytes <- sort(unique(Child_Data_Targeted$Analyte_Code))  # vector of analytes
+
+# Build a list of per-analyte wide data.frames keyed by Child_PID ---------
+child_list_Targeted <- purrr::map(
+  child_analytes,
+  ~ Child_Data_Targeted %>%
+    filter(Analyte_Code == .x) %>%                         # one analyte
+    mutate(Study = std_study(Study)) %>%                   # standardize label
+    select(Study, Child_PID, Analyte_Code, Concentration) %>%
+    tidyr::pivot_wider(names_from = Analyte_Code, values_from = Concentration) %>%
+    select(Child_PID, Study, all_of(.x))                   # only current analyte col
+) %>%
+  rlang::set_names(child_analytes)
+
+# MATERNAL targeted data: long -> wide per-analyte list -------------------
+Mat_Data_Targeted <- Targeted_Data_All %>%
+  filter(!is.na(Mat_PID)) %>%                              # keep maternal samples
+  select(-Child_PID) %>%
+  mutate(
+    Units = if_else(is.na(Units), "ng/mL", Units),
+    Concentration = to_ng_per_mL(Concentration, Units)
+  ) %>%
+  filter(!is.na(Analyte_Code)) %>%
+  group_by(Study, Mat_PID, Analyte_Code) %>%
+  summarise(Concentration = mean(Concentration, na.rm = TRUE), .groups = "drop") %>%
+  mutate(across(everything(), ~ replace(., is.infinite(.), NA_real_)))  
+
+mat_analytes <- sort(unique(Mat_Data_Targeted$Analyte_Code))
+
+mat_list_Targeted <- purrr::map(
+  mat_analytes,
+  ~ Mat_Data_Targeted %>%
+    filter(Analyte_Code == .x) %>%
+    mutate(Study = std_study(Study)) %>%
+    select(Study, Mat_PID, Analyte_Code, Concentration) %>%
+    tidyr::pivot_wider(names_from = Analyte_Code, values_from = Concentration) %>%
+    select(Mat_PID, Study, all_of(.x))
+) %>%
+  rlang::set_names(mat_analytes)
 
 ```
 
@@ -588,11 +556,40 @@ print(socio_ridge)
 
 
 ```{r}
-study_order <- c(
-  "DAPS", "PARENTs", "CEHC", "ZIP", "TEDDY", "SICAS", "TSIC", "DISCOVER", 
-  "DEPART", "MARBLES", "SEARCH", "MADRES", "CTS", "CCREOH", "NFGS", 
-  "VDAART", "VIVA", "NASH", "SLC", "nuMoM2b", "ESPINA", "NHBCS", 
-  "CHARGE", "MDUC", "EEICC", "MEBCO", "GOC", "ELEMENT", "DCHS"
+study_order <-c(
+  "OBSS",
+  "CCREOH",
+  "DAPS",
+  "CEHC",
+  "PARENTs",
+  "NASH",
+  "MARBLES",
+  "SICAS",
+  "TSIC",
+  "NYUWHS",
+  "DEPART",
+  "THS",
+  "MADRES",
+  "SEARCH",
+  "NHBCS",
+  "TEDDY",
+  "CTS",
+  "NFGS",
+  "ZIP",
+  "SLC",
+  "CHARGE",
+  "VDAART",
+  "VIVA",
+  "EEICC",
+  "GOALS",
+  "MDUC",
+  "nuMoM2b",
+  "GOC",
+  "PROGRESS",
+  "DCHS",
+  "MEBCO",
+  "ELEMENT",
+  "VAPS"
 )
 
 
@@ -606,7 +603,7 @@ Plot_Data <- All_PCA_Df %>%
   mutate(Study = factor(Study, levels = study_order)) %>% 
   dplyr::filter(!is.na(Study))
 
-studies_to_box <- c("MADRES")   # can be c("TEDDY","ZIP") etc.
+studies_to_box <- c("CCREOH")   # can be c("TEDDY","ZIP") etc.
 
 # y positions after fct_rev()
 lvl_rev <- rev(levels(Plot_Data$Study))
@@ -648,7 +645,7 @@ summ_socio_ridge <- ggplot(Plot_Data, aes(x = PCA_Dist, y = fct_rev(Study), fill
     legend.position = "none"
   )
 
-save(summ_socio_ridge,file = "../../../Output/Final_Paper1_Output/summ_socio_ridge.RData")
+save(summ_socio_ridge,file = "../../../Output/Paper1_OutputV2/summ_socio_ridge.RData")
 ```
 
 

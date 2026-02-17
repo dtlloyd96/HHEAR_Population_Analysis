@@ -1,0 +1,634 @@
+---
+title: "Quant_Reg_Results_Plots"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(paletteer)
+library(data.table)
+library(ggdist)
+library(ggrepel)
+library(missMDA)
+library(FactoMineR)
+library(factoextra)
+library(patchwork)
+library(ggpubr)
+library(ggridges)
+```
+
+
+
+```{r}
+#New Classifications
+#Trace elements
+Trace_Elements_Theme <- unique(c("As","Ba", "Be","Cd" ,"Co","Cs","Mn", 
+                  "Mo","Pb","Sb", "Tl","U", "W","Cr","Cu",
+                  "Hg" ,"Ni","Pt","Sn",
+                  "V","Zn", "Al", "Mg","Se"  ))
+
+
+length(Trace_Elements_Theme)
+#Phenols
+Phenols_Theme <- unique(c("BP3","BPA","BPF","BPS","DCP24","DCP25","TCC","TCS","BUPB","ETPB","MEPB","PRPB","BP1",
+                          "BP2","BP8","BPAF","BPAP","BPB","BPP","BPZ","DHB34","HB4",
+                          "OH4BP","OHETP","OHMEP","PCP","TCP245","TCP246","DCP","TCP24","PHE","PHEN"))
+length(Phenols_Theme)
+
+#Polycyclic_Aromatic_hydrocarbons 
+PAH_Theme <- unique(c("NAP1","NAP2","PYR1","FLUO2","PHEN1","PHEN2PHEN3","PHEN4","PHEN9","PHET","PHEN2",
+                      "PHEN3","FLUO2_FLUO3","PHEN2_PHEN3","FLU","FLUO","PYR","NAP"))
+
+length(PAH_Theme)
+
+#Phthalates
+Phthalates_Theme <- unique(c("MBZP","MCPP","MECPP","MEHHP","MEHP","MEOHP","MEP","MIBP","MNBP","MCMHP",
+                             "MCHP","MCHPP","MCINP","MCIOP","MCMHP","MHXP","MINP","MIPP","MMP","MOP","MPEP",
+                             "MCOCH","MHNCH","MINP","MCOP","MECPTP","MBZP","MCPP","MEHHTP","MIBP","MHPP","MBZ","MBP",
+                             "MCI","MCMH","MCO","MCP","MEC","MEH","MEHH","MEO","MEOH","MHN","MIB","MIN",
+                             "MNB"))
+
+length(Phthalates_Theme)
+
+#Parabens
+Parabens_Theme <- unique(c("BUPB","ETPB","MEPB","PRPB","BZPB","HEPB","BUP","ETP","PRP"))
+length(Parabens_Theme)
+
+#Smoking/Smoking
+Smoking_Theme <- unique(c("COTT","HCOTT","NICT","NNAL","COT"))
+length(Smoking_Theme)
+
+#Inflam
+Inflam_Theme <- unique(c("HAPTOGLOBIN","FLT3L","TIMP1","TIMP2","IL17F","GMCSF","IFNG","IL10","MIP3A",
+                         "IL12P70", "IL13","IL15","IL17A","IL22","IL9","IL1B","IL33","IL2","IL21",
+                         "IL4"," IL23","IL5","IL6","IL17EIL25","IL27","IL31","TNFA","TNFB","IL28A",
+                         "MMP1","MMP2","MMP7","MMP9","MMP10","CRP","LTE4","IL8","IL23"))
+
+length(Inflam_Theme)
+
+#Pesticide
+
+Pesticide_Theme <- unique(c("DEP","DETP","DMDP","DMP","DMTP","PBA",
+                            "TCP","DEDP","GPS","FPBA","PNP","IMPY","D24","AMPA",
+                            "MDA","T245","BHCH","HCB","PPDDE","PPDDT","TCHL","TNON",
+                            "OCHL","PPDDD"))
+
+length(Pesticide_Theme)
+
+#Volatile Organic Compounds
+VOC_Theme <- unique(c("HPMA","HPMA2","SPMA","HMPMA"))
+
+length(VOC_Theme)
+
+#Oxidative Stress Markers
+OXID_Theme <- unique(c("F2A8IP","F2A23D","F2AVI","F2A12I","OS8OHDG","OSMDA","OS8O","OSMD"))
+
+length(OXID_Theme)
+
+#PFAS
+PFAS_Theme <- unique(c("NMFOSAA","PFBS" ,"PFDA","PFDODA" ,
+                "PFDS" ,"PFHPA" ,"PFHXA" , "PFHXS" ,
+                "PFNA" , "PFOA" , "PFOS","PFOSA", "PFUNDA",
+                "NETFOSAA","PFPEA","ETFOSA","PFBA","PFPEA","PFHPS"))
+
+length(PFAS_Theme)
+
+#Flame Retardants
+Flame_Retardant_Theme <- unique(c("BDE47","BDE99","BDE100","BDCPP","DPHP","TBBA",
+                                  "BCETP","BCPP","DBUP","DBZP","DOCP","DPCP","BDE153",
+                                  "BDE154","BDE183","BDE28","BDE47","BDE17","BDE66",
+                                  "BDE85","BDE99","PBB153","BDE28","BDE85"))
+length(Flame_Retardant_Theme)
+
+PCB_Theme <- unique(c( "PCB105_PCB127","PCB110", "PCB114_PCB122","PCB118_PCB106", "PCB128", "PCB137",
+  "PCB138_PCB158","PCB146_PCB161", "PCB153","PCB156","PCB157","PCB167","PCB170","PCB172_PCB192", "PCB177",
+  "PCB180","PCB182_PCB187","PCB183", "PCB18_PCB17","PCB194",
+  "PCB195","PCB196_PCB203", "PCB199","PCB202","PCB206","PCB208","PCB209","PCB22",
+  "PCB31_PCB28", "PCB33_PCB20","PCB37","PCB41_PCB64","PCB44","PCB47_48_75",
+  "PCB49_PCB43","PCB52_PCB73","PCB5_PCB8","PCB70_PCB76","PCB73_PCB95","PCB74_PCB61",
+  "PCB85_PCB120","PCB90_101_89","PCB99"))
+
+#Bisdithiocarbamates 
+Bisdithiocarbamates_Theme <- unique(c("ETU","PTU"))
+
+#Cellular adhesion molecules 
+CAM_Theme <- unique(c("ICAM1","VCAM1","ESEL","PSEL"))
+
+#Lipids
+
+Lipids_Theme <- unique(c("CHOL","OXLDL","TG"))
+
+#Nutrients
+Nutrients_Theme <- unique(c("GAMTOC","ALPTOC","ZEAXAN","CRYPTO","LYCOPE","ALPCARO",
+                            "BETCARO","RET","FOL","ADIPO"))
+length(Nutrients_Theme)
+
+
+Lipid_Metab <- c("LEP")
+
+Thromboxane <- c("DHTHRM")
+
+
+Other_Theme <- c(Bisdithiocarbamates_Theme,CAM_Theme,Lipids_Theme,Nutrients_Theme,Lipid_Metab,Thromboxane)
+```
+Input Data
+------------
+
+```{r}
+ 
+
+#load("../../Output/Child_SDOH_Metab_Quantile_Results.RData")
+#Reg_Results <- Child_SDOH_Metab_Quantile_Results
+#load("../../Output/Final_Model_Child_SDOH_Metab_Quantile_Results_QuantData.RData")
+
+
+
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+load("../../../Output/Paper1_OutputV2/Age_Sex_Mat_Match.RData")
+load("../../../Output/Paper1_OutputV2/Age_Sex_Child_Match.RData")
+
+```
+
+```{r}
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
+                                    Location == "NorthEast_US" ~ "United_States",
+                                    Location == "New_Hampshire" ~ "United_States",
+                                    Location == "Washington_State" ~ "United_States",
+                                    Location == "Midwestern_US" ~ "United_States",
+                                    Location == "Denver" ~ "United_States",
+                                    Location == "Baltimore" ~ "United_States",
+                                    Location == "Sacramento" ~ "United_States",
+                                    Location == "Southern_California" ~ "United_States",
+                                    Location == "Syracuse" ~ "United_States",
+                                    Location == "Michigan" ~ "United_States",
+                                    Location == "California" ~ "United_States",
+                                    Location == "SanFrancisco" ~ "United_States",
+                                    Location == "Massachusetts" ~ "United_States",
+                                    TRUE ~ "Worldwide")) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+  Mat_Edu %in% c("No_Education",
+                 "Primary_Education",
+                 "Primary_School",
+                 "High_School") ~ "No_College",
+  Mat_Edu %in% c("Some_College",
+                 "Four_Year_College_Degree",
+                 "Some_Grad_School") ~ "Some_College",
+  Mat_Edu == "Not_Reported" ~ NA
+)) %>% 
+  mutate(Mat_Income_Binary = case_when(
+  Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
+  Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
+                "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
+  TRUE ~ NA
+)) %>% 
+  dplyr::select(Child_PID,Mat_PID,Study,Mat_Age,Mat_Race,
+                Mat_Edu,Child_Sex,Child_Race,Mat_Income,
+                Mat_Edu_Binary,Child_Age,Mat_Income_Binary,
+                Mat_Child_Comb_Race) %>% 
+  mutate(Study =  str_remove(Study, '[_]\\w+|:'))
+
+
+```
+
+
+Results Parse Function
+-----
+```{r}
+Parse_Results <- function(Results_List = Age_Sex_Child_Match){
+  
+  All_Res <- list()
+  
+  for(i in seq_along(Results_List)){
+    curr_study <- Results_List[[i]][[1]]
+    
+    curr_study_all_res <- list() 
+             #print(i)
+
+    for(j in seq_along(curr_study)){
+         curr_results <- try(curr_study[[j]][["Regression_Results"]] %>% 
+             dplyr::filter(Variable != "(Intercept)") %>% 
+             mutate(Adj_P = p.adjust(P_Value,method = "fdr"),
+            Sig_10 = ifelse(Adj_P <= 0.10,1,0 ),
+            Outcome = names(Results_List[i])) )
+
+         if(is.character(curr_results)){
+           next
+         }
+         
+         curr_study_all_res[[j]] <- curr_results
+        
+      }
+      
+      curr_study_all_res <-  curr_study_all_res[lengths(curr_study_all_res) != 0]
+
+    Results <- bind_rows(curr_study_all_res)
+    
+      All_Res[[i]] <- Results
+
+  }
+  Final_Res <- bind_rows(All_Res)
+  
+  return(Final_Res)
+}
+```
+
+
+Process Results
+----------
+
+
+
+```{r}
+
+
+
+Child_Match_Res <- Parse_Results(Results_List = Age_Sex_Child_Match) %>% 
+  dplyr::filter(Model_N >=20)
+Mat_Match_Res <- Parse_Results(Results_List = Age_Mat_Match)%>% 
+  dplyr::filter(Model_N >=20)
+
+#unique(Child_Match_Res$Locations)
+#unique(Mat_Match_Res$Locations)
+
+
+us_locations <- c(
+  "United_States", "NorthEast_US", "Midwestern_US", "Washington_State",
+  "California", "Massachusetts", "Michigan", "New_Hampshire", "New_York",
+  "Boston", "Sacramento", "Los_Angeles", "Baltimore", "Denver", "Syracuse",
+  "SanFrancisco"
+)
+
+classify_us <- function(loc_string) {
+  parts <- unlist(strsplit(loc_string, ":"))
+
+  is_us  <- parts %in% us_locations
+  has_us <- any(is_us)
+  has_int <- any(!is_us)
+
+  case_when(
+    has_us & !has_int ~ "United_States",
+    !has_us & has_int ~ "International",
+    has_us & has_int  ~ "United_States:International"
+  )
+}
+
+Mat_Map <- data.frame(
+  Locations = unique(Mat_Match_Res$Locations),
+  Country_Location  = sapply(unique(Mat_Match_Res$Locations), classify_us)
+)
+
+Child_Map <- data.frame(
+  Locations = unique(Child_Match_Res$Locations),
+  Country_Location  = sapply(unique(Child_Match_Res$Locations), classify_us)
+)
+
+All_Locations <- unique(c(Mat_Match_Res$Locations, Child_Match_Res$Locations))
+
+Location_Map <- data.frame(
+  Locations = All_Locations,
+  Country_Location  = sapply(All_Locations, classify_us)
+) 
+rownames(Location_Map) <- NULL
+```
+
+
+
+R2 Values 
+-------
+
+```{r}
+Child_R2_Data <- Child_Match_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  dplyr::filter(!is.na(Sig_10)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+  group_by(Outcome,Locations) %>% 
+  summarise(plot_R2 = weighted.mean(plot_R2, w, na.rm = TRUE)) %>% 
+  mutate(Category = case_when(
+    Outcome %in% Trace_Elements_Theme ~ "TraceElements",
+    Outcome %in% Phenols_Theme ~ "Phenols",
+    Outcome %in% Phthalates_Theme ~ "Phthalates",
+    Outcome %in% PAH_Theme ~ "PAH",
+    Outcome %in% PCB_Theme ~ "PCB",
+    Outcome %in% Parabens_Theme ~ "Parabens",
+    Outcome %in% Smoking_Theme ~ "Smoking",
+    Outcome %in% Inflam_Theme ~ NA,
+    Outcome %in% Pesticide_Theme ~ "Pesticides",
+    Outcome %in% VOC_Theme ~ "VOCs",
+    Outcome %in% OXID_Theme ~ NA,
+    Outcome %in% Flame_Retardant_Theme ~ "FlameRetardants",
+    Outcome %in% Other_Theme ~ NA,
+    Outcome %in% PFAS_Theme ~ "PFAS"
+  )) %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  #dplyr::filter(Tau == 0.5) %>% 
+  #dplyr::filter(Model_Type == "Single_Exposure_Study") %>% 
+  #dplyr::filter(!(Demo_Var == "Study")) %>% 
+  dplyr::filter(!is.na(plot_R2))%>% 
+  mutate(Population = "Child")
+
+Mat_R2_Data <- Mat_Match_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  dplyr::filter(!is.na(Sig_10)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+  group_by(Outcome,Locations) %>% 
+  summarise(plot_R2 = weighted.mean(plot_R2, w, na.rm = TRUE)) %>% 
+  mutate(Category = case_when(
+    Outcome %in% Trace_Elements_Theme ~ "TraceElements",
+    Outcome %in% Phenols_Theme ~ "Phenols",
+    Outcome %in% Phthalates_Theme ~ "Phthalates",
+    Outcome %in% PAH_Theme ~ "PAH",
+    Outcome %in% PCB_Theme ~ "PCB",
+    Outcome %in% Parabens_Theme ~ "Parabens",
+    Outcome %in% Smoking_Theme ~ "Smoking",
+    Outcome %in% Inflam_Theme ~ NA,
+    Outcome %in% Pesticide_Theme ~ "Pesticides",
+    Outcome %in% VOC_Theme ~ "VOCs",
+    Outcome %in% OXID_Theme ~ NA,
+    Outcome %in% Flame_Retardant_Theme ~ "FlameRetardants",
+    Outcome %in% Other_Theme ~ NA,
+    Outcome %in% PFAS_Theme ~ "PFAS"
+  )) %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  #dplyr::filter(Tau == 0.5) %>% 
+  #dplyr::filter(Model_Type == "Single_Exposure_Study") %>% 
+  #dplyr::filter(!(Demo_Var == "Study")) %>% 
+  dplyr::filter(!is.na(plot_R2))%>% 
+  mutate(Population = "Adult")
+```
+
+
+```{r}
+
+
+
+All_R2_Data <- bind_rows(Child_R2_Data,Mat_R2_Data) %>% 
+  left_join(.,Location_Map, by ="Locations")
+
+
+```
+
+
+ 
+
+
+R2 Bar Plots
+-----
+
+```{r}
+
+exposome_palette <- c(
+  "FlameRetardants" = "#FED439FF",  # yellow
+  "PAH"             = "#709AE1FF",  # blue
+  "Parabens"        = "#8A9197FF",  # gray
+  "PCBs"            = "#D2AF81FF",  # tan
+  "Pesticide"       = "#FD7446FF",  # orange
+  "PFAS"            = "#D5E4A2FF",  # light green
+  "Phenols"         = "#197EC0FF",  # deep blue
+  "Phthalates"      = "#F05C3BFF",  # red-orange
+  "Smoking"         = "#46732EFF",  # dark green
+  "TraceElements"  = "#71D0F5FF",  # light blue
+  "VOC"             = "#370335FF"   # dark purple
+)
+
+
+df_f <- All_R2_Data %>% 
+  group_by(Category) %>% 
+  #dplyr::filter(Study == "CCREOH") %>% 
+  summarise(mean_R2 = mean(plot_R2, na.rm = TRUE), .groups = "drop") %>% 
+  ungroup() 
+
+
+
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+# 2) Beautiful stacked horizontal bars + total marker
+r2_barplot <- ggplot(df_f, aes(x = mean_R2, y = reorder(Category,mean_R2), fill = Category)) +
+  geom_bar(stat="identity", width=0.5) +
+
+
+  scale_fill_manual(values = exposome_palette, drop = FALSE) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0.06)),
+    labels = label_number(accuracy = 0.01)
+  ) +
+  labs(
+    #title = expression("Average Incremental " * R^2 * " by Model Term"),
+    title = "Explanatory Power by Location",
+    subtitle = "(Matched By Age/Sex)",
+    x = "Explanatory Power",
+    y = "Exposure Category",
+    fill = "Category"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title      = element_text(size = 16, face = "bold", hjust = 0),
+    axis.title.x    = element_text(size = 18, face = "bold"),
+    axis.title.y    = element_text(size = 18, face = "bold"),
+    axis.text.x     = element_text(size = 18, face = "bold"),
+    axis.text.y     = element_text(size = 18),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor.x = element_blank(),
+    axis.ticks.y    = element_blank(),
+    legend.position = "bottom",
+    legend.title    = element_text(size = 11, face = "bold"),
+    legend.text     = element_text(size = 10)
+  ) 
+
+
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/R2_Matched_Bar.pdf",height = 6,width = 8)
+print(r2_barplot)
+dev.off()
+
+r2_barplot_matched <- r2_barplot
+save(r2_barplot_matched,file = "../../../Output/Paper1_OutputV2/Plots/r2_barplot_matched.RData")
+
+```
+
+Examine Strata In Detail
+--------
+
+```{r}
+Child_R2_Data <- Child_Match_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  dplyr::filter(!is.na(Sig_10)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+  group_by(Outcome,Locations,Match_Age,Match_Sex) %>% 
+  summarise(plot_R2 = weighted.mean(plot_R2, w, na.rm = TRUE)) %>% 
+  mutate(Category = case_when(
+    Outcome %in% Trace_Elements_Theme ~ "TraceElements",
+    Outcome %in% Phenols_Theme ~ "Phenols",
+    Outcome %in% Phthalates_Theme ~ "Phthalates",
+    Outcome %in% PAH_Theme ~ "PAH",
+    Outcome %in% PCB_Theme ~ "PCB",
+    Outcome %in% Parabens_Theme ~ "Parabens",
+    Outcome %in% Smoking_Theme ~ "Smoking",
+    Outcome %in% Inflam_Theme ~ NA,
+    Outcome %in% Pesticide_Theme ~ "Pesticides",
+    Outcome %in% VOC_Theme ~ "VOCs",
+    Outcome %in% OXID_Theme ~ NA,
+    Outcome %in% Flame_Retardant_Theme ~ "FlameRetardants",
+    Outcome %in% Other_Theme ~ NA,
+    Outcome %in% PFAS_Theme ~ "PFAS"
+  )) %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  #dplyr::filter(Tau == 0.5) %>% 
+  #dplyr::filter(Model_Type == "Single_Exposure_Study") %>% 
+  #dplyr::filter(!(Demo_Var == "Study")) %>% 
+  dplyr::filter(!is.na(plot_R2))%>% 
+  mutate(Population = "Child")
+
+Mat_R2_Data <- Mat_Match_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  dplyr::filter(!is.na(Sig_10)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+  group_by(Outcome,Locations,Match_Age) %>% 
+  summarise(plot_R2 = weighted.mean(plot_R2, w, na.rm = TRUE)) %>% 
+  mutate(Category = case_when(
+    Outcome %in% Trace_Elements_Theme ~ "TraceElements",
+    Outcome %in% Phenols_Theme ~ "Phenols",
+    Outcome %in% Phthalates_Theme ~ "Phthalates",
+    Outcome %in% PAH_Theme ~ "PAH",
+    Outcome %in% PCB_Theme ~ "PCB",
+    Outcome %in% Parabens_Theme ~ "Parabens",
+    Outcome %in% Smoking_Theme ~ "Smoking",
+    Outcome %in% Inflam_Theme ~ NA,
+    Outcome %in% Pesticide_Theme ~ "Pesticides",
+    Outcome %in% VOC_Theme ~ "VOCs",
+    Outcome %in% OXID_Theme ~ NA,
+    Outcome %in% Flame_Retardant_Theme ~ "FlameRetardants",
+    Outcome %in% Other_Theme ~ NA,
+    Outcome %in% PFAS_Theme ~ "PFAS"
+  )) %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  #dplyr::filter(Tau == 0.5) %>% 
+  #dplyr::filter(Model_Type == "Single_Exposure_Study") %>% 
+  #dplyr::filter(!(Demo_Var == "Study")) %>% 
+  dplyr::filter(!is.na(plot_R2))%>% 
+  mutate(Population = "Adult")
+```
+
+
+```{r}
+
+
+
+All_R2_Data <- bind_rows(Child_R2_Data,Mat_R2_Data) %>% 
+  left_join(.,Location_Map, by ="Locations") %>% 
+  mutate(Match_Sex = ifelse(is.na(Match_Sex),"F",Match_Sex)) %>% 
+  mutate(Strata = paste0(Match_Age,":",Match_Sex))
+
+
+plot_Data <- All_R2_Data %>% 
+  group_by(Category,Country_Location) %>% 
+  summarise(mean_r2 = mean(plot_R2,na.rm = T)) 
+```
+
+
+```{r}
+r2_barplot_loc <- ggplot(plot_Data, aes(x = mean_r2, y = reorder(Category,mean_r2), fill = Country_Location)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.6) +
+
+
+  scale_fill_manual(values = mypal) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0.06)),
+    labels = label_number(accuracy = 0.01)
+  ) +
+  labs(
+    #title = expression("Average Incremental " * R^2 * " by Model Term"),
+    title = "Explanatory Power by Location",
+    subtitle = "(Matched By Age/Sex)",
+    x = "Explanatory Power",
+    y = "Exposure Category",
+    fill = "Location_Compare"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title      = element_text(size = 16, face = "bold", hjust = 0),
+    axis.title.x    = element_text(size = 18, face = "bold"),
+    axis.title.y    = element_text(size = 18, face = "bold"),
+    axis.text.x     = element_text(size = 18, face = "bold"),
+    axis.text.y     = element_text(size = 18),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor.x = element_blank(),
+    axis.ticks.y    = element_blank(),
+    legend.position = "bottom",
+    legend.title    = element_text(size = 11, face = "bold"),
+    legend.text     = element_text(size = 10)
+  ) 
+print(r2_barplot_loc)
+
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/R2_Loc_Bar.pdf",height = 6,width = 8)
+print(r2_barplot_loc)
+dev.off()
+
+
+save(r2_barplot_loc,file = "../../../Output/Paper1_OutputV2/Plots/r2_barplot_loc.RData")
+
+```
+
+
+
+
+```{r}
+# pdf(file = "../../../Output/Final_Paper1_Output/Plots/R2_Bar_Beta_Box.pdf",height = 6,width = 13)
+# patchplot <- (beta_p + r2_barplot) 
+# patchplot + plot_annotation(
+#   title = 'Effect Size and R² By Exposure Category',
+#   tag_levels = "A"
+# )
+# 
+# dev.off()
+
+```
+
+```{r}
+df_f %>% 
+  mutate(
+    xmin = cumsum(lag(contrib, default = 0)),
+    xmax = xmin + contrib,
+    xmid = (xmin + xmax) / 2,
+    frac = contrib / sum(contrib, na.rm = TRUE)
+  ) %>% 
+  group_by(Category,All_Vars) %>% 
+  summarise(mean_totalr2 = mean(mean_R2),
+            mean_contrib = mean(contrib),
+            mean_frac = mean(frac)) %>% 
+  View
+```
+
+
+
+
+
+

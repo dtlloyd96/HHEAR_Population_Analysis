@@ -59,6 +59,7 @@ ExWAS_SDOH_Exposures <- ZIP_SDOH %>%
 
   dplyr::mutate(Country = relevel(as.factor(Country), ref = "Guatemala"))  
 
+
 ```
 
 

@@ -1,11 +1,9 @@
----
-title: "PXS_Voter"
-output: html_document
-date: "2024-04-11"
+----
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
 ```
 
 Packages
@@ -13,7 +11,9 @@ Packages
 ```{r}
 library(tidyverse)
 library(quantreg)
+library(here)
 ```
+
 
 
 Input Data
@@ -23,71 +23,157 @@ Input Data
 
 #load("../../Input/Harmonized_Datasets/Harmonized_Outcomes.RData")
 load("../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
-load("../../Output/Final_Paper1_Output/Burden_Child.RData")
-load("../../Output/Final_Paper1_Output/Burden_Mat.RData")
+load("../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+
+std_study <- function(x) {
+  stringr::str_remove(x, '[_]\\w+|:')  # CHECK: ensure this collapse is intended
+}
+```
+
+```{r}
+
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>%
+  mutate(
+    # Prefer Max_Edu but fall back to Mat_Edu
+    Edu_Any = dplyr::coalesce(Max_Edu, Mat_Edu),
+    # Prefer Child_Race but fall back to Mat_Race
+    Mat_Child_Comb_Race = dplyr::coalesce(Child_Race, Mat_Race),
+    Mat_Age = suppressWarnings(as.numeric(Mat_Age)),  # NOTE: coercion; NAs may be introduced
+    # Make Location a factor with reference "United_States"
+    Location = stats::relevel(as.factor(Location), ref = "United_States"),
+    # Collapse various US-specific locations to a single "United_States"
+    Location_Country = dplyr::case_when(
+      Location %in% c(
+        "United_States","NorthEast_US","New_Hampshire","Washington_State",
+        "Midwestern_US","Denver","Baltimore","Sacramento",
+        "Southern_California","Syracuse","Michigan","California",
+        "SanFrancisco","Massachusetts"
+      ) ~ "United_States",
+      TRUE ~ "Worldwide"
+    ),
+    # Binary maternal education bucket
+    Mat_Edu_Binary = dplyr::case_when(
+      Mat_Edu %in% c("No_Education","Primary_Education","Primary_School","High_School") ~ "No_College",
+      Mat_Edu %in% c("Some_College","Four_Year_College_Degree","Some_Grad_School") ~ "Some_College",
+      Mat_Edu == "Not_Reported" ~ NA_character_,
+      TRUE ~ NA_character_  # CHECK: any unexpected levels?
+    ),
+    # Binary maternal income bucket
+    Mat_Income_Binary = dplyr::case_when(
+      Mat_Income %in% c("0_25k","25_49k") ~ "Under_49k",
+      Mat_Income %in% c("50_74k","75_99k","100_124k","Over_100k","Over_125k","Over_49k") ~ "Over_49k",
+      TRUE ~ NA_character_
+    )
+  )
+
 
 ```
 
 
 ```{r}
+unique(ExWAS_SDOH_Exposures$Location)
+```
 
-ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
-  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
-                             is.na(Max_Edu) ~ Mat_Edu,
-                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
-  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
-                                         is.na(Child_Race) ~ Mat_Race,
-                                         !is.na(Mat_Race) ~ Mat_Race)) %>% 
-  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
-  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
-  mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
-                                      Location == "NorthEast_US" ~ "United_States",
-                                      Location == "New_Hampshire" ~ "United_States",
-                                      Location == "Washington_State" ~ "United_States",
-                                      Location == "Midwestern_US" ~ "United_States",
-                                      Location == "Denver" ~ "United_States",
-                                      Location == "Baltimore" ~ "United_States",
-                                      Location == "Sacramento" ~ "United_States",
-                                      Location == "Southern_California" ~ "United_States",
-                                      Location == "Syracuse" ~ "United_States",
-                                      Location == "Michigan" ~ "United_States",
-                                      Location == "California" ~ "United_States",
-                                      Location == "SanFrancisco" ~ "United_States",
-                                      Location == "Massachusetts" ~ "United_States",
-                                      TRUE ~ "Worldwide")) %>% 
-  mutate(Mat_Edu_Binary = case_when(
-    Mat_Edu %in% c("No_Education",
-                   "Primary_Education",
-                   "Primary_School",
-                   "High_School") ~ "No_College",
-    Mat_Edu %in% c("Some_College",
-                   "Four_Year_College_Degree",
-                   "Some_Grad_School") ~ "Some_College",
-    Mat_Edu == "Not_Reported" ~ NA
-  )) %>% 
-  mutate(Mat_Income_Binary = case_when(
-    Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
-    Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
-                      "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
-    TRUE ~ NA
-  ))
+
+```{r}
+# Unit conversion helper: convert to ng/mL --------------------------------
+to_ng_per_mL <- function(value, units) {
+  dplyr::case_when(
+    is.na(units)          ~ value,          # assume already ng/mL if missing
+    units == "ng/mL"      ~ value,
+    units == "ug/dL"      ~ value * 10,     # 1 ug/dL = 10 ng/mL
+    units %in% c("ng/L")  ~ value / 1000,   # 1 ng/L = 0.001 ng/mL
+    units %in% c("pg/mL","pg/ml") ~ value / 1000,  # 1000 pg/mL = 1 ng/mL
+    units == "mg/L"       ~ value * 1000,   # 1 mg/L = 1000 ng/mL
+    TRUE ~ value          # CHECK: any other units present?
+  )
+}
+
+
 
 ```
 
 
-
 ```{r}
-Child_SDOH <- ExWAS_SDOH_Exposures %>% 
-  dplyr::filter(!is.na(Child_PID) ) %>% 
-  dplyr::select(Study,Child_PID,Mat_PID,everything())
+# CHILD targeted data: long -> wide per-analyte list ----------------------
+Child_Data_Targeted <- Targeted_Data_All %>%
+  filter(!is.na(Child_PID)) %>%                           # keep child samples
+  mutate(
+    Units = if_else(is.na(Units), "ng/mL", Units),        # default units
+    Concentration = to_ng_per_mL(Concentration, Units)    # normalize units
+  ) %>%
+  select(-Mat_PID) %>%                                    # not needed for child
+  filter(!is.na(Analyte_Code)) %>%                        # require analyte code
+  group_by(Study, Child_PID, Analyte_Code) %>%            # average replicates
+  summarise(Concentration = mean(Concentration, na.rm = TRUE), .groups = "drop")
+
+child_analytes <- sort(unique(Child_Data_Targeted$Analyte_Code))  # vector of analytes
+
+# Build a list of per-analyte wide data.frames keyed by Child_PID ---------
+child_list_Targeted <- purrr::map(
+  child_analytes,
+  ~ Child_Data_Targeted %>%
+    filter(Analyte_Code == .x) %>%                         # one analyte
+    mutate(Study = std_study(Study)) %>%                   # standardize label
+    select(Study, Child_PID, Analyte_Code, Concentration) %>%
+    tidyr::pivot_wider(names_from = Analyte_Code, values_from = Concentration) %>%
+    select(Child_PID, Study, all_of(.x))                   # only current analyte col
+) %>%
+  rlang::set_names(child_analytes)
+
+# MATERNAL targeted data: long -> wide per-analyte list -------------------
+Mat_Data_Targeted <- Targeted_Data_All %>%
+  filter(!is.na(Mat_PID)) %>%                              # keep maternal samples
+  select(-Child_PID) %>%
+  mutate(
+    Units = if_else(is.na(Units), "ng/mL", Units),
+    Concentration = to_ng_per_mL(Concentration, Units)
+  ) %>%
+  filter(!is.na(Analyte_Code)) %>%
+  group_by(Study, Mat_PID, Analyte_Code) %>%
+  summarise(Concentration = mean(Concentration, na.rm = TRUE), .groups = "drop") %>%
+  mutate(across(everything(), ~ replace(., is.infinite(.), NA_real_)))  
+
+mat_analytes <- sort(unique(Mat_Data_Targeted$Analyte_Code))
+
+mat_list_Targeted <- purrr::map(
+  mat_analytes,
+  ~ Mat_Data_Targeted %>%
+    filter(Analyte_Code == .x) %>%
+    mutate(Study = std_study(Study)) %>%
+    select(Study, Mat_PID, Analyte_Code, Concentration) %>%
+    tidyr::pivot_wider(names_from = Analyte_Code, values_from = Concentration) %>%
+    select(Mat_PID, Study, all_of(.x))
+) %>%
+  rlang::set_names(mat_analytes)
 
 
+Child_Sample_Yr <- Targeted_Data_All %>%
+  filter(!is.na(Child_PID)) %>% 
+  select(-Mat_PID) %>%                                   
+  group_by(Child_PID,Sample_Collection_Year) %>% 
+  summarise(n = n())
 
-Mat_SDOH <- ExWAS_SDOH_Exposures %>% 
-  mutate(Adult_Sex = ifelse(is.na(Adult_Sex),"F",Adult_Sex)) %>% 
-  dplyr::filter(Adult_Sex != "M") %>% 
-  dplyr::filter(!is.na(Mat_PID) ) %>% 
-  dplyr::select(Study,Child_PID,Mat_PID,everything()) 
+Mat_Sample_Yr <- Targeted_Data_All %>% 
+  filter(!is.na(Mat_PID)) %>% 
+  select(-Child_PID) %>%                                   
+  group_by(Mat_PID,Sample_Collection_Year) %>% 
+  summarise(n = n())
+# Split SDOH into child and maternal panels -------------------------------
+Child_SDOH <- ExWAS_SDOH_Exposures %>%
+  filter(!is.na(Child_PID)) %>%
+  select(Study, Child_PID, Mat_PID, dplyr::everything()) %>% 
+  left_join(.,Child_Sample_Yr, by = c("Child_PID")) %>% 
+  dplyr::select(-n) %>% 
+  mutate(Sample_Collection_Year = as.numeric(Sample_Collection_Year))
+
+Mat_SDOH <- ExWAS_SDOH_Exposures %>%
+  filter(!is.na(Mat_PID)) %>%                      # keep likely maternal rows
+  select(Study, Child_PID, Mat_PID, dplyr::everything()) %>% 
+  left_join(.,Mat_Sample_Yr, by = c("Mat_PID")) %>% 
+  dplyr::select(-n)%>% 
+  mutate(Sample_Collection_Year = as.numeric(Sample_Collection_Year))
+
 
 ```
 
@@ -162,7 +248,7 @@ Quantile_Reg <- function(exp_var = NULL,
     yhat_full  <- predict(rq_model)        # fitted at each tau
     yhat_null  <- predict(fit_null)        # intercept-only at each tau
     
-    y <- mydf_ua[[my_outcome]]
+    y <- clean_df[[my_outcome]]
     
     
     rho_tau <- function(u, tau) u * (tau - (u < 0))
@@ -317,20 +403,7 @@ Quantile_Reg <- function(exp_var = NULL,
     
     
     rho_tau <- function(u, tau) u * (tau - (u < 0))
-    # r1_all <- list()
-    # for(z in seq_along(quantiles)){
-    #
-    #   numerator <- sum(rho_tau(y - predicted_quantiles, tau = quantiles[z]))
-    #   denominator <- sum(rho_tau(y - yhat_null, tau = quantiles[z]))
-    #
-    #     # Pseudo R1
-    #   r1 <- 1 - numerator / denominator
-    #   r1_df <- data.frame("Tau" = quantiles[z],pseudo_R = r1)
-    #   r1_all[[z]] <- r1_df
-    #
-    # }
-    #
-    # r1_all_df <- bind_rows(r1_all)
+
     
     r1_all_df <- purrr::map2_dfr(
       seq_along(quantiles), quantiles,
@@ -408,14 +481,8 @@ ExWAS_Function_Metab <- function(Exposure_Data, myexposures,myoutcomes, Outcome_
     )
     
     for(i in seq_along(loop_n)){
-      print(i)
+      #print(i)
       my_covariates <- mycovars
-      
-      
-      #curr_metab <- child_list_Targeted[[i]]
-      # curr_pheno <- Child_Outcomes %>% 
-      #   dplyr::select(Child_PID,all_of(pheno))
-      
       
       curr_exposure <- Exposure_Data %>% 
         mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
@@ -423,7 +490,7 @@ ExWAS_Function_Metab <- function(Exposure_Data, myexposures,myoutcomes, Outcome_
         #dplyr::filter(Study == "CEHC") %>% 
         distinct()
       
-      curr_pheno <- Outcome_Data %>% 
+      curr_pheno <- Outcome_Data[[j]] %>% 
         mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
         dplyr::select(join_var,Study,all_of(pheno)) %>% 
         dplyr::filter(Study == curr_study) %>% 
@@ -466,15 +533,6 @@ ExWAS_Function_Metab <- function(Exposure_Data, myexposures,myoutcomes, Outcome_
       
       #})
     }
-    
-    
-    #filtered_unadjusted_list <- lapply(unadjusted_results, function(df) if (nrow(df) >= 2) df else NULL)
-    
-    
-    #unadjusted_df <- bind_rows(filtered_unadjusted_list)
-    
-    
-    
     
     all_pheno_unadjusted[[j]] <- unadjusted_results
     
@@ -531,7 +589,7 @@ Run_ExWAS_By_Study <- function(to_keep, child_sdoh, mystudies,join_var,analytes_
   All_Study_Single_Exp_Results <- list()
   
   for (i in seq_along(mystudies)) {
-    print(i)
+    #print(i)
     curr_sdoh <- child_sdoh %>%
       dplyr::filter(Study == mystudies[[i]]) %>%
       dplyr::select_if(~ !all(is.na(.))) %>%
@@ -539,8 +597,6 @@ Run_ExWAS_By_Study <- function(to_keep, child_sdoh, mystudies,join_var,analytes_
       dplyr::mutate(Study = stringr::str_remove(Study, '[_]\\w+|:'))
     
     # keep only the specified social exposures
-    #curr_social_exps <- names(curr_sdoh)[-1]
-   # curr_social_exps <- curr_social_exps[curr_social_exps %in% to_keep]
     curr_social_exps <- to_keep
 
     curr_study <- unique(curr_sdoh$Study)
@@ -582,7 +638,6 @@ Run Analysis Child
 ----
 ```{r}
 
-
 mystudies <- unique(Child_SDOH$Study)
 
 All_Study_Single_Exp_Results <- list()
@@ -594,23 +649,22 @@ for(i in seq_along(mystudies)){
     select(where(~n_distinct(.) > 1),Study) %>% 
     mutate(Study =  str_remove(Study, '[_]\\w+|:')) 
   
-    tokeep <- c("Child_Age","Child_Race", "Child_Sex", "Mat_Edu","Mat_Income","Mat_Race",
-              "Mat_Age","Location")
+    # tokeep <- c("Child_Age","Child_Race", "Child_Sex", "Mat_Edu","Mat_Income","Mat_Race",
+    #           "Mat_Age","Site_Location","Sample_Collection_Year")
+    
+        tokeep <- c("Child_Age","Sample_Collection_Year")
+
   curr_social_exps <- names(curr_sdoh)[-1]
   curr_social_exps <- curr_social_exps[curr_social_exps %in% tokeep]
   curr_study <- unique(curr_sdoh$Study)
   #Run Quantile ExWAS
+  Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = curr_sdoh,
+                                                                                      Outcome_Data = child_list_Targeted,
+                                                                                      myexposures = curr_social_exps,
+                                                                                      myoutcomes = child_analytes,mycovars = "Study",join_var = "Child_PID",
+                                                                                      Reg_Type = "Quantile",
+                                                                                      curr_study = curr_study)))
 
-
-    Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = Child_SDOH,                                          
-                                         Outcome_Data = Burden_Df_Child,
-                                          myexposures = curr_social_exps,
-                                          myoutcomes = "Burden_Adj",
-                                         mycovars = "Study",
-                                         join_var = "Child_PID",
-                                          Reg_Type = "Quantile",
-                                         curr_study = curr_study)))
-    
   Final_Res <- Curr_Results[lapply(Curr_Results, length) > 0]
   All_Study_Single_Exp_Results[[i]] <- Final_Res
   names(All_Study_Single_Exp_Results)[i] <- curr_study
@@ -621,107 +675,137 @@ for(i in seq_along(mystudies)){
 
 
 #Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_Single_Exp_Results_Child <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
+By_Study_Single_Exp_Results_Child <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
 
-save(Burden_By_Study_Single_Exp_Results_Child, file = "../../Output/Final_Paper1_Output/Burden_By_Study_Single_Exp_Results_Child.RData")
+save(By_Study_Single_Exp_Results_Child, file = "../../Output/Paper1_OutputV2/By_Study_Single_Exp_Results_Child.RData")
 
 
 ```
 
 
 ```{r}
+
+#Age  
+
+mystudies <- unique(Child_SDOH$Study)
+to_keep <- c("Child_Age","Sample_Collection_Year")
+
+By_Study_AgeSex_Child <-  suppress_all_output(quote(Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Child_SDOH,
+  mystudies = mystudies,
+  join_var = "Child_PID",
+  analytes_touse = child_analytes,
+  targeted_list = child_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+By_Study_Age_Child <- By_Study_AgeSex_Child[lapply(By_Study_AgeSex_Child, length) > 0]
+
+save(By_Study_Age_Child, file = "../../Output/Paper1_OutputV2/By_Study_Age_Child.RData")
+
+
+```
+
+```{r}
+
 #Age Sex 
 
 mystudies <- unique(Child_SDOH$Study)
-to_keep <- c("Child_Age", "Child_Sex")
+to_keep <- c("Child_Age", "Child_Sex","Sample_Collection_Year")
 
 By_Study_AgeSex_Child <-  suppress_all_output(quote(Run_ExWAS_By_Study(
   to_keep = to_keep,
   child_sdoh = Child_SDOH,
   mystudies = mystudies,
   join_var = "Child_PID",
-  analytes_touse = "Burden_Adj",
-  targeted_list = Burden_Df_Child
+  analytes_touse = child_analytes,
+  targeted_list = child_list_Targeted
 )))
 
 
 #Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_AgeSex_Child <- By_Study_AgeSex_Child[lapply(By_Study_AgeSex_Child, length) > 0]
+By_Study_AgeSex_Child <- By_Study_AgeSex_Child[lapply(By_Study_AgeSex_Child, length) > 0]
 
-save(Burden_By_Study_AgeSex_Child, file = "../../Output/Final_Paper1_Output/Burden_By_Study_AgeSex_Child.RData")
+save(By_Study_AgeSex_Child, file = "../../Output/Paper1_OutputV2/By_Study_AgeSex_Child.RData")
 
-```
-
-
-```{r}
-#Age Sex Race
-
-mystudies <- unique(Child_SDOH$Study)
-to_keep <- c("Child_Age", "Child_Sex","Mat_Child_Comb_Race")
-
-By_Study_AgeSex_Child <-  suppress_all_output(quote(Run_ExWAS_By_Study(
-  to_keep = to_keep,
-  child_sdoh = Child_SDOH,
-  mystudies = mystudies,
-  join_var = "Child_PID",
-  analytes_touse = "Burden_Adj",
-  targeted_list = Burden_Df_Child
-)))
-
-
-#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_AgeSexRace_Child <- By_Study_AgeSex_Child[lapply(By_Study_AgeSex_Child, length) > 0]
-
-save(Burden_By_Study_AgeSexRace_Child, file = "../../Output/Final_Paper1_Output/Burden_By_Study_AgeSexRace_Child.RData")
 
 ```
 
 ```{r}
-#Age Sex Edu
+
+#Age Sex  Race
 
 mystudies <- unique(Child_SDOH$Study)
-to_keep <- c("Child_Age", "Child_Sex","Mat_Edu")
+to_keep <- c("Child_Age", "Child_Sex","Mat_Child_Comb_Race","Sample_Collection_Year")
 
-By_Study_AgeSex_Child <-  suppress_all_output(quote(Run_ExWAS_By_Study(
+By_Study_AgeSexRace_Child <- suppress_all_output(quote( Run_ExWAS_By_Study(
   to_keep = to_keep,
   child_sdoh = Child_SDOH,
   mystudies = mystudies,
   join_var = "Child_PID",
-  analytes_touse = "Burden_Adj",
-  targeted_list = Burden_Df_Child
+  analytes_touse = child_analytes,
+  targeted_list = child_list_Targeted
 )))
 
 
 #Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_AgeSexEdu_Child <- By_Study_AgeSex_Child[lapply(By_Study_AgeSex_Child, length) > 0]
+By_Study_AgeSexRace_Child <- By_Study_AgeSexRace_Child[lapply(By_Study_AgeSexRace_Child, length) > 0]
 
-save(Burden_By_Study_AgeSexEdu_Child, file = "../../Output/Final_Paper1_Output/Burden_By_Study_AgeSexEdu_Child.RData")
+save(By_Study_AgeSexRace_Child, file = "../../Output/Paper1_OutputV2/By_Study_AgeSexRace_Child.RData")
+
 
 ```
 
 ```{r}
-#Age Sex Edu Race
+
+#Age Sex Education
 
 mystudies <- unique(Child_SDOH$Study)
-to_keep <- c("Child_Age", "Child_Sex","Mat_Edu","Mat_Child_Comb_Race")
+to_keep <- c("Child_Age", "Child_Sex","Mat_Edu","Sample_Collection_Year")
 
-By_Study_AgeSex_Child <-  suppress_all_output(quote(Run_ExWAS_By_Study(
+By_Study_AgeSexEdu_Child <- suppress_all_output(quote( Run_ExWAS_By_Study(
   to_keep = to_keep,
   child_sdoh = Child_SDOH,
   mystudies = mystudies,
   join_var = "Child_PID",
-  analytes_touse = "Burden_Adj",
-  targeted_list = Burden_Df_Child
+  analytes_touse = child_analytes,
+  targeted_list = child_list_Targeted
 )))
 
 
 #Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_AgeSexEduRace_Child <- By_Study_AgeSex_Child[lapply(By_Study_AgeSex_Child, length) > 0]
+By_Study_AgeSexEdu_Child <- By_Study_AgeSexEdu_Child[lapply(By_Study_AgeSexEdu_Child, length) > 0]
 
-save(Burden_By_Study_AgeSexEduRace_Child, file = "../../Output/Final_Paper1_Output/Burden_By_Study_AgeSexEduRace_Child.RData")
+save(By_Study_AgeSexEdu_Child, file = "../../Output/Paper1_OutputV2/By_Study_AgeSexEdu_Child.RData")
 
 ```
 
+```{r}
+
+#Age Sex  Race Edu
+
+mystudies <- unique(Child_SDOH$Study)
+to_keep <- c("Child_Age", "Child_Sex","Mat_Child_Comb_Race","Mat_Edu","Sample_Collection_Year")
+
+By_Study_AgeSexRaceEdu_Child <-suppress_all_output(quote( Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Child_SDOH,
+  mystudies = mystudies,
+  join_var = "Child_PID",
+  analytes_touse = child_analytes,
+  targeted_list = child_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+By_Study_AgeSexRaceEdu_Child <- By_Study_AgeSexRaceEdu_Child[lapply(By_Study_AgeSexRaceEdu_Child, length) > 0]
+
+save(By_Study_AgeSexRaceEdu_Child, file = "../../Output/Paper1_OutputV2/By_Study_AgeSexRaceEdu_Child.RData")
+
+
+```
 
 ```{r}
 
@@ -730,28 +814,31 @@ mystudies <- unique(Child_SDOH$Study)
 
 All_Study_Single_Exp_Results <- list()
 for(i in seq_along(mystudies)){
-  
+    print(i)
   curr_sdoh <- Child_SDOH %>% 
     dplyr::filter(Study == mystudies[[i]]) %>% 
     select_if(~ !all(is.na(.))) %>% 
     select(where(~n_distinct(.) > 1),Study) %>% 
     mutate(Study =  str_remove(Study, '[_]\\w+|:')) 
   
-  tokeep <- c("Child_Age","Child_Race", "Child_Sex", "Mat_Edu","Mat_Income","Mat_Race",
-              "Mat_Age","Location")
+  # tokeep <- c("Child_Age","Child_Race", "Child_Sex", "Mat_Edu","Mat_Income","Mat_Race",
+  #             "Mat_Age","Site_Location","Sample_Collection_Year")
+    tokeep <- c("Child_Age","Child_Race", "Child_Sex", "Mat_Edu","Mat_Income","Mat_Race",
+              "Mat_Age","Sample_Collection_Year")
+
   curr_social_exps <- names(curr_sdoh)[-1]
   curr_social_exps <- curr_social_exps[curr_social_exps %in% tokeep]
   curr_study <- unique(curr_sdoh$Study)
-  #Run Quantile ExWAS
-    Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = Child_SDOH,                                          
-                                         Outcome_Data = Burden_Df_Child,
-                                          myexposures = NULL,
-                                          myoutcomes = "Burden_Adj",
-                                         mycovars = curr_social_exps,
-                                         join_var = "Child_PID",
-                                          Reg_Type = "Quantile",
-                                         curr_study = curr_study)))
 
+  #Run Quantile ExWAS
+  Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = curr_sdoh,
+                                                                                      Outcome_Data = child_list_Targeted,
+                                                                                      myexposures = NULL,
+                                                                                      myoutcomes = child_analytes,
+                                                                                      mycovars = curr_social_exps,
+                                                                                      join_var = "Child_PID",
+                                                                                      Reg_Type = "Quantile",
+                                                                                      curr_study = curr_study)))
 
   Final_Res <- Curr_Results[lapply(Curr_Results, length) > 0]
   All_Study_Single_Exp_Results[[i]] <- Final_Res
@@ -763,20 +850,20 @@ for(i in seq_along(mystudies)){
 
 
 #Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_AllSDOH_Child <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
+By_Study_AllSDOH_Child <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
 
-save(Burden_By_Study_AllSDOH_Child, file = "../../Output/Final_Paper1_Output/Burden_By_Study_AllSDOH_Child.RData")
+save(By_Study_AllSDOH_Child, file = "../../Output/Paper1_OutputV2/By_Study_AllSDOH_Child.RData")
 
 
 ```
 
 
-Mat Analysis
------
+
+Run Analysis Mat
+----
+
 
 ```{r}
-
-
 mystudies <- unique(Mat_SDOH$Study)
 
 All_Study_Single_Exp_Results <- list()
@@ -788,118 +875,48 @@ for(i in seq_along(mystudies)){
     select(where(~n_distinct(.) > 1),Study) %>% 
     mutate(Study =  str_remove(Study, '[_]\\w+|:')) 
   
-  tokeep <- c("Mat_Edu","Mat_Income","Mat_Race",
-              "Mat_Age","Location","Site_Location")
+  # tokeep <- c("Mat_Edu","Mat_Income","Mat_Race",
+  #             "Mat_Age","Location","Site_Location","Adult_Sex","Sample_Collection_Year")
+  # 
+    tokeep <- c("Mat_Age","Sample_Collection_Year")
+
   curr_social_exps <- names(curr_sdoh)[-1]
   curr_social_exps <- curr_social_exps[curr_social_exps %in% tokeep]
   curr_study <- unique(curr_sdoh$Study)
   #Run Quantile ExWAS
-
-
-    Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = Mat_SDOH,                                          
-                                         Outcome_Data = Burden_Df_Mat,
-                                          myexposures = curr_social_exps,
-                                          myoutcomes = "Burden_Adj",
-                                         mycovars = "Study",
-                                         join_var = "Mat_PID",
-                                          Reg_Type = "Quantile",
-                                         curr_study = curr_study)))
-    
+  Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = curr_sdoh,
+                                                                 Outcome_Data = mat_list_Targeted,
+                                                                 myexposures = curr_social_exps,
+                                                                 myoutcomes = mat_analytes,mycovars = "Study",join_var = "Mat_PID",
+                                                                 Reg_Type = "Quantile",
+                                                                 curr_study = curr_study)))
+  
   Final_Res <- Curr_Results[lapply(Curr_Results, length) > 0]
   All_Study_Single_Exp_Results[[i]] <- Final_Res
   names(All_Study_Single_Exp_Results)[i] <- curr_study
   
-  }
+}
 
 
 
 
 #Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_Single_Exp_Results_Mat <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
+By_Study_Single_Exp_Results_Mat <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
 
-save(Burden_By_Study_Single_Exp_Results_Mat, file = "../../Output/Final_Paper1_Output/Burden_By_Study_Single_Exp_Results_Mat.RData")
-
-
-```
+save(By_Study_Single_Exp_Results_Mat, file = "../../Output/Paper1_OutputV2/By_Study_Single_Exp_Results_Mat.RData")
 
 
-```{r}
-#Age Race 
-
-mystudies <- unique(Mat_SDOH$Study)
-to_keep <- c("Mat_Age","Mat_Race")
-
-By_Study_AgeSex_Child <-  suppress_all_output(quote(Run_ExWAS_By_Study(
-  to_keep = to_keep,
-  child_sdoh = Mat_SDOH,
-  mystudies = mystudies,
-  join_var = "Mat_PID",
-  analytes_touse = "Burden_Adj",
-  targeted_list = Burden_Df_Mat
-)))
-
-
-#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_AgeRace_Mat <- By_Study_AgeSex_Child[lapply(By_Study_AgeSex_Child, length) > 0]
-
-save(Burden_By_Study_AgeRace_Mat, file = "../../Output/Final_Paper1_Output/Burden_By_Study_AgeRace_Mat.RData")
-
-```
-
-```{r}
-#Age Edu 
-
-mystudies <- unique(Mat_SDOH$Study)
-to_keep <- c("Mat_Age","Mat_Edu")
-
-By_Study_AgeSex_Child <-  suppress_all_output(quote(Run_ExWAS_By_Study(
-  to_keep = to_keep,
-  child_sdoh = Mat_SDOH,
-  mystudies = mystudies,
-  join_var = "Mat_PID",
-  analytes_touse = "Burden_Adj",
-  targeted_list = Burden_Df_Mat
-)))
-
-
-#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_AgeEdu_Mat <- By_Study_AgeSex_Child[lapply(By_Study_AgeSex_Child, length) > 0]
-
-save(Burden_By_Study_AgeEdu_Mat, file = "../../Output/Final_Paper1_Output/Burden_By_Study_AgeEdu_Mat.RData")
-
-```
-
-```{r}
-#Age Edu Race
-
-mystudies <- unique(Mat_SDOH$Study)
-to_keep <- c("Mat_Age","Mat_Edu","Mat_Race")
-
-By_Study_AgeSex_Child <-  suppress_all_output(quote(Run_ExWAS_By_Study(
-  to_keep = to_keep,
-  child_sdoh = Mat_SDOH,
-  mystudies = mystudies,
-  join_var = "Mat_PID",
-  analytes_touse = "Burden_Adj",
-  targeted_list = Burden_Df_Mat
-)))
-
-
-#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_AgeEduRace_Mat <- By_Study_AgeSex_Child[lapply(By_Study_AgeSex_Child, length) > 0]
-
-save(Burden_By_Study_AgeEduRace_Mat, file = "../../Output/Final_Paper1_Output/Burden_By_Study_AgeEduRace_Mat.Rdata")
 
 ```
 
 ```{r}
 
-#Full Model
+
 mystudies <- unique(Mat_SDOH$Study)
 
 All_Study_Single_Exp_Results <- list()
 for(i in seq_along(mystudies)){
-  
+  print(i)
   curr_sdoh <- Mat_SDOH %>% 
     dplyr::filter(Study == mystudies[[i]]) %>% 
     select_if(~ !all(is.na(.))) %>% 
@@ -907,20 +924,19 @@ for(i in seq_along(mystudies)){
     mutate(Study =  str_remove(Study, '[_]\\w+|:')) 
   
   tokeep <- c("Mat_Edu","Mat_Income","Mat_Race",
-              "Mat_Age","Location","Site_Location")
+              "Mat_Age","Location","Adult_Sex","Sample_Collection_Year")
   curr_social_exps <- names(curr_sdoh)[-1]
   curr_social_exps <- curr_social_exps[curr_social_exps %in% tokeep]
   curr_study <- unique(curr_sdoh$Study)
   #Run Quantile ExWAS
-    Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = Mat_SDOH,                                          
-                                         Outcome_Data = Burden_Df_Mat,
-                                          myexposures = NULL,
-                                          myoutcomes = "Burden_Adj",
-                                         mycovars = curr_social_exps,
-                                         join_var = "Mat_PID",
-                                          Reg_Type = "Quantile",
-                                         curr_study = curr_study)))
-
+  Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = curr_sdoh,
+                                                                                      Outcome_Data = mat_list_Targeted,
+                                                                                      myexposures = NULL,
+                                                                                      myoutcomes = mat_analytes,
+                                                                                      mycovars = curr_social_exps,
+                                                                                      join_var = "Mat_PID",
+                                                                                      Reg_Type = "Quantile",
+                                                                                      curr_study = curr_study)))
 
   Final_Res <- Curr_Results[lapply(Curr_Results, length) > 0]
   All_Study_Single_Exp_Results[[i]] <- Final_Res
@@ -932,15 +948,113 @@ for(i in seq_along(mystudies)){
 
 
 #Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
-Burden_By_Study_AllSDOH_Mat <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
+By_Study_AllSDOH_Mat <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
 
-save(Burden_By_Study_AllSDOH_Mat, file = "../../Output/Final_Paper1_Output/Burden_By_Study_AllSDOH_Mat.RData")
+save(By_Study_AllSDOH_Mat, file = "../../Output/Paper1_OutputV2/By_Study_AllSDOH_Mat.RData")
 
 
 ```
 
+```{r}
+
+#Age   
+
+mystudies <- unique(Mat_SDOH$Study)
+to_keep <- c("Mat_Age","Sample_Collection_Year")
+
+By_Study_AgeRace_Mat<- suppress_all_output(quote( Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Mat_SDOH,
+  mystudies = mystudies,
+  join_var = "Mat_PID",
+  analytes_touse = mat_analytes,
+  targeted_list = mat_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+By_Study_Age_Mat <- By_Study_AgeRace_Mat[lapply(By_Study_AgeRace_Mat, length) > 0]
+
+save(By_Study_Age_Mat, file = "../../Output/Paper1_OutputV2/By_Study_Age_Mat.RData")
+
+
+```
+
+```{r}
+
+#Age   Race
+
+mystudies <- unique(Mat_SDOH$Study)
+to_keep <- c("Mat_Age","Mat_Race","Sample_Collection_Year")
+
+By_Study_AgeRace_Mat<- suppress_all_output(quote( Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Mat_SDOH,
+  mystudies = mystudies,
+  join_var = "Mat_PID",
+  analytes_touse = mat_analytes,
+  targeted_list = mat_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+By_Study_AgeRace_Mat <- By_Study_AgeRace_Mat[lapply(By_Study_AgeRace_Mat, length) > 0]
+
+save(By_Study_AgeRace_Mat, file = "../../Output/Paper1_OutputV2/By_Study_AgeRace_Mat.RData")
+
+
+```
+
+```{r}
+
+#Age   Edu
+
+mystudies <- unique(Mat_SDOH$Study)
+to_keep <- c("Mat_Age","Mat_Edu","Sample_Collection_Year")
+
+By_Study_AgeEdu_Mat<- suppress_all_output(quote( Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Mat_SDOH,
+  mystudies = mystudies,
+  join_var = "Mat_PID",
+  analytes_touse = mat_analytes,
+  targeted_list = mat_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+By_Study_AgeEdu_Mat <- By_Study_AgeEdu_Mat[lapply(By_Study_AgeEdu_Mat, length) > 0]
+
+save(By_Study_AgeEdu_Mat, file = "../../Output/Paper1_OutputV2/By_Study_AgeEdu_Mat.RData")
+
+
+```
+
+```{r}
+
+#Age   Race Edu
+
+mystudies <- unique(Mat_SDOH$Study)
+to_keep <- c("Mat_Age","Mat_Race","Mat_Edu","Sample_Collection_Year")
+
+By_Study_AgeRaceEdu_Mat<- suppress_all_output(quote( Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Mat_SDOH,
+  mystudies = mystudies,
+  join_var = "Mat_PID",
+  analytes_touse = mat_analytes,
+  targeted_list = mat_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+By_Study_AgeRaceEdu_Mat <- By_Study_AgeRaceEdu_Mat[lapply(By_Study_AgeRaceEdu_Mat, length) > 0]
+
+save(By_Study_AgeRaceEdu_Mat, file = "../../Output/Paper1_OutputV2/By_Study_AgeRaceEdu_Mat.RData")
+
+
+```
 
 ```{r}
 
 ```
-

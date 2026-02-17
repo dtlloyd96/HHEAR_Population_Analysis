@@ -1,0 +1,45 @@
+---
+title: "Reference_Intervals"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(paletteer)
+library(patchwork)
+```
+
+
+Input Data
+------------
+
+```{r}
+ 
+
+
+load("../../../Output/Paper1_OutputV2/Plots/conc_ride_color.RData")
+load("../../../Output/Paper1_OutputV2/Plots/r2_barplot_matched.RData")
+load("../../../Output/Paper1_OutputV2/Plots/r2_barplot_loc.RData")
+
+```
+
+
+
+```{r}
+pdf(file = "../../../Output/Paper1_OutputV2/Plots/Age_Match_Plot.pdf",height = 15,width = 19)
+patch <- conc_ride_color + (r2_barplot_matched/r2_barplot_loc) +
+  plot_annotation(tag_levels = "A")
+print(patch)
+dev.off()
+```
+```{r}
+
+```
+
