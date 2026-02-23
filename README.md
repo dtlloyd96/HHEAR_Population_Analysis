@@ -1,93 +1,128 @@
-HHEAR Population Analysis Repository for the Manuscript : Cross-population comparisons of the chemical exposome in participants of the Human Health Exposure Analysis Resource: Recommendations for assembling future exposomic cohorts 
+# HHEAR Manuscript Analysis
 
-HHEAR Exposomics Analysis Scripts
+Repository for analyses supporting the manuscript:
+**Population Structure of the Chemical Exposome Across Global Cohorts**.
 
-This repository contains the full set of R Markdown (Rmd) and R scripts used to clean, harmonize, and analyze targeted exposomics data across multiple HHEAR cohorts. Analyses include data cleaning, PCA, exposome-wide association studies (ExWAS), quantile regression, burden scores, demographic comparisons, and study-specific figure generation.
+## License
+This repository is released under the **MIT License**.
+See `LICENSE`.
 
-Below is a description of each file and how it fits into the analysis pipeline.
+## How to Cite
+If you use this code or derived outputs, please cite both:
+1. The manuscript (when published).
+2. This repository.
 
-Data Cleaning & Preparation
-HHEAR_Data_Clean_V2.Rmd
+### Manuscript citation (template)
+Lloyd D, Patel C, et al. *Population Structure of the Chemical Exposome Across Global Cohorts*. Year;Journal:Pages. DOI.
 
-Cleans, harmonizes, and merges all core HHEAR datasets (demographics, exposures, SDOH) 
+### Repository/software citation (template)
+Lloyd D, Patel C. *HHEAR Manuscript 1 Analysis* (Version X.Y.Z) [Computer software]. Year.  
+`https://github.com/<org-or-user>/<repo>`
 
-HHEAR_Data_Clean_Targeted_V2.Rmd
+## Folder layout
+- `Coding/`: data cleaning, modeling, interval generation, and study-specific analyses.
+- `Coding/Vis_Code/`: figure-building and patchwork assembly scripts.
+- `Input/Harmonized_Datasets/`: harmonized `.RData` files used by most scripts.
+- `Output/`: analysis outputs (`.RData`, `.pdf`, `.csv`).
 
-Version focused specifically on the targeted chemical exposome. Handles  filtering, LOQ handling, and dataset creation.
+## Suggested run order
+1. Run harmonization scripts.
+2. Run pooled and by-study quantile regression scripts.
+3. Build interval objects and matched/comparison datasets.
+4. Run scripts in `Coding/Vis_Code/` to assemble final figures.
 
-Exploratory & Descriptive Analysis
-Sociodemo_PCA.Rmd
+## Script annotations (`Coding/`)
 
-Runs PCA on sociodemographic  variables across cohorts. 
+### `Coding/HHEAR_Data_Clean_V2.Rmd`
+- **Purpose:** Harmonize cohort-level SDOH/demographic fields into one common schema.
+- **Main inputs:** Raw cohort `*All.RData` files in `Input/`.
+- **Main outputs:** `Input/Harmonized_Datasets/Harmonized_SDOH.RData`, `TEDDY_SDOH_Clean.RData`, `ZIP_SDOH_Clean.RData`.
 
-Geography_PCA.Rmd
+### `Coding/HHEAR_Data_Clean_Targeted_V2.Rmd`
+- **Purpose:** Harmonize targeted analyte data across cohorts; apply LOD imputation and SG/creatinine corrections.
+- **Main inputs:** Raw cohort `*All.RData` files in `Input/`.
+- **Main outputs:** `Input/Harmonized_Datasets/Harmonized_Targeted.RData`.
 
-Conducts PCA on geographic variables
+### `Coding/Pooled_QuantileReg.R`
+- **Purpose:** Primary pooled quantile-regression pipeline for child and maternal analyses.
+- **Main inputs:** `Harmonized_SDOH.RData`, `Harmonized_Targeted.RData`.
+- **Main outputs:** Multiple `Output/Final_Paper1_Output/*.RData` model result objects.
 
+### `Coding/ExWAS_ByStudy.R`
+- **Purpose:** Run study-specific ExWAS/quantile models and export standardized per-study result sets.
+- **Main inputs:** `Harmonized_SDOH.RData`, `Harmonized_Targeted.RData`.
+- **Main outputs:** `Output/By_Study_*.RData` result objects.
 
-Correlatons_EffectiveVars.Rmd
+### `Coding/Within_Cohort_SDOH_QuantileReg.Rmd`
+- **Purpose:** Within-cohort quantile regressions across multiple child/maternal covariate specifications.
+- **Main inputs:** `Harmonized_SDOH.RData`, `Harmonized_Targeted.RData`.
+- **Main outputs:** `Output/Paper1_OutputV2/By_Study_*.RData` objects.
 
-Computes correlation matrices for exposures and evaluates effective number of variables (Meff) using eigenvalue variance.
+### `Coding/Location_QuantileReg_Fixed.R`
+- **Purpose:** Location-focused quantile-regression variant with demographic adjustment sets.
+- **Main inputs:** Harmonized SDOH/targeted datasets.
+- **Main outputs:** Location and age/sex result objects in `Output/Paper1_OutputV2/`.
 
-Study-Level Comparison and ExWAS
-ExWAS_ByStudy.R
+### `Coding/Location_Sample_Year_Reg.R`
+- **Purpose:** Sensitivity workflow adding sample-year structure to location-oriented models.
+- **Main inputs:** Harmonized SDOH/targeted datasets.
+- **Main outputs:** Child/maternal result objects in `Output/Paper1_OutputV2/`.
 
-Runs study-specific exposome-wide association models using exposures as predictors and selected outcomes, producing standardized result tables.
+### `Coding/Age_Sex_Match.Rmd`
+- **Purpose:** Create age/sex-matched child and maternal datasets and rerun quantile models on matched subsets.
+- **Main inputs:** Harmonized SDOH/targeted datasets.
+- **Main outputs:** `Age_Sex_Child_Match.RData`, `Age_Sex_Mat_Match.RData`.
 
-ByStudy_CompareR2.Rmd
+### `Coding/Correlatons_EffectiveVars.Rmd`
+- **Purpose:** Compute correlation structure among exposures and effective-variable summaries; create correlation plots.
+- **Main inputs:** Harmonized SDOH/targeted datasets.
+- **Main outputs:** Correlation figures and derived correlation tables in `Output/Final_Paper1_Output/Plots/`.
 
-Compares R² and pseudo-R² across studies for key models, summarizing heterogeneity and variability in explained variance.
+### `Coding/Intervals_ByCountry.Rmd`
+- **Purpose:** Build country/location-weighted reference interval objects from pooled quantile model outputs.
+- **Main inputs:** Quantile results + harmonized datasets.
+- **Main outputs:** Country-specific interval objects and plotting-ready analyte lists.
 
-Quantile Regression
-ByCohort_QuantileReg.Rmd
+### `Coding/SDOH_Intervals.Rmd`
+- **Purpose:** Build SDOH-stratified interval summaries and interval-linked plotting data.
+- **Main inputs:** Quantile results + harmonized datasets.
+- **Main outputs:** SDOH interval objects used by downstream visualization scripts.
 
-Runs quantile regression by cohort for selected exposures/outcomes, generating τ-specific effect estimates and plots.
+### `Coding/TEDDY_Analysis.Rmd`
+- **Purpose:** TEDDY-only quantile-regression workflow (single-exposure and multivariable models).
+- **Main inputs:** `TEDDY_SDOH_Clean.RData`, `Harmonized_Targeted.RData`.
+- **Main outputs:** `Output/Final_Paper1_Output/TEDDY_*.RData`.
 
-Pooled_QuantileReg.R
+### `Coding/ZIP_Analysis.Rmd`
+- **Purpose:** ZIP-only quantile-regression workflow with race/education/country/state/site model variants.
+- **Main inputs:** `ZIP_SDOH_Clean.RData`, `Harmonized_Targeted.RData`.
+- **Main outputs:** `Output/Final_Paper1_Output/ZIP_*.RData`.
 
-Runs pooled quantile regression analyses across all studies, with cohort fixed effects and harmonized covariates.
+## Script annotations (`Coding/Vis_Code/`)
 
-Aggregate Exposure Metrics
-ByCohort_AggExWAS.Rmd
+### Figure component builders
+- `Coding/Vis_Code/Cumulative_Conc_Plot_Map.Rmd`: cumulative concentration summaries + map assets.
+- `Coding/Vis_Code/Sociodemo_PCA.Rmd`: within-study sociodemographic PCA distributions (`summ_socio_ridge.RData`).
+- `Coding/Vis_Code/Geography_PCA.Rmd`: geography PCA/ranking summaries (`Avg_World_Map.RData` + ridge/rank plots).
+- `Coding/Vis_Code/Within_Study_SDOH_Compare.Rmd`: by-study R2 comparisons and year-linked components.
+- `Coding/Vis_Code/Location_Compare.Rmd`: pooled location/demographic explanatory-power barplots.
+- `Coding/Vis_Code/Age_Sex_Match_Compare.Rmd`: matched-model explanatory-power comparisons.
+- `Coding/Vis_Code/Mother_Child_Compare.Rmd`: maternal vs child comparison visuals.
+- `Coding/Vis_Code/Figure2DemoPlot.Rmd`: demographic patch components.
 
-Computes burden scores (e.g., IDW, aggregate percentile scores, mixture metrics) within each cohort and performs burden-based ExWAS.
+### Interval visualization
+- `Coding/Vis_Code/Intervals_ByCountry.Rmd`: visualization-oriented country interval workflow.
+- `Coding/Vis_Code/Matched_Intervals.Rmd`: matched-cohort interval visuals.
+- `Coding/Vis_Code/SDOH_Intervals.Rmd`: SDOH interval visual workflow.
 
-Intervals_ByCountry.Rmd
+### Final figure assembly
+- `Coding/Vis_Code/Time_Patchplot.Rmd`: time-effect patch plot.
+- `Coding/Vis_Code/Age_Match_Patch.Rmd`: age-match patch figure.
+- `Coding/Vis_Code/Geography_Patchplot.Rmd`: geography multi-panel figure assembly.
+- `Coding/Vis_Code/SocioDemo_Patchplot.Rmd`: sociodemographic multi-panel assembly.
+- `Coding/Vis_Code/All_Patchplots.Rmd`: master final manuscript patchwork assembly.
 
-Exposome Intervals By Country
-
-SDOH_Intervals.Rmd
-
-Summarizes demographic exposure Intervals 
-
-TEDDY and ZIP Study Analyses
-
-TEDDY_Analysis.Rmd
-
-Full TEDDY cohort analysis pipeline 
-
-TEDDY_All_Figures.Rmd
-
-Generates all study-specific figures for the TEDDY cohort
-
-ZIP_Analysis.Rmd
-
-Complete ZIP cohort analysis 
-
-ZIP_All_Figures.Rmd
-
-Produces figures for the ZIP cohort
-
-
-
-Cross-Study PCA & Visualization
-ByStudy_CompareR2.Rmd
-
-Visualizes and compares model fit 
-
-
-Additional Files
-Correlatons_EffectiveVars.Rmd
-
-Calculates correlation matrices and effective number of variables 
-  
+## Notes
+- Most scripts assume relative execution paths from their own directory.
+- Many scripts write intermediate `.RData` files consumed by downstream scripts.
+- `Coding/Intervals_ByCountry.Rmd` and `Coding/Vis_Code/Intervals_ByCountry.Rmd` are related but target different workflow stages.
