@@ -12,12 +12,12 @@ If you use this code or derived outputs, please cite both:
 1. The manuscript (when published).
 2. This repository.
 
-### Manuscript citation (template)
-Lloyd D, Patel C, et al. *Population Structure of the Chemical Exposome Across Global Cohorts*. Year;Journal:Pages. DOI.
+### Manuscript citation 
+Lloyd D.T, Patel C.J, et al. *Population Structure of the Chemical Exposome Across Global Cohorts*. Year;Journal:Pages. DOI.
 
 ### Repository/software citation (template)
-Lloyd D, Patel C. *HHEAR Manuscript 1 Analysis* (Version X.Y.Z) [Computer software]. Year.  
-`https://github.com/<org-or-user>/<repo>`
+Lloyd D, Patel C. *Population Structure of the Chemical Exposome Across Global Cohorts* (Version 1) [R Software]. 2026.  
+`https://github.com/dtlloyd96/HHEAR_Population_Analysis`
 
 ## Folder layout
 - `Coding/`: data cleaning, modeling, interval generation, and study-specific analyses.
@@ -125,4 +125,4 @@ Lloyd D, Patel C. *HHEAR Manuscript 1 Analysis* (Version X.Y.Z) [Computer softwa
 ## Notes
 - Most scripts assume relative execution paths from their own directory.
 - Many scripts write intermediate `.RData` files consumed by downstream scripts.
-- `Coding/Intervals_ByCountry.Rmd` and `Coding/Vis_Code/Intervals_ByCountry.Rmd` are related but target different workflow stages.
+
