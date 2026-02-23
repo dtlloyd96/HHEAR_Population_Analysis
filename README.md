@@ -100,26 +100,26 @@ Lloyd D.T and Patel C.J *Population Structure of the Chemical Exposome Across Gl
 ## Script annotations (`Coding/`)
 
 ### Figure component builders
-- `Coding/Vis_Code/Cumulative_Conc_Plot_Map.Rmd`: cumulative concentration summaries + map assets.
-- `Coding/Vis_Code/Sociodemo_PCA.Rmd`: within-study sociodemographic PCA distributions (`summ_socio_ridge.RData`).
-- `Coding/Vis_Code/Geography_PCA.Rmd`: geography PCA/ranking summaries (`Avg_World_Map.RData` + ridge/rank plots).
-- `Coding/Vis_Code/Within_Study_SDOH_Compare.Rmd`: by-study R2 comparisons and year-linked components.
-- `Coding/Vis_Code/Location_Compare.Rmd`: pooled location/demographic explanatory-power barplots.
-- `Coding/Vis_Code/Age_Sex_Match_Compare.Rmd`: matched-model explanatory-power comparisons.
-- `Coding/Vis_Code/Mother_Child_Compare.Rmd`: maternal vs child comparison visuals.
-- `Coding/Vis_Code/Figure2DemoPlot.Rmd`: demographic patch components.
+- `Coding/Cumulative_Conc_Plot_Map.Rmd`: cumulative concentration summaries + map assets.
+- `Coding/Sociodemo_PCA.Rmd`: within-study sociodemographic PCA distributions (`summ_socio_ridge.RData`).
+- `Coding/Geography_PCA.Rmd`: geography PCA/ranking summaries (`Avg_World_Map.RData` + ridge/rank plots).
+- `Coding/Within_Study_SDOH_Compare.Rmd`: by-study R2 comparisons and year-linked components.
+- `Coding/Location_Compare.Rmd`: pooled location/demographic explanatory-power barplots.
+- `Coding/Age_Sex_Match_Compare.Rmd`: matched-model explanatory-power comparisons.
+- `Coding/Mother_Child_Compare.Rmd`: maternal vs child comparison visuals.
+- `Coding/Figure2DemoPlot.Rmd`: demographic patch components.
 
 ### Interval visualization
-- `Coding/Vis_Code/Intervals_ByCountry.Rmd`: visualization-oriented country interval workflow.
-- `Coding/Vis_Code/Matched_Intervals.Rmd`: matched-cohort interval visuals.
-- `Coding/Vis_Code/SDOH_Intervals.Rmd`: SDOH interval visual workflow.
+- `Coding/Intervals_ByCountry.Rmd`: visualization-oriented country interval workflow.
+- `Coding/Matched_Intervals.Rmd`: matched-cohort interval visuals.
+- `Coding/SDOH_Intervals.Rmd`: SDOH interval visual workflow.
 
 ### Final figure assembly
-- `Coding/Vis_Code/Time_Patchplot.Rmd`: time-effect patch plot.
-- `Coding/Vis_Code/Age_Match_Patch.Rmd`: age-match patch figure.
-- `Coding/Vis_Code/Geography_Patchplot.Rmd`: geography multi-panel figure assembly.
-- `Coding/Vis_Code/SocioDemo_Patchplot.Rmd`: sociodemographic multi-panel assembly.
-- `Coding/Vis_Code/All_Patchplots.Rmd`: master final manuscript patchwork assembly.
+- `Coding/Time_Patchplot.Rmd`: time-effect patch plot.
+- `Coding/Age_Match_Patch.Rmd`: age-match patch figure.
+- `Coding/Geography_Patchplot.Rmd`: geography multi-panel figure assembly.
+- `Coding/SocioDemo_Patchplot.Rmd`: sociodemographic multi-panel assembly.
+- `Coding/All_Patchplots.Rmd`: master final manuscript patchwork assembly.
 
 ## Notes
 - Most scripts assume relative execution paths from their own directory.
