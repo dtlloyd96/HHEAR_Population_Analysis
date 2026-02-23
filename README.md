@@ -97,7 +97,7 @@ Lloyd D.T and Patel C.J *Population Structure of the Chemical Exposome Across Gl
 - **Main inputs:** `ZIP_SDOH_Clean.RData`, `Harmonized_Targeted.RData`.
 - **Main outputs:** `Output/Final_Paper1_Output/ZIP_*.RData`.
 
-## Script annotations (`Coding/Vis_Code/`)
+## Script annotations (`Coding/`)
 
 ### Figure component builders
 - `Coding/Vis_Code/Cumulative_Conc_Plot_Map.Rmd`: cumulative concentration summaries + map assets.
