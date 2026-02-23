@@ -20,9 +20,8 @@ Lloyd D.T, Patel C.J *Population Structure of the Chemical Exposome Across Globa
 `https://github.com/dtlloyd96/HHEAR_Population_Analysis`
 
 ## Folder layout
-- `Coding/`: data cleaning, modeling, interval generation, and study-specific analyses.
-- `Coding/Vis_Code/`: figure-building and patchwork assembly scripts.
-- `Input/Harmonized_Datasets/`: harmonized `.RData` files used by most scripts.
+- `Coding/`: data cleaning, modeling, interval generation, study-specific analyses and visualization.
+- `Input/`: Underlying data must be downloaded from [HHEAR Data Website](https://hheardatacenter.mssm.edu/), and fed through cleaning scripts.
 - `Output/`: analysis outputs (`.RData`, `.pdf`, `.csv`).
 
 ## Suggested run order
