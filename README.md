@@ -15,8 +15,8 @@ If you use this code or derived outputs, please cite both:
 ### Manuscript citation 
 Lloyd D.T, Patel C.J, et al. *Population Structure of the Chemical Exposome Across Global Cohorts*. Year;Journal:Pages. DOI.
 
-### Repository/software citation (template)
-Lloyd D, Patel C. *Population Structure of the Chemical Exposome Across Global Cohorts* (Version 1) [R Software]. 2026.  
+### Repository/software citation 
+Lloyd D.T, Patel C.J *Population Structure of the Chemical Exposome Across Global Cohorts* (Version 1) [R Software]. 2026.  
 `https://github.com/dtlloyd96/HHEAR_Population_Analysis`
 
 ## Folder layout
