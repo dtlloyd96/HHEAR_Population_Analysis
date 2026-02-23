@@ -22,8 +22,8 @@ Lloyd D.T., Patel C.J *Population Structure of the Chemical Exposome Across Glob
 ## Folder layout
 - `Coding/`: data cleaning, modeling, interval generation, and study-specific analyses.
 - `Coding/Vis_Code`: Data visualizations
-- `Input/`: Underlying data must be downloaded from [HHEAR Data Website](https://hheardatacenter.mssm.edu/), and fed through cleaning scripts.
-- `Output/`: analysis outputs (`.RData`, `.pdf`, `.csv`).
+- `Input/`: Placeholder Folder - Underlying data must be downloaded from [HHEAR Data Website](https://hheardatacenter.mssm.edu/), and fed through cleaning scripts.
+- `Output/`: Placeholder Folder - analysis outputs (`.RData`, `.pdf`, `.csv`).
 
 ## Suggested run order
 1. Run harmonization scripts.
