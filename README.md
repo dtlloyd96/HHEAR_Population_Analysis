@@ -16,11 +16,12 @@ If you use this code or derived outputs, please cite both:
 Lloyd D.T, et al. *Population Structure of the Chemical Exposome Across Global Cohorts*. Year;Journal:Pages. DOI.
 
 ### Repository/software citation 
-Lloyd D.T and Patel C.J *Population Structure of the Chemical Exposome Across Global Cohorts* (Version 1) [R Software]. 2026.  
+Lloyd D.T., Patel C.J *Population Structure of the Chemical Exposome Across Global Cohorts* (Version 1) [R Software]. 2026.  
 `https://github.com/dtlloyd96/HHEAR_Population_Analysis`
 
 ## Folder layout
-- `Coding/`: data cleaning, modeling, interval generation, study-specific analyses and visualization.
+- `Coding/`: data cleaning, modeling, interval generation, and study-specific analyses.
+- `Coding/Vis_Code`: Data visualizations
 - `Input/`: Underlying data must be downloaded from [HHEAR Data Website](https://hheardatacenter.mssm.edu/), and fed through cleaning scripts.
 - `Output/`: analysis outputs (`.RData`, `.pdf`, `.csv`).
 
@@ -97,29 +98,29 @@ Lloyd D.T and Patel C.J *Population Structure of the Chemical Exposome Across Gl
 - **Main inputs:** `ZIP_SDOH_Clean.RData`, `Harmonized_Targeted.RData`.
 - **Main outputs:** `Output/Final_Paper1_Output/ZIP_*.RData`.
 
-## Script annotations (`Coding/`)
+## Script annotations (`Coding/Vis_Code/`)
 
 ### Figure component builders
-- `Coding/Cumulative_Conc_Plot_Map.Rmd`: cumulative concentration summaries + map assets.
-- `Coding/Sociodemo_PCA.Rmd`: within-study sociodemographic PCA distributions (`summ_socio_ridge.RData`).
-- `Coding/Geography_PCA.Rmd`: geography PCA/ranking summaries (`Avg_World_Map.RData` + ridge/rank plots).
-- `Coding/Within_Study_SDOH_Compare.Rmd`: by-study R2 comparisons and year-linked components.
-- `Coding/Location_Compare.Rmd`: pooled location/demographic explanatory-power barplots.
-- `Coding/Age_Sex_Match_Compare.Rmd`: matched-model explanatory-power comparisons.
-- `Coding/Mother_Child_Compare.Rmd`: maternal vs child comparison visuals.
-- `Coding/Figure2DemoPlot.Rmd`: demographic patch components.
+- `Coding/Vis_Code/Cumulative_Conc_Plot_Map.Rmd`: cumulative concentration summaries + map assets.
+- `Coding/Vis_Code/Sociodemo_PCA.Rmd`: within-study sociodemographic PCA distributions (`summ_socio_ridge.RData`).
+- `Coding/Vis_Code/Geography_PCA.Rmd`: geography PCA/ranking summaries (`Avg_World_Map.RData` + ridge/rank plots).
+- `Coding/Vis_Code/Within_Study_SDOH_Compare.Rmd`: by-study R2 comparisons and year-linked components.
+- `Coding/Vis_Code/Location_Compare.Rmd`: pooled location/demographic explanatory-power barplots.
+- `Coding/Vis_Code/Age_Sex_Match_Compare.Rmd`: matched-model explanatory-power comparisons.
+- `Coding/Vis_Code/Mother_Child_Compare.Rmd`: maternal vs child comparison visuals.
+- `Coding/Vis_Code/Figure2DemoPlot.Rmd`: demographic patch components.
 
 ### Interval visualization
-- `Coding/Intervals_ByCountry.Rmd`: visualization-oriented country interval workflow.
-- `Coding/Matched_Intervals.Rmd`: matched-cohort interval visuals.
-- `Coding/SDOH_Intervals.Rmd`: SDOH interval visual workflow.
+- `Coding/Vis_Code/Intervals_ByCountry.Rmd`: visualization-oriented country interval workflow.
+- `Coding/Vis_Code/Matched_Intervals.Rmd`: matched-cohort interval visuals.
+- `Coding/Vis_Code/SDOH_Intervals.Rmd`: SDOH interval visual workflow.
 
 ### Final figure assembly
-- `Coding/Time_Patchplot.Rmd`: time-effect patch plot.
-- `Coding/Age_Match_Patch.Rmd`: age-match patch figure.
-- `Coding/Geography_Patchplot.Rmd`: geography multi-panel figure assembly.
-- `Coding/SocioDemo_Patchplot.Rmd`: sociodemographic multi-panel assembly.
-- `Coding/All_Patchplots.Rmd`: master final manuscript patchwork assembly.
+- `Coding/Vis_Code/Time_Patchplot.Rmd`: time-effect patch plot.
+- `Coding/Vis_Code/Age_Match_Patch.Rmd`: age-match patch figure.
+- `Coding/Vis_Code/Geography_Patchplot.Rmd`: geography multi-panel figure assembly.
+- `Coding/Vis_Code/SocioDemo_Patchplot.Rmd`: sociodemographic multi-panel assembly.
+- `Coding/Vis_Code/All_Patchplots.Rmd`: master final manuscript patchwork assembly.
 
 ## Notes
 - Most scripts assume relative execution paths from their own directory.
