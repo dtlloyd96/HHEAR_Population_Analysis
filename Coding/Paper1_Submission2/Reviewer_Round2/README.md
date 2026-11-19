@@ -1,8 +1,8 @@
 # Revision analyses (Round 2)
 
-Analyses added in response to review. Run from the repository root
-(`Rscript Coding/Paper1_Submission2/Reviewer_Round2/<script>`), after the
-harmonization (step 2) and models (step 3). Outputs go to
+Analyses added during peer review. Run them after harmonization (step 2) and
+the models (step 3), from the repository root:
+`Rscript Coding/Paper1_Submission2/Reviewer_Round2/<script>`. Results go to
 `Output/Reviewer_Round2/`.
 
 | Script(s) | Analysis | Used in |
@@ -29,9 +29,9 @@ Run in this order: `geospatial_extract` → `geospatial_no2` →
 `composition_context` → `MEBCO_creatinine_sensitivity` → `B4_PYR_sensitivity`
 → `analysis_register` → `map` → `supp_figures`.
 
-The public layers are read from a cache outside the repository,
-`$HHEAR_GEO_CACHE` (default `~/HHEAR_geo_cache`), laid out as below. Download
-them from the providers; the full references are in the paper.
+These scripts read public data layers from a folder outside the repository,
+`$HHEAR_GEO_CACHE` (default `~/HHEAR_geo_cache`). Download each layer from its
+provider into the subfolder shown; full references are in the paper.
 
 | Folder | Layer | Source |
 |---|---|---|

@@ -24,11 +24,14 @@ Rplots.pdf
 # explicit `!` exception below rather than relaxing these rules.
 Input/*
 Output/*
+Datasets/
+Health_Outcome_Analysis/
 !Input/README.md
 !Output/README.md
 
 # Data interchange formats, anywhere in the tree
 *.RData
+*.Rdata
 *.rda
 *.rds
 *.Rds
