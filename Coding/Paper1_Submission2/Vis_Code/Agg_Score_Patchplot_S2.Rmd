@@ -1,0 +1,58 @@
+---
+title: "Figure3Patchplot"
+output: html_document
+date: "2025-10-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(patchwork)
+```
+
+```{r}
+load("../../../Output/Paper1_Output_Submission2/Plots/Burden_Prop_Plot.RData")
+load("../../../Output/Paper1_Output_Submission2/R2_Barplot_Burden.RData")
+load("../../../Output/Paper1_Output_Submission2/cor_box.RData")
+load("../../../Output/Paper1_Output_Submission2/cor_bar.RData")
+# Panel E (added 2026-11-04, Reviewer 4 comment 5): within-cohort sociodemographic
+# contribution for individual chemicals, every cohort -- written by
+# Within_Study_SDOH_Compare.Rmd but previously not in any figure.
+load("../../../Output/Paper1_Output_Submission2/Plots/R2_Barplot_ByStudy.RData")
+
+```
+
+```{r}
+
+
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/FigureS14_All.pdf",height = 24, width = 18)
+# The overall title "Aggregate Exposure Score" was dropped when panel E (individual
+# chemicals, not the aggregate score) was added; panels D and E carry
+# descriptive titles so the two by-cohort panels cannot be confused.
+panel_e <- r2_barplot_bystudy +
+  labs(title = "Sociodemographic contribution by cohort, individual chemicals",
+       x = expression("Contribution to prediction (mean " * R^2 * ")"))
+patch <- ( cor_box | cor_bar ) /
+  (burden_prop | r2_barplot_agg + ggtitle("Sociodemographic contribution by cohort, cumulative score") +
+     labs(x = expression("Contribution to prediction (mean " * R^2 * ")"))) /
+  panel_e
+patch + 
+    plot_layout(heights = c(1, 1, 1.1)) +
+  #plot_layout(guides = "collect") +    
+  plot_annotation(
+  tag_levels = "A"
+)  &
+  theme(plot.tag = element_text(size = 20),
+        plot.title = element_text(size = 15)) 
+dev.off()
+```
+
+
+
+
+
+```{r}
+
+```
+

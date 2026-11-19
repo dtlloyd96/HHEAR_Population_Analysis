@@ -1,0 +1,1578 @@
+---
+title: "SDOH_Intervals"
+output: html_document
+date: "2025-10-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r view-shim}
+# View() errors under rmarkdown::render(); shim to a no-op. (2026-08-11)
+View <- function(x, ...) invisible(x)
+```
+
+```{r}
+library(tidyverse)
+library(glmnet)
+library(caret)
+library(randomForest)
+library(e1071)
+library(xgboost)
+library(quantreg)
+library(scales)
+library(paletteer)
+library(data.table)
+library(officer)
+library(flextable)
+library(ggrepel)
+library(patchwork)
+source("../../../Coding/targeted_analyte_mapping.R")
+
+```
+
+```{r harmonization-helpers}
+# to_ng_per_mL(), std_study(). Added 2026-08-11; see CODE_AUDIT_2026-08-11.md.
+local({
+  cands <- c("../harmonization_helpers.R", "harmonization_helpers.R",
+             "Coding/Paper1_Submission2/harmonization_helpers.R")
+  hit <- cands[file.exists(cands)]
+  if (length(hit) == 0) stop("Cannot locate harmonization_helpers.R")
+  source(hit[[1]], local = FALSE)
+})
+```
+
+
+```{r}
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+mypal
+mapping_path <- "../../../Input/Harmonized_Datasets/Targeted_Analyte_Category_Mapping.csv"
+targeted_mapping <- read_targeted_analyte_mapping(mapping_path)
+plot_categories <- c("TraceElements", "Phenols", "Phthalates", "PAH", "PCB", "Parabens", "Smoking", "Pesticides", "VOCs", "FlameRetardants", "PFAS")
+targeted_category_lookup <- targeted_mapping %>% dplyr::filter(Category %in% plot_categories) %>% dplyr::select(Code, Category) %>% dplyr::distinct()
+theme_codes <- targeted_theme_codes(targeted_mapping)
+get_theme <- function(category_name) if (category_name %in% names(theme_codes)) unique(theme_codes[[category_name]]) else character()
+Trace_Elements_Theme <- get_theme("TraceElements")
+Phenols_Theme <- get_theme("Phenols")
+PAH_Theme <- get_theme("PAH")
+Phthalates_Theme <- get_theme("Phthalates")
+Parabens_Theme <- get_theme("Parabens")
+Smoking_Theme <- get_theme("Smoking")
+Inflam_Theme <- get_theme("Inflammation")
+Pesticide_Theme <- get_theme("Pesticides")
+VOC_Theme <- get_theme("VOCs")
+OXID_Theme <- get_theme("OxidativeStress")
+PFAS_Theme <- get_theme("PFAS")
+Flame_Retardant_Theme <- get_theme("FlameRetardants")
+PCB_Theme <- get_theme("PCB")
+Other_Theme <- character()
+add_plot_category <- function(data, code_col = "Outcome") dplyr::left_join(data, targeted_category_lookup, by = stats::setNames("Code", code_col))
+```
+
+Input Data
+------------
+
+```{r}
+ 
+
+#load("../../Output/Child_SDOH_Metab_Quantile_Results.RData")
+#Reg_Results <- Child_SDOH_Metab_Quantile_Results
+load("../../../Output/Paper1_Output_Submission2/Pooled_Output/Mat_Mat_Age_Quantile_Results.RData")
+load("../../../Output/Paper1_Output_Submission2/Pooled_Output/Child_Child_Age_Quantile_Results.RData")
+load("../../../Output/Paper1_Output_Submission2/Pooled_Output/Child_Child_Sex_Quantile_Results.RData")
+
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+load(file = "../../../Output/Ref_Intervals/Cohort_UWLE.RData")
+load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+```
+
+Create Intervals
+--------------
+```{r}
+
+expected_taus <- c("Tau05", "Tau25", "Tau50", "Tau75", "Tau95")
+tau_name_map <- c(
+  "0.05" = "Tau05",
+  "0.25" = "Tau25",
+  "0.5" = "Tau50",
+  "0.50" = "Tau50",
+  "0.75" = "Tau75",
+  "0.95" = "Tau95",
+  "Tau05" = "Tau05",
+  "Tau25" = "Tau25",
+  "Tau50" = "Tau50",
+  "Tau75" = "Tau75",
+  "Tau95" = "Tau95"
+)
+
+get_quant_object <- function(x) {
+  if (is.null(x)) return(NULL)
+  if (length(x) == 0) return(NULL)
+  if (is.character(x)) return(NULL)
+  if (length(x[[1]]) == 0) return(NULL)
+  if (is.character(x[[1]])) return(NULL)
+
+  x[[1]]
+}
+
+get_quant_table <- function(x) {
+  q_obj <- get_quant_object(x)
+
+  if (is.null(q_obj)) return(NULL)
+  if (!"Quantile_Results" %in% names(q_obj)) return(NULL)
+  if (length(q_obj[["Quantile_Results"]]) < 2) return(NULL)
+
+  q_obj[["Quantile_Results"]][[2]]
+}
+
+safe_interval_width <- function(upper, lower) {
+  ifelse(!is.na(upper) & !is.na(lower), upper - lower, NA_real_)
+}
+
+cap_with_na <- function(x, cap) {
+  ifelse(is.na(x), NA_real_, pmin(x, cap))
+}
+
+calc_weighted_taus <- function(quant_table) {
+  out <- c(
+    Tau05 = NA_real_,
+    Tau25 = NA_real_,
+    Tau50 = NA_real_,
+    Tau75 = NA_real_,
+    Tau95 = NA_real_
+  )
+
+  if (is.null(quant_table)) return(out)
+
+  Tau_Data <- as.data.frame(quant_table)
+  if (ncol(Tau_Data) == 0) return(out)
+
+  if (is.null(names(Tau_Data))) {
+    if (ncol(Tau_Data) == 4) {
+      names(Tau_Data) <- c("Tau25", "Tau50", "Tau75", "Tau95")
+    } else if (ncol(Tau_Data) == 5) {
+      names(Tau_Data) <- expected_taus
+    } else {
+      names(Tau_Data) <- paste0("V", seq_len(ncol(Tau_Data)))
+    }
+  }
+
+  mapped_names <- unname(tau_name_map[names(Tau_Data)])
+  valid_cols <- !is.na(mapped_names)
+  Tau_Data <- Tau_Data[, valid_cols, drop = FALSE]
+
+  if (ncol(Tau_Data) == 0) return(out)
+
+  names(Tau_Data) <- mapped_names[valid_cols]
+  Tau_Data <- Tau_Data[, !duplicated(names(Tau_Data)), drop = FALSE]
+
+  for (tau in intersect(names(out), names(Tau_Data))) {
+    curr_values <- suppressWarnings(as.numeric(Tau_Data[[tau]]))
+    curr_values <- curr_values[!is.na(curr_values)]
+
+    if (length(curr_values) > 0) {
+      out[tau] <- mean(curr_values)
+    }
+  }
+
+  out
+}
+
+shared_outcomes <- intersect(
+  names(Child_Child_Age_Quantile_Results),
+  names(Child_Child_Sex_Quantile_Results)
+)
+
+Final_Intervals <- list()
+
+for (outcome_name in shared_outcomes) {
+  Quant_Age <- get_quant_table(
+    Child_Child_Age_Quantile_Results[[outcome_name]]
+  )
+
+  Quant_Sex <- get_quant_table(
+    Child_Child_Sex_Quantile_Results[[outcome_name]]
+  )
+
+  Curr_Quant <- list(
+    Child_Age = Quant_Age,
+    Child_Sex = Quant_Sex
+  )
+
+  All_Weighted_Averages <- list()
+
+  for (i in seq_along(Curr_Quant)) {
+    weighted_averages <- calc_weighted_taus(Curr_Quant[[i]])
+
+    if (is.null(weighted_averages)) next
+
+    All_Weighted_Averages[[names(Curr_Quant)[i]]] <- weighted_averages
+  }
+
+  if (length(All_Weighted_Averages) == 0) next
+
+  W_Avg_Df <- bind_rows(All_Weighted_Averages)
+
+  column_means <- W_Avg_Df %>%
+    summarise(across(
+      all_of(expected_taus),
+      ~ mean(.x, na.rm = TRUE)
+    )) %>%
+    mutate(
+      across(
+        all_of(expected_taus),
+        ~ ifelse(is.nan(.x), NA_real_, .x)
+      ),
+      Outcome = outcome_name
+    ) %>%
+    select(Outcome, everything())
+
+  Final_Intervals[[outcome_name]] <- column_means
+}
+```
+
+```{r}
+Final_Intervals_Mat <- list()
+
+for (outcome_name in names(Mat_Mat_Age_Quantile_Results)) {
+  Quant_Age <- get_quant_table(
+    Mat_Mat_Age_Quantile_Results[[outcome_name]]
+  )
+
+  weighted_averages <- calc_weighted_taus(Quant_Age)
+
+  column_means <- as.data.frame(t(weighted_averages)) %>%
+    mutate(Outcome = outcome_name) %>%
+    dplyr::select(Outcome, Tau05, Tau25, Tau50, Tau75, Tau95)
+
+  Final_Intervals_Mat[[outcome_name]] <- column_means
+}
+```
+
+```{r}
+Final_Intervals_Df_Adjusted <- bind_rows(Final_Intervals) %>%
+    mutate(across(where(is.numeric), ~ round(., 3))) %>% 
+  mutate(
+    IQR = safe_interval_width(Tau75, Tau25),
+    Max_Min = safe_interval_width(Tau95, Tau05)
+  ) %>% 
+  add_plot_category() %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  mutate(
+      IQR_unadj = IQR,
+      IQR = cap_with_na(IQR, 20),
+      Max_Min_unadj = Max_Min,
+      Max_Min = cap_with_na(Max_Min, 50),
+      Flag = as.factor(ifelse(!is.na(IQR_unadj) & IQR_unadj >= 20, 1, 0))
+    ) %>% 
+    filter(!is.na(Category)) %>% 
+    mutate(Max_Min_Log = log10(Max_Min + 1),
+           IQR_Log = log10(IQR+ 1)) 
+
+
+Final_Intervals_Df_Adjusted_Mat <- bind_rows(Final_Intervals_Mat) %>%
+    mutate(across(where(is.numeric), ~ round(., 3)))%>% 
+  mutate(
+    IQR = safe_interval_width(Tau75, Tau25),
+    Max_Min = safe_interval_width(Tau95, Tau05)
+  ) %>% 
+  add_plot_category() %>% 
+  dplyr::filter(!is.na(Category)) %>% 
+  mutate(
+      IQR_unadj = IQR,
+      IQR = cap_with_na(IQR, 20),
+      Max_Min_unadj = Max_Min,
+      Max_Min = cap_with_na(Max_Min, 50),
+      Flag = as.factor(ifelse(!is.na(IQR_unadj) & IQR_unadj >= 20, 1, 0))
+    ) %>% 
+  filter(!is.na(Category)) %>% 
+    mutate(Max_Min_Log = log10(Max_Min + 1),
+           IQR_Log = log10(IQR+ 1)) 
+
+
+
+```
+
+Process Targeted
+-------
+
+```{r}
+
+
+Child_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  # UNIT CONVERSION (2026-08-11, CODE_AUDIT_2026-08-11.md section 1.1).
+  # The inline case_when here fell through to `TRUE ~ Concentration`, silently
+  # treating mg/dL, ug/mL, ng/g, pmol/mL, nM and kg/m3 as if they were ng/mL --
+  # 5.9% of rows, mis-scaled by 10^3 to 10^6. Replaced by the shared converter,
+  # which returns NA for units that cannot be expressed as a fluid concentration
+  # so those rows drop out instead of contributing a wrong number.
+  mutate(Concentration = to_ng_per_mL(Concentration, Units)) %>% 
+  dplyr::filter(!is.na(Concentration)) %>% 
+  dplyr::select(-Mat_PID) %>% 
+  group_by(Study,Child_PID,Analyte_Code) %>% 
+  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+  ungroup()
+
+
+
+# Child_Data_Targeted %>% 
+#     dplyr::filter(Analyte_Code == "As" ) %>% View 
+
+
+myanalytes <- unique(Child_Data_Targeted$Analyte_Code)
+child_analytes <- myanalytes
+
+
+
+child_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Child_PID","Study",curr_analyte)
+  
+  curr_data <- Child_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+  
+  child_list_Targeted[[i]] <- curr_data
+  names(child_list_Targeted)[i] <- curr_analyte
+  
+}
+length(unique(Child_Data_Targeted$Child_PID))
+```
+
+```{r}
+Mat_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Mat_PID)) %>% 
+  dplyr::select(-Child_PID) %>% 
+  # UNIT CONVERSION (2026-08-11, CODE_AUDIT_2026-08-11.md section 1.1).
+  # The inline case_when here fell through to `TRUE ~ Concentration`, silently
+  # treating mg/dL, ug/mL, ng/g, pmol/mL, nM and kg/m3 as if they were ng/mL --
+  # 5.9% of rows, mis-scaled by 10^3 to 10^6. Replaced by the shared converter,
+  # which returns NA for units that cannot be expressed as a fluid concentration
+  # so those rows drop out instead of contributing a wrong number.
+  mutate(Concentration = to_ng_per_mL(Concentration, Units)) %>% 
+  dplyr::filter(!is.na(Concentration)) %>% 
+  dplyr::filter(!is.na(Analyte_Code)) %>% 
+  group_by(Study,Mat_PID,Analyte_Code) %>% 
+  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+  mutate(across(everything(), ~ replace(., is.infinite(.), 0)))
+
+
+
+myanalytes <- unique(Mat_Data_Targeted$Analyte_Code)
+
+mat_analytes <- myanalytes
+
+mat_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  #print(i)
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Mat_PID","Study",curr_analyte)
+  
+  curr_data <- Mat_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+  
+  mat_list_Targeted[[i]] <- curr_data
+  names(mat_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+
+```
+
+
+
+```{r}
+Fast_Merge <- function(mylist = All_Perc,ID_Col = "Child_PID"){
+  
+
+  results_df <- mylist[[1]] %>% 
+    dplyr::select(-Units) %>% 
+   group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    #summarise(value = mean(col_name,na.rm = T))
+  
+
+  for(i in 2:length(mylist)){
+    
+    #print(i)
+    
+    curr_df <- mylist[[i]] %>% 
+    dplyr::select(-Units) %>% 
+      group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    
+    #names(curr_df) <- c(ID_Col,"Study",metab_new)
+    results_df <- full_join(results_df, curr_df, by = c(ID_Col,"Study"))
+
+  }
+  
+  return(results_df)  
+}
+
+```
+
+```{r}
+#Mat_All_Exposures <- Fast_Merge(mylist = mat_list_Targeted,ID_Col = "Mat_PID")
+#Child_All_Exposures <- Fast_Merge(mylist = child_list_Targeted,ID_Col = "Child_PID")
+
+```
+
+```{r}
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
+                                    Location == "NorthEast_US" ~ "United_States",
+                                    Location == "New_Hampshire" ~ "United_States",
+                                    Location == "Washington_State" ~ "United_States",
+                                    Location == "Midwestern_US" ~ "United_States",
+                                    Location == "Denver" ~ "United_States",
+                                    Location == "Baltimore" ~ "United_States",
+                                    Location == "Sacramento" ~ "United_States",
+                                    Location == "Southern_California" ~ "United_States",
+                                    Location == "Syracuse" ~ "United_States",
+                                    Location == "Michigan" ~ "United_States",
+                                    Location == "California" ~ "United_States",
+                                    Location == "SanFrancisco" ~ "United_States",
+                                    Location == "Massachusetts" ~ "United_States",
+                                    TRUE ~ "Worldwide")) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+  Mat_Edu %in% c("No_Education",
+                 "Primary_Education",
+                 "Primary_School",
+                 "High_School") ~ "No_College",
+  Mat_Edu %in% c("Some_College",
+                 "Four_Year_College_Degree",
+                 "Some_Grad_School") ~ "Some_College",
+  Mat_Edu == "Not_Reported" ~ NA
+)) %>% 
+  mutate(Mat_Income_Binary = case_when(
+  Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
+  Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
+                "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
+  TRUE ~ NA
+)) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) 
+
+
+ExWAS_SDOH_Exposures$Mat_Edu <- ExWAS_SDOH_Exposures$Mat_Edu %>%
+  fct_recode(
+    "Primary"       = "Primary_School",
+    "Primary"       = "Primary_Education",
+    "High School"   = "High_School",
+    "Some College"  = "Some_College",
+    "College"       = "Four_Year_College_Degree",
+    "Grad School"   = "Some_Grad_School",
+    "Other"         = "Other",
+    "None"          = "No_Education"
+  ) %>%
+  fct_relevel("None", "Primary", "High School", "Some College",
+              "College", "Grad School", "Other")
+
+
+Ref_Vars <- c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu","Child_Age","Mat_Race","Child_Race","Child_Sex")
+
+
+
+Child_SDOH <- ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  dplyr::select(Study,Child_PID,Mat_PID,all_of(Ref_Vars)) 
+
+
+Mat_SDOH <- ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Mat_PID) ) %>% 
+  dplyr::select(Study,Child_PID,Mat_PID,all_of(Ref_Vars)) 
+
+# Mat_SDOH_Targeted <- left_join(Mat_All_Exposures,Mat_SDOH, by = c("Mat_PID","Study")) %>% 
+#   dplyr::filter(!is.na(Mat_PID))
+# 
+# Child_SDOH_Targeted <- left_join(Child_All_Exposures,Mat_SDOH, by = c("Child_PID","Study")) %>% 
+#   dplyr::filter(!is.na(Child_PID))
+
+```
+Plot Intervals
+------
+```{r}
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+label_log1p <- function(breaks) {
+  label_number(
+    accuracy = 0.1,
+    trim = TRUE,
+    scale_cut = cut_si("")   # e.g., 1k, 10k, 1M
+  )(expm1(breaks))
+}
+
+```
+
+
+
+```{r}
+
+# mystudies <- unique(Child_SDOH$Study)
+# myanalytes <- Final_Intervals_Df_Adjusted$Outcome
+# pdf(file = "../../../Output/Final_Paper1_Output/Plots/Child_All_SDOH_Intervals.pdf",height = 4,width = 6)
+# for(i in seq_along(mystudies)){
+#   
+#   curr_sdoh_data <- Child_SDOH %>% 
+#     dplyr::select(-Mat_PID) %>% 
+#     dplyr::filter(Study == mystudies[[i]]) %>% 
+#     select_if(~ !all(is.na(.))) %>% 
+#     select(where(~n_distinct(.) > 1))
+#   
+#   curr_demo_features <- names(curr_sdoh_data)[-1]
+#   
+# for(z in seq_along(myanalytes)){
+#   
+#   curr_interval <- Final_Intervals_Df_Adjusted %>% 
+#       dplyr::filter(Outcome == myanalytes[[z]]) 
+#   
+#   curr_data <- child_list_Targeted[[myanalytes[[z]]]] %>% 
+#     mutate(Above_75 = ifelse(!!sym(myanalytes[[z]]) >= curr_interval$Tau75 * 2,1,0)) %>% 
+#     rownames_to_column("ID") %>% 
+#     mutate(plot_value = ifelse(Above_75 == 1,curr_interval$Tau75 * 2 + 1,!!sym(myanalytes[[z]])),
+#            ID = as.numeric(ID)) %>% 
+#     left_join(curr_sdoh_data,., by = "Child_PID")
+# 
+#  if (all(is.na(curr_data[["plot_value"]]))) {
+#     next   # skip to the next iteration
+#   }
+#   
+#   for(j in seq_along(curr_demo_features)){
+#     
+#       group_col <- curr_demo_features[[j]]
+# 
+#      if(curr_demo_features[j] == "Mat_Age" | curr_demo_features[j] == "Child_Age"){
+#      
+#        curr_data <- curr_data %>%
+#         mutate(quantile_group = as.factor(ntile(!!sym(curr_demo_features[j]), 4) )) # 4 for quartiles
+#         
+#        group_col <- "quantile_group"
+#      
+#      }
+#     
+#     curr_analyte <- myanalytes[[z]]
+#     
+#     
+#     curr_data_plot <- curr_data %>% 
+#       dplyr::filter(!is.na(!!sym(curr_demo_features[[j]]))) 
+#     
+#       error_y <-(length(unique(curr_data_plot[[group_col]])) + 1)/2
+# 
+#       bar_height <- length(unique(curr_data_plot[[group_col]]))
+#     
+#      p <- ggplot() +
+#         geom_jitter(data = curr_data_plot, aes(x = log1p(!!sym(curr_analyte)),y =  !!sym(group_col), 
+#                                                color = !!sym(group_col)), size = .5,alpha = 1) +
+#         scale_color_manual(values = mypal) +
+#         geom_errorbarh(data = curr_interval,aes(y = error_y,xmin = log1p(Tau25), 
+#                                                     xmax =log1p(Tau75)), height = bar_height, color ="#1A5354",linewidth = 1) +
+#         geom_errorbarh(data = curr_interval,aes(y =error_y,xmin = log1p(Tau05), 
+#                                                   xmax =log1p(Tau95)), height = bar_height/2, color = "#1A5354",linewidth = 1,alpha = .6) +
+#         geom_point(data = curr_interval,aes(y = error_y,x = log1p(Tau50)), color = "#1A5354", size = 6) +
+#         theme_classic() +
+#         labs(title = paste0("Exposure Quantile: Cohort ",mystudies[[i]]," : ",
+#                             curr_demo_features[j]," : ",curr_analyte), x = "Quantile Range", y = curr_demo_features[[j]])
+#     
+#     print(p)
+# 
+#     
+#     
+#   }
+#   
+#   
+# }
+#   
+# }
+# dev.off()
+```
+
+
+```{r}
+
+# mystudies <- unique(Mat_SDOH$Study)
+# myanalytes <- Final_Intervals_Df_Adjusted_Mat$Outcome
+# pdf(file = "../../../Output/Final_Paper1_Output/Plots/Mat_All_SDOH_Intervals.pdf",height = 4,width = 7)
+# for(i in seq_along(mystudies)){
+#   
+#   curr_sdoh_data <- Mat_SDOH %>% 
+#     dplyr::select(-Child_PID) %>% 
+#     dplyr::filter(Study == mystudies[[i]]) %>% 
+#     select_if(~ !all(is.na(.))) %>% 
+#     select(where(~n_distinct(.) > 1))
+#   
+#   curr_demo_features <- names(curr_sdoh_data)[-1]
+#   
+# for(z in seq_along(myanalytes)){
+#   
+#   curr_interval <- Final_Intervals_Df_Adjusted_Mat %>% 
+#       dplyr::filter(Outcome == myanalytes[[z]]) 
+#   
+#   curr_data <- mat_list_Targeted[[myanalytes[[z]]]] %>% 
+#     mutate(Above_75 = ifelse(!!sym(myanalytes[[z]]) >= curr_interval$Tau75 * 2,1,0)) %>% 
+#     rownames_to_column("ID") %>% 
+#     mutate(plot_value = ifelse(Above_75 == 1,curr_interval$Tau75 * 2 + 1,!!sym(myanalytes[[z]])),
+#            ID = as.numeric(ID)) %>% 
+#     left_join(curr_sdoh_data,., by = "Mat_PID")
+# 
+#  if (all(is.na(curr_data[["plot_value"]]))) {
+#     next   # skip to the next iteration
+#   }
+#   
+#   for(j in seq_along(curr_demo_features)){
+#     
+#       group_col <- curr_demo_features[[j]]
+# 
+#      if(curr_demo_features[j] == "Mat_Age" | curr_demo_features[j] == "Child_Age"){
+#      
+#        curr_data <- curr_data %>%
+#         mutate(quantile_group = as.factor(ntile(!!sym(curr_demo_features[j]), 4) )) # 4 for quartiles
+#         
+#        group_col <- "quantile_group"
+#      
+#      }
+#     
+#     curr_analyte <- myanalytes[[z]]
+#     
+#     
+#     curr_data_plot <- curr_data %>% 
+#       dplyr::filter(!is.na(!!sym(curr_demo_features[[j]]))) 
+#     
+#       error_y <-(length(unique(curr_data_plot[[group_col]])) + 1)/2
+# 
+#       bar_height <- length(unique(curr_data_plot[[group_col]]))
+#     
+#      p <- ggplot() +
+#         geom_jitter(data = curr_data_plot, aes(x = log1p(!!sym(curr_analyte)),y =  !!sym(group_col), 
+#                                                color = !!sym(group_col)), size = .5,alpha = 1) +
+#         scale_color_manual(values = mypal) +
+#         geom_errorbarh(data = curr_interval,aes(y = error_y,xmin = log1p(Tau25), 
+#                                                     xmax =log1p(Tau75)), height = bar_height, color ="#1A5354",linewidth = 1) +
+#         geom_errorbarh(data = curr_interval,aes(y =error_y,xmin = log1p(Tau05), 
+#                                                   xmax =log1p(Tau95)), height = bar_height/2, color = "#1A5354",linewidth = 1,alpha = .6) +
+#         geom_point(data = curr_interval,aes(y = error_y,x = log1p(Tau50)), color = "#1A5354", size = 6) +
+#         theme_classic() +
+#         labs(title = paste0("Exposure Quantile: Cohort ",mystudies[[i]]," : ",
+#                             curr_demo_features[j]," : ",curr_analyte), x = "Quantile Range", y = curr_demo_features[[j]])
+#     
+#     print(p)
+# 
+#     
+#     
+#   }
+#   
+#   
+# }
+#   
+# }
+# dev.off()
+```
+
+
+Facet Intervals
+-----
+
+
+```{r}
+
+mystudies <- unique(Mat_Data_Targeted %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+  pull(Study))
+
+# Guard added 2026-08-11: myanalytes comes from the intervals table, but the
+# per-analyte list is built from the CURRENT targeted data. Any analyte with no
+# remaining rows (e.g. after the ng/g drop removed VIVA) is absent from the list
+# and mat_list_Targeted[[an]] returns NULL, aborting the render. Keep only
+# analytes that actually have data.
+myanalytes <- unique(Final_Intervals_Df_Adjusted_Mat$Outcome)
+.dropped <- setdiff(myanalytes, names(mat_list_Targeted))
+if (length(.dropped)) message("[SDOH_Intervals] skipping ", length(.dropped),
+        " analyte(s) with no data: ", paste(.dropped, collapse=", "))
+myanalytes <- intersect(myanalytes, names(mat_list_Targeted))
+
+
+Plot_Dfs_Mat <- list()
+plot_idx <- 0
+for (i in seq_along(mystudies)) {
+
+  # SDOH for this cohort
+  curr_sdoh_data <- Mat_SDOH %>%
+    dplyr::select(-Child_PID) %>%
+    dplyr::filter(Study == mystudies[[i]]) %>%
+    dplyr::select(where(~ !all(is.na(.)))) %>%
+    dplyr::select(where(~ dplyr::n_distinct(.) > 1))
+
+  # if Mat_PID is missing, skip (needed for joins)
+  if (!"Mat_PID" %in% names(curr_sdoh_data)) next
+
+  curr_demo_features <- names(curr_sdoh_data)[names(curr_sdoh_data) != "Mat_PID"]
+
+    # Build long dataset of values for this study
+    vals_list <- lapply(myanalytes, function(an) {
+      df <- mat_list_Targeted[[an]] %>%
+        dplyr::select(Mat_PID, !!sym(an))
+      if (nrow(df) == 0) return(NULL)
+      names(df)[names(df) == an] <- "Value"
+      df$Outcome <- an
+      df
+    })
+    
+    ValuesLong <- vals_list %>%
+      dplyr::bind_rows() %>%
+      dplyr::filter(!is.na(Value))
+    
+    if (is.null(ValuesLong) || nrow(ValuesLong) == 0) next
+    
+    # ---- add this line: keep only analytes that appear in this study ----
+    valid_outcomes <- unique(ValuesLong$Outcome)
+    
+    # Attach intervals only for those outcomes
+    Intervals <- Final_Intervals_Df_Adjusted_Mat %>%
+      dplyr::filter(Outcome %in% valid_outcomes) %>%
+      dplyr::select(Outcome, Tau05, Tau25, Tau50, Tau75, Tau95)
+    
+    # Merge and continue as before
+    DF <- curr_sdoh_data %>%
+      dplyr::left_join(ValuesLong, by = "Mat_PID") %>%
+      dplyr::left_join(Intervals,  by = "Outcome") %>% 
+      dplyr::filter(!is.na(Value))
+    
+    # Skip if there are no points for this study
+    if (nrow(DF) == 0) next
+    
+    # ---- filter again to make sure each Outcome facet has ≥1 non-NA Value ----
+
+    if (n_distinct(DF$Outcome) == 0) next
+
+  # Guard: if nothing after join, skip
+  if (nrow(DF) == 0) next
+
+  for (j in seq_along(curr_demo_features)) {
+
+    group_col <- curr_demo_features[[j]]
+
+    # bucket age into quartiles if needed
+    DF_plot <- DF
+    if (group_col %in% c("Mat_Age", "Child_Age")) {
+      DF_plot <- DF_plot %>%
+        dplyr::mutate(quantile_group = as.factor(dplyr::ntile(!!sym(group_col), 4)))
+      group_col <- "quantile_group"
+    }
+
+    # Drop missing group levels for this facetting run
+    DF_plot <- DF_plot %>% dplyr::filter(!is.na(!!sym(group_col)))
+
+    # If empty after filtering, skip
+    if (nrow(DF_plot) == 0) next
+
+    # Compute a common y-position for the interval bars across facets
+    n_groups  <- length(unique(DF_plot[[group_col]]))
+    error_y   <- (n_groups + 1) / 2
+    bar_height <- n_groups
+
+    # Intervals table with the y-position for geom_errorbarh/point; facets by Outcome automatically
+    Intervals_y <- Intervals %>%
+      dplyr::mutate(error_y = error_y, bar_height = bar_height) %>% 
+      dplyr::filter(Outcome %in% DF_plot$Outcome)
+
+    
+        plot_idx <- plot_idx + 1
+    key <- paste0(mystudies[[i]], "__", curr_demo_features[[j]])
+    Plot_Dfs_Mat[[key]] <- DF_plot
+    
+
+  }
+}
+
+save(Plot_Dfs_Mat,file = "../../../HHEAR_Man1_App/Mat_SDOH_Plot_Dfs.RData")
+```
+
+```{r}
+# Guard added 2026-08-11: myanalytes comes from the intervals table, but the
+# per-analyte list is built from the CURRENT targeted data. Any analyte with no
+# remaining rows (e.g. after the ng/g drop removed VIVA) is absent from the list
+# and mat_list_Targeted[[an]] returns NULL, aborting the render. Keep only
+# analytes that actually have data.
+myanalytes <- unique(Final_Intervals_Df_Adjusted$Outcome)
+.dropped <- setdiff(myanalytes, names(child_list_Targeted))
+if (length(.dropped)) message("[SDOH_Intervals] skipping ", length(.dropped),
+        " analyte(s) with no data: ", paste(.dropped, collapse=", "))
+myanalytes <- intersect(myanalytes, names(child_list_Targeted))
+
+mystudies <- unique(Child_Data_Targeted %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+  pull(Study))
+
+Plot_Dfs_Child <- list()
+plot_idx <- 0
+
+
+for (i in seq_along(mystudies)) {
+
+  # SDOH for this cohort
+  curr_sdoh_data <- Child_SDOH %>%
+    dplyr::select(-Mat_PID) %>%
+    dplyr::filter(Study == mystudies[[i]]) %>%
+    dplyr::select(where(~ !all(is.na(.)))) %>%
+    dplyr::select(where(~ dplyr::n_distinct(.) > 1))
+
+  # if Mat_PID is missing, skip (needed for joins)
+  if (!"Child_PID" %in% names(curr_sdoh_data)) next
+
+  curr_demo_features <- names(curr_sdoh_data)[names(curr_sdoh_data) != "Child_PID"]
+
+    # Build long dataset of values for this study
+    vals_list <- lapply(myanalytes, function(an) {
+      df <- child_list_Targeted[[an]] %>%
+        dplyr::select(Child_PID, !!sym(an))
+      if (nrow(df) == 0) return(NULL)
+      names(df)[names(df) == an] <- "Value"
+      df$Outcome <- an
+      df
+    })
+    
+    ValuesLong <- vals_list %>%
+      dplyr::bind_rows() %>%
+      dplyr::filter(!is.na(Value))
+    
+    if (is.null(ValuesLong) || nrow(ValuesLong) == 0) next
+    
+    # ---- add this line: keep only analytes that appear in this study ----
+    valid_outcomes <- unique(ValuesLong$Outcome)
+    
+    # Attach intervals only for those outcomes
+    Intervals <- Final_Intervals_Df_Adjusted %>%
+      dplyr::filter(Outcome %in% valid_outcomes) %>%
+      dplyr::select(Outcome, Tau05, Tau25, Tau50, Tau75, Tau95)
+    
+    # Merge and continue as before
+    DF <- curr_sdoh_data %>%
+      dplyr::left_join(ValuesLong, by = "Child_PID") %>%
+      dplyr::left_join(Intervals,  by = "Outcome") %>% 
+      dplyr::filter(!is.na(Value))
+    
+    # Skip if there are no points for this study
+    if (nrow(DF) == 0) next
+    
+    # ---- filter again to make sure each Outcome facet has ≥1 non-NA Value ----
+
+    if (n_distinct(DF$Outcome) == 0) next
+
+  # Guard: if nothing after join, skip
+  if (nrow(DF) == 0) next
+
+  for (j in seq_along(curr_demo_features)) {
+
+    group_col <- curr_demo_features[[j]]
+
+    # bucket age into quartiles if needed
+    DF_plot <- DF
+    if (group_col %in% c("Mat_Age", "Child_Age")) {
+      DF_plot <- DF_plot %>%
+        dplyr::mutate(quantile_group = as.factor(dplyr::ntile(!!sym(group_col), 4)))
+      group_col <- "quantile_group"
+    }
+
+    # Drop missing group levels for this facetting run
+    DF_plot <- DF_plot %>% dplyr::filter(!is.na(!!sym(group_col)))
+
+    # If empty after filtering, skip
+    if (nrow(DF_plot) == 0) next
+
+    # Compute a common y-position for the interval bars across facets
+    n_groups  <- length(unique(DF_plot[[group_col]]))
+    error_y   <- (n_groups + 1) / 2
+    bar_height <- n_groups
+
+    # Intervals table with the y-position for geom_errorbarh/point; facets by Outcome automatically
+    Intervals_y <- Intervals %>%
+      dplyr::mutate(error_y = error_y, bar_height = bar_height) %>% 
+      dplyr::filter(Outcome %in% DF_plot$Outcome)
+
+    plot_idx <- plot_idx + 1
+    key <- paste0(mystudies[[i]], "__", curr_demo_features[[j]])
+    Plot_Dfs_Child[[key]] <- DF_plot
+
+  }
+}
+
+save(Plot_Dfs_Child,file = "../../../HHEAR_Man1_App/Child_SDOH_Plot_Dfs.RData")
+
+```
+
+
+
+```{r}
+mystudies  <- unique(Mat_SDOH$Study)
+# Guard added 2026-08-11: myanalytes comes from the intervals table, but the
+# per-analyte list is built from the CURRENT targeted data. Any analyte with no
+# remaining rows (e.g. after the ng/g drop removed VIVA) is absent from the list
+# and mat_list_Targeted[[an]] returns NULL, aborting the render. Keep only
+# analytes that actually have data.
+myanalytes <- unique(Final_Intervals_Df_Adjusted_Mat$Outcome)
+.dropped <- setdiff(myanalytes, names(mat_list_Targeted))
+if (length(.dropped)) message("[SDOH_Intervals] skipping ", length(.dropped),
+        " analyte(s) with no data: ", paste(.dropped, collapse=", "))
+myanalytes <- intersect(myanalytes, names(mat_list_Targeted))
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Mat_Facet_SDOH_Intervals.pdf", height = 16, width = 16)
+
+plots <- list()            # collect everything here
+plot_idx <- 0
+
+
+for (i in seq_along(mystudies)) {
+
+  # SDOH for this cohort
+  curr_sdoh_data <- Mat_SDOH %>%
+    dplyr::select(-Child_PID) %>%
+    dplyr::filter(Study == mystudies[[i]]) %>%
+    dplyr::select(where(~ !all(is.na(.)))) %>%
+    dplyr::select(where(~ dplyr::n_distinct(.) > 1))
+
+  # if Mat_PID is missing, skip (needed for joins)
+  if (!"Mat_PID" %in% names(curr_sdoh_data)) next
+
+  curr_demo_features <- names(curr_sdoh_data)[names(curr_sdoh_data) != "Mat_PID"]
+
+    # Build long dataset of values for this study
+    vals_list <- lapply(myanalytes, function(an) {
+      df <- mat_list_Targeted[[an]] %>%
+        dplyr::select(Mat_PID, !!sym(an))
+      if (nrow(df) == 0) return(NULL)
+      names(df)[names(df) == an] <- "Value"
+      df$Outcome <- an
+      df
+    })
+    
+    ValuesLong <- vals_list %>%
+      dplyr::bind_rows() %>%
+      dplyr::filter(!is.na(Value))
+    
+    if (is.null(ValuesLong) || nrow(ValuesLong) == 0) next
+    
+    # ---- add this line: keep only analytes that appear in this study ----
+    valid_outcomes <- unique(ValuesLong$Outcome)
+    
+    # Attach intervals only for those outcomes
+    Intervals <- Final_Intervals_Df_Adjusted_Mat %>%
+      dplyr::filter(Outcome %in% valid_outcomes) %>%
+      dplyr::select(Outcome, Tau05, Tau25, Tau50, Tau75, Tau95)
+    
+    # Merge and continue as before
+    DF <- curr_sdoh_data %>%
+      dplyr::left_join(ValuesLong, by = "Mat_PID") %>%
+      dplyr::left_join(Intervals,  by = "Outcome") %>% 
+      dplyr::filter(!is.na(Value))
+    
+    # Skip if there are no points for this study
+    if (nrow(DF) == 0) next
+    
+    # ---- filter again to make sure each Outcome facet has ≥1 non-NA Value ----
+
+    if (n_distinct(DF$Outcome) == 0) next
+
+  # Guard: if nothing after join, skip
+  if (nrow(DF) == 0) next
+
+  for (j in seq_along(curr_demo_features)) {
+
+    group_col <- curr_demo_features[[j]]
+
+    # bucket age into quartiles if needed
+    DF_plot <- DF
+    if (group_col %in% c("Mat_Age", "Child_Age")) {
+      DF_plot <- DF_plot %>%
+        dplyr::mutate(quantile_group = as.factor(dplyr::ntile(!!sym(group_col), 4)))
+      group_col <- "quantile_group"
+    }
+
+    # Drop missing group levels for this facetting run
+    DF_plot <- DF_plot %>% dplyr::filter(!is.na(!!sym(group_col)))
+
+    # If empty after filtering, skip
+    if (nrow(DF_plot) == 0) next
+
+    # Compute a common y-position for the interval bars across facets
+    n_groups  <- length(unique(DF_plot[[group_col]]))
+    error_y   <- (n_groups + 1) / 2
+    bar_height <- n_groups
+
+    # Intervals table with the y-position for geom_errorbarh/point; facets by Outcome automatically
+    Intervals_y <- Intervals %>%
+      dplyr::mutate(error_y = error_y, bar_height = bar_height) %>% 
+      dplyr::filter(Outcome %in% DF_plot$Outcome)
+
+    
+    
+    p <- ggplot() +
+      geom_jitter(
+        data = DF_plot,
+        aes(x = log1p(Value), y = !!sym(group_col), color = !!sym(group_col)), size = 1.5, alpha = 0.5
+      ) +
+      scale_color_manual(values = mypal) +
+      # 25–75
+      geom_errorbarh(
+        data = Intervals_y,
+        aes(y = error_y, xmin = log1p(Tau25), xmax = log1p(Tau75)),
+        inherit.aes = FALSE, height = bar_height, color = "#1A5354", linewidth = 1
+      ) +
+      # 5–95
+      geom_errorbarh(
+        data = Intervals_y,
+        aes(y = error_y, xmin = log1p(dplyr::coalesce(Tau05, Tau75)), xmax = log1p(Tau95)),
+        inherit.aes = FALSE, height = bar_height / 2, color = "#1A5354", linewidth = 1, alpha = 0.6
+      ) +
+      # median
+      geom_point(
+        data = Intervals_y,
+        aes(y = error_y, x = log1p(Tau50)),
+        inherit.aes = FALSE, color = "#1A5354", size = 6
+      ) +
+      facet_wrap(~ Outcome, scales = "free_x") +
+      theme_classic() +
+      labs(
+        title = paste0("Exposure Quantiles : Cohort ", mystudies[[i]], " : ", curr_demo_features[j]),
+        x = "log1p(Exposure)", y = curr_demo_features[[j]]
+      ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.subtitle = element_text(size = 12),
+    strip.background = element_rect(fill = "#F2F2F2", color = NA),
+    strip.text = element_text(size = 14, face = "bold"),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 13, face = "bold"),
+    axis.text.x = element_text(size = 8, face = "bold"),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line.y = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.box = "vertical",
+    legend.key.height = unit(5, "mm"),
+    legend.key.width  = unit(8, "mm"),
+    panel.spacing = unit(10, "pt")
+  ) +
+  guides(
+    color = guide_legend(
+      nrow = 4,
+      byrow = TRUE,
+      override.aes = list(size = 3.2, alpha = 1)
+    )
+  ) +
+  coord_cartesian(clip = "off")  #
+
+    print(p)
+    plot_idx <- plot_idx + 1
+    key <- paste0(mystudies[[i]], "__", curr_demo_features[[j]])
+    plots[[key]] <- p
+
+  }
+}
+
+dev.off()
+
+plots_mat <- plots
+```
+
+
+
+
+```{r}
+mystudies  <- unique(Child_SDOH$Study)
+# Guard added 2026-08-11: myanalytes comes from the intervals table, but the
+# per-analyte list is built from the CURRENT targeted data. Any analyte with no
+# remaining rows (e.g. after the ng/g drop removed VIVA) is absent from the list
+# and mat_list_Targeted[[an]] returns NULL, aborting the render. Keep only
+# analytes that actually have data.
+myanalytes <- unique(Final_Intervals_Df_Adjusted$Outcome)
+.dropped <- setdiff(myanalytes, names(child_list_Targeted))
+if (length(.dropped)) message("[SDOH_Intervals] skipping ", length(.dropped),
+        " analyte(s) with no data: ", paste(.dropped, collapse=", "))
+myanalytes <- intersect(myanalytes, names(child_list_Targeted))
+
+unique(Child_Data_Targeted$Study)
+
+plots <- list()            # collect everything here
+plot_idx <- 0
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Child_Facet_SDOH_Intervals.pdf", height = 16, width = 16)
+
+for (i in seq_along(mystudies)) {
+
+  # SDOH for this cohort
+  curr_sdoh_data <- Child_SDOH %>%
+    dplyr::select(-Mat_PID) %>%
+    dplyr::filter(Study == mystudies[[i]]) %>%
+    dplyr::select(where(~ !all(is.na(.)))) %>%
+    dplyr::select(where(~ dplyr::n_distinct(.) > 1))
+
+  # if Mat_PID is missing, skip (needed for joins)
+  if (!"Child_PID" %in% names(curr_sdoh_data)) next
+
+  curr_demo_features <- names(curr_sdoh_data)[names(curr_sdoh_data) != "Child_PID"]
+
+    # Build long dataset of values for this study
+    vals_list <- lapply(myanalytes, function(an) {
+      df <- child_list_Targeted[[an]] %>%
+        dplyr::select(Child_PID, !!sym(an))
+      if (nrow(df) == 0) return(NULL)
+      names(df)[names(df) == an] <- "Value"
+      df$Outcome <- an
+      df
+    })
+    
+    ValuesLong <- vals_list %>%
+      dplyr::bind_rows() %>%
+      dplyr::filter(!is.na(Value))
+    
+    if (is.null(ValuesLong) || nrow(ValuesLong) == 0) next
+    
+    # ---- add this line: keep only analytes that appear in this study ----
+    valid_outcomes <- unique(ValuesLong$Outcome)
+    
+    # Attach intervals only for those outcomes
+    Intervals <- Final_Intervals_Df_Adjusted %>%
+      dplyr::filter(Outcome %in% valid_outcomes) %>%
+      dplyr::select(Outcome, Tau05, Tau25, Tau50, Tau75, Tau95)
+    
+    # Merge and continue as before
+    DF <- curr_sdoh_data %>%
+      dplyr::left_join(ValuesLong, by = "Child_PID") %>%
+      dplyr::left_join(Intervals,  by = "Outcome") %>% 
+      dplyr::filter(!is.na(Value))
+    
+    # Skip if there are no points for this study
+    if (nrow(DF) == 0) next
+    
+    # ---- filter again to make sure each Outcome facet has ≥1 non-NA Value ----
+
+    if (n_distinct(DF$Outcome) == 0) next
+
+  # Guard: if nothing after join, skip
+  if (nrow(DF) == 0) next
+
+  for (j in seq_along(curr_demo_features)) {
+
+    group_col <- curr_demo_features[[j]]
+
+    # bucket age into quartiles if needed
+    DF_plot <- DF
+    if (group_col %in% c("Mat_Age", "Child_Age")) {
+      DF_plot <- DF_plot %>%
+        dplyr::mutate(quantile_group = as.factor(dplyr::ntile(!!sym(group_col), 4)))
+      group_col <- "quantile_group"
+    }
+
+    # Drop missing group levels for this facetting run
+    DF_plot <- DF_plot %>% dplyr::filter(!is.na(!!sym(group_col)))
+
+    # If empty after filtering, skip
+    if (nrow(DF_plot) == 0) next
+
+    # Compute a common y-position for the interval bars across facets
+    n_groups  <- length(unique(DF_plot[[group_col]]))
+    error_y   <- (n_groups + 1) / 2
+    bar_height <- n_groups
+
+    # Intervals table with the y-position for geom_errorbarh/point; facets by Outcome automatically
+    Intervals_y <- Intervals %>%
+      dplyr::mutate(error_y = error_y, bar_height = bar_height) %>% 
+      dplyr::filter(Outcome %in% DF_plot$Outcome)
+
+    p <- ggplot() +
+      geom_jitter(
+        data = DF_plot,
+        aes(x = log1p(Value), y = !!sym(group_col), color = !!sym(group_col)), size = 1.5, alpha = 0.5
+      ) +
+      scale_color_manual(values = mypal) +
+      # 25–75
+      geom_errorbarh(
+        data = Intervals_y,
+        aes(y = error_y, xmin = log1p(Tau25), xmax = log1p(Tau75)),
+        inherit.aes = FALSE, height = bar_height, color = "#1A5354", linewidth = 1
+      ) +
+      # 5–95
+      geom_errorbarh(
+        data = Intervals_y,
+        aes(y = error_y, xmin = log1p(dplyr::coalesce(Tau05, Tau75)), xmax = log1p(Tau95)),
+        inherit.aes = FALSE, height = bar_height / 2, color = "#1A5354", linewidth = 1, alpha = 0.6
+      ) +
+      # median
+      geom_point(
+        data = Intervals_y,
+        aes(y = error_y, x = log1p(Tau50)),
+        inherit.aes = FALSE, color = "#1A5354", size = 6
+      ) +
+      facet_wrap(~ Outcome, scales = "free_x") +
+      theme_classic() +
+      labs(
+        title = paste0("Exposure Quantiles : Cohort ", mystudies[[i]], " : ", curr_demo_features[j]),
+        x = "log1p(Exposure)", y = curr_demo_features[[j]]
+      ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.subtitle = element_text(size = 12),
+    strip.background = element_rect(fill = "#F2F2F2", color = NA),
+    strip.text = element_text(size = 14, face = "bold"),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 13, face = "bold"),
+    axis.text.x = element_text(size = 8, face = "bold"),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line.y = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.box = "vertical",
+    legend.key.height = unit(5, "mm"),
+    legend.key.width  = unit(8, "mm"),
+    panel.spacing = unit(10, "pt")
+  ) +
+  guides(
+    color = guide_legend(
+      nrow = 4,
+      byrow = TRUE,
+      override.aes = list(size = 3.2, alpha = 1)
+    )
+  ) +
+  coord_cartesian(clip = "off")  #
+    plot_idx <- plot_idx + 1
+    key <- paste0(mystudies[[i]], "__", curr_demo_features[[j]])
+    plots[[key]] <- p
+
+    print(p)
+  }
+}
+
+dev.off()
+plots_child <- plots
+```
+
+
+```{r}
+#save(plots_child, file = "../../../HHEAR_Man1_App/Child_SDOH_Plots.RData")
+#save(plots_mat, file = "../../../HHEAR_Man1_App/Mat_SDOH_Plots.RData")
+
+```
+
+
+Manuscript Plot
+-----
+
+
+```{r}
+#load("../../../Output/Final_Paper1_Output/R2_Barplot_ByStudy.RData")
+income_plot <- plots_mat[["nuMoM2b__Mat_Income"]]+
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(size = 20, face = "bold"),
+        axis.text.y = element_text(size = 16, face = "bold"),
+        axis.title.x = element_text(size = 20, face = "bold"),
+        axis.title.y = element_text(size = 20, face = "bold"),
+        strip.text = element_text(size = 15, face = "bold"),
+        plot.title = element_text(size = 20,face = "bold"),
+        legend.text=element_text(size=15,face = "bold"),
+        legend.title = element_text(size = 15,face = "bold")) +
+  guides(color = guide_legend(override.aes = list(size = 8))) +
+  ggtitle("Maternal Income By Chemical Exposure in nuMoM2b")
+
+race_plot <- plots_mat[["nuMoM2b__Mat_Race"]]+
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(size = 20, face = "bold"),
+        axis.text.y = element_text(size = 16, face = "bold"),
+        axis.title.x = element_text(size = 20, face = "bold"),
+        axis.title.y = element_text(size = 20, face = "bold"),
+        strip.text = element_text(size = 15, face = "bold"),
+        plot.title = element_text(size = 20,face = "bold"),
+        legend.text=element_text(size=15,face = "bold"),
+        legend.title = element_text(size = 15,face = "bold"))+
+  guides(color = guide_legend(override.aes = list(size = 8)))+
+  ggtitle("Maternal Race By Chemical Exposure in nuMoM2b")
+
+# r2_barplot_for_legend <- r2_barplot + guides(fill = guide_legend(nrow = 8, byrow = TRUE))
+# legends <- get_legend(r2_barplot_for_legend)
+# 
+# r2_barplot<- r2_barplot +
+#   theme(legend.position = "none")
+
+
+```
+
+```{r}
+income_plot <- plots_mat[["MADRES__Mat_Income"]]
+race_plot <- plots_mat[["MADRES__Mat_Race"]]
+
+```
+
+
+
+
+Get Manuscript Numbers 
+-----
+```{r, eval=FALSE, purl=FALSE}   # exploratory scratch: hardcoded mystudies[[10]], View() only, nothing saved (disabled 2026-08-11)
+mystudies  <- unique(Mat_SDOH$Study)
+# Guard added 2026-08-11: myanalytes comes from the intervals table, but the
+# per-analyte list is built from the CURRENT targeted data. Any analyte with no
+# remaining rows (e.g. after the ng/g drop removed VIVA) is absent from the list
+# and mat_list_Targeted[[an]] returns NULL, aborting the render. Keep only
+# analytes that actually have data.
+myanalytes <- unique(Final_Intervals_Df_Adjusted_Mat$Outcome)
+.dropped <- setdiff(myanalytes, names(mat_list_Targeted))
+if (length(.dropped)) message("[SDOH_Intervals] skipping ", length(.dropped),
+        " analyte(s) with no data: ", paste(.dropped, collapse=", "))
+myanalytes <- intersect(myanalytes, names(mat_list_Targeted))
+
+  curr_sdoh_data <- Mat_SDOH %>%
+    dplyr::select(-Child_PID) %>%
+    dplyr::filter(Study == mystudies[[10]]) %>%
+    dplyr::select(where(~ !all(is.na(.)))) %>%
+    dplyr::select(where(~ dplyr::n_distinct(.) > 1))
+
+
+  curr_demo_features <- names(curr_sdoh_data)[names(curr_sdoh_data) != "Mat_PID"]
+
+    # Build long dataset of values for this study
+    vals_list <- lapply(myanalytes, function(an) {
+      df <- mat_list_Targeted[[an]] %>%
+        dplyr::select(Mat_PID, !!sym(an))
+      if (nrow(df) == 0) return(NULL)
+      names(df)[names(df) == an] <- "Value"
+      df$Outcome <- an
+      df
+    })
+    
+    ValuesLong <- vals_list %>%
+      dplyr::bind_rows() %>%
+      dplyr::filter(!is.na(Value))
+    
+
+    # ---- add this line: keep only analytes that appear in this study ----
+    valid_outcomes <- unique(ValuesLong$Outcome)
+    
+    # Attach intervals only for those outcomes
+    Intervals <- Final_Intervals_Df_Adjusted_Mat %>%
+      dplyr::filter(Outcome %in% valid_outcomes) %>%
+      dplyr::select(Outcome, Tau05, Tau25, Tau50, Tau75, Tau95)
+    
+    # Merge and continue as before
+    DF <- curr_sdoh_data %>%
+      dplyr::left_join(ValuesLong, by = "Mat_PID") %>%
+      dplyr::left_join(Intervals,  by = "Outcome") %>% 
+      dplyr::filter(!is.na(Value))
+    
+
+    DF %>% 
+      dplyr::filter(!is.na(Mat_Race)) %>% 
+      group_by(Mat_Race,Outcome) %>% 
+      summarise(mean_val = mean(Value,na.rm = T)) %>% 
+      dplyr::filter(str_detect(Outcome,c("As|Co|Sn|W"))) %>% 
+      View
+    
+        DF %>% 
+      dplyr::filter(!is.na(Mat_Race)) %>% 
+      group_by(Mat_Edu,Outcome) %>% 
+      summarise(mean_val = mean(Value,na.rm = T)) %>% 
+      dplyr::filter(str_detect(Outcome,c("As|Co|Sn|W"))) %>% 
+      View
+```
+
+
+Plots For Patch
+----
+```{r}
+mystudies <- "CCREOH"
+
+unique(Mat_Data_Targeted %>% 
+  dplyr::filter(Study == "CCREOH_Targeted") %>% 
+  pull(Analyte_Code))
+  
+
+plots <- list()            # collect everything here
+plot_idx <- 0
+
+analytes_tokeep <- c("Cd","Hg","Mn","Pb")
+for (i in seq_along(mystudies)) {
+
+  # SDOH for this cohort
+  curr_sdoh_data <- Mat_SDOH %>%
+    dplyr::select(-Child_PID) %>%
+    dplyr::filter(Study == mystudies[[i]]) %>%
+    dplyr::select(where(~ !all(is.na(.)))) %>%
+    dplyr::select(where(~ dplyr::n_distinct(.) > 1))
+
+  # if Mat_PID is missing, skip (needed for joins)
+  if (!"Mat_PID" %in% names(curr_sdoh_data)) next
+
+  curr_demo_features <- names(curr_sdoh_data)[names(curr_sdoh_data) != "Mat_PID"]
+
+    # Build long dataset of values for this study
+    vals_list <- lapply(analytes_tokeep, function(an) {
+      df <- mat_list_Targeted[[an]] %>%
+        dplyr::select(Mat_PID, !!sym(an))
+      if (nrow(df) == 0) return(NULL)
+      names(df)[names(df) == an] <- "Value"
+      df$Outcome <- an
+      df
+    })
+    
+    ValuesLong <- vals_list %>%
+      dplyr::bind_rows() %>%
+      dplyr::filter(!is.na(Value))
+    
+    if (is.null(ValuesLong) || nrow(ValuesLong) == 0) next
+    
+    # ---- add this line: keep only analytes that appear in this study ----
+    valid_outcomes <- unique(ValuesLong$Outcome)
+    
+    # Attach intervals only for those outcomes
+    Intervals <- Final_Intervals_Df_Adjusted_Mat %>%
+      dplyr::filter(Outcome %in% valid_outcomes) %>%
+      dplyr::select(Outcome, Tau05, Tau25, Tau50, Tau75, Tau95)
+    
+    # Merge and continue as before
+    DF <- curr_sdoh_data %>%
+      dplyr::left_join(ValuesLong, by = "Mat_PID") %>%
+      dplyr::left_join(Intervals,  by = "Outcome") %>% 
+      dplyr::filter(!is.na(Value))
+    
+    # Skip if there are no points for this study
+    if (nrow(DF) == 0) next
+    
+    # ---- filter again to make sure each Outcome facet has ≥1 non-NA Value ----
+
+    if (n_distinct(DF$Outcome) == 0) next
+
+  # Guard: if nothing after join, skip
+  if (nrow(DF) == 0) next
+
+  for (j in seq_along(curr_demo_features)) {
+  #print(j)
+    group_col <- curr_demo_features[[j]]
+
+    # bucket age into quartiles if needed
+    DF_plot <- DF
+    if (group_col %in% c("Mat_Age", "Child_Age")) {
+      DF_plot <- DF_plot %>%
+        dplyr::mutate(quantile_group = as.factor(dplyr::ntile(!!sym(group_col), 4)))
+      group_col <- "quantile_group"
+    }
+
+    # Drop missing group levels for this facetting run
+    DF_plot <- DF_plot %>% dplyr::filter(!is.na(!!sym(group_col)))
+
+    # If empty after filtering, skip
+    if (nrow(DF_plot) == 0) next
+
+    # Compute a common y-position for the interval bars across facets
+    n_groups  <- length(unique(DF_plot[[group_col]]))
+    error_y   <- (n_groups + 1) / 2
+    bar_height <- n_groups
+
+    # Intervals table with the y-position for geom_errorbarh/point; facets by Outcome automatically
+    Intervals_y <- Intervals %>%
+      dplyr::mutate(error_y = error_y, bar_height = bar_height) %>% 
+      dplyr::filter(Outcome %in% DF_plot$Outcome)
+
+    
+    
+    p <- ggplot() +
+      geom_jitter(
+        data = DF_plot,
+        aes(x = log1p(Value), y = !!sym(group_col), color = !!sym(group_col)), size = 1.5, alpha = 0.5
+      ) +
+      scale_color_manual(values = mypal) +
+      # 25–75
+      geom_errorbarh(
+        data = Intervals_y,
+        aes(y = error_y, xmin = log1p(Tau25), xmax = log1p(Tau75)),
+        inherit.aes = FALSE, height = bar_height, color = "#1A5354", linewidth = 1
+      ) +
+      # 5–95
+      geom_errorbarh(
+        data = Intervals_y,
+        aes(y = error_y, xmin = log1p(dplyr::coalesce(Tau05, Tau75)), xmax = log1p(Tau95)),
+        inherit.aes = FALSE, height = bar_height / 2, color = "#1A5354", linewidth = 1, alpha = 0.6
+      ) +
+      # median
+      geom_point(
+        data = Intervals_y,
+        aes(y = error_y, x = log1p(Tau50)),
+        inherit.aes = FALSE, color = "#1A5354", size = 6
+      ) +
+      facet_wrap(~ Outcome, scales = "free_x",nrow = 1) +
+      theme_classic() +
+      labs(
+        title = paste0("Exposure Quantiles : Cohort ", mystudies[[i]], " : ", curr_demo_features[j]),
+        x = "log1p(Exposure)", y = curr_demo_features[[j]]
+      ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.subtitle = element_text(size = 12),
+    strip.background = element_rect(fill = "#F2F2F2", color = NA),
+    strip.text = element_text(size = 14, face = "bold"),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 13, face = "bold"),
+    axis.text.x = element_text(size = 8, face = "bold"),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line.y = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.box = "vertical",
+    legend.key.height = unit(5, "mm"),
+    legend.key.width  = unit(8, "mm"),
+    panel.spacing = unit(10, "pt")
+  ) +
+  guides(
+    color = guide_legend(
+      nrow = 1,
+      byrow = TRUE,
+      override.aes = list(size = 3.2, alpha = 1)
+    )
+  ) +
+  coord_cartesian(clip = "off")  #
+
+    print(p)
+    plot_idx <- plot_idx + 1
+    key <- paste0(mystudies[[i]], "__", curr_demo_features[[j]])
+    plots[[key]] <- p
+
+  }
+}
+
+madres_plots <- plots
+save(madres_plots, file = "../../../Output/Paper1_Output_Submission2/madres_plots.RData")
+
+```
+
+```{r}
+
+```

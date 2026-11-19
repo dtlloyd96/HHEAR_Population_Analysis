@@ -1,0 +1,615 @@
+---
+title: "HHEAR_Data_Clean"
+author: "Dillon Lloyd"
+date: "2024-10-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(data.table)
+library(Amelia)
+```
+
+Load All Datasets
+------------------------
+```{r}
+data_files = list.files(
+  path = "../Input/",        # directory to search within
+  pattern = "*RData$", # regex pattern, some explanation below
+  recursive = F,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+
+
+lapply(data_files,load,.GlobalEnv)
+
+```
+
+Harmonize Outcomes  by Study
+----------------------
+```{r}
+AIRWEIGHS_Outcomes <- AIRWEIGHS_data_list[["AIRWEIGHS_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,Visit = aw_visit) %>%
+  mutate(Asthma = 1) 
+```
+
+
+```{r}
+CCREOH_Outcomes <- CCREOH_data_list[["CCREOH_Epi"]] %>% 
+  dplyr::select(Mat_PID = PID,Child_PID = CHILD_PID,Birthweight = b031,Low_Birthweight = b031a,
+                Gest_Age_Birth = b034b,Preterm_Birth = b034c,APGAR_5 = b035b,Low_APGAR = b035d,
+                Social_Composite = socialemotional_composite,Languge_Composite = language_composite,
+                Motor_Composite = motor_composite,BMI = v111c,Perc_Stress = v140n1,Depression = v150n2,
+                Cognitive_Composite = cognitive_composite) %>%
+  # LOW_BIRTHWEIGHT POLARITY (2026-08-10): raw b031a is coded 1 = low (n=66),
+  # 2 = not low (n=583), while PARENTs -- the only other Low_Birthweight cohort --
+  # uses 1 = low / 0 = not low. standardize_binary_outcome() in
+  # Targeted_ExWAS_Replication.Rmd passes {0,1} through unchanged but otherwise
+  # maps the HIGHER SORTED level to the case, so CCREOH's "2 = not low" was being
+  # modelled as the case and its sign came out inverted relative to PARENTs.
+  # Recoded to the project's 1 = case / 0 = control convention.
+  mutate(Low_Birthweight = dplyr::case_when(Low_Birthweight == 1 ~ 1,
+                                            Low_Birthweight == 2 ~ 0,
+                                            TRUE ~ NA_real_))
+
+```
+
+
+```{r}
+CEHC_Outcomes <- CEHC_data_list[["CEHC_Epi"]] %>% 
+  dplyr::select(Child_PID = CHILD_PID,Mat_PID = PID,Birthweight = brthwt_gms,Preterm_Birth = preterm,
+                APGAR_1 = apgar_first,APGAR_5 = apgar_five) 
+```
+
+
+```{r}
+CHARGE_Outcomes <- CHARGE_data_list[["CHARGE_Epi"]] %>% 
+  dplyr::select(Child_PID = CHILD_PID,Gest_Diabetes = GDM,Type_2_Diabetes = DM2,Any_Diabetes = AnyDiab,
+                Hypertension = HTN,Gest_Hypertension = PE,Any_Hypertension = AnyHyper,dx2,Visual_Tscore = MSLvrTscore,
+                Fine_Motor_Tscore = MSLfmTscore,Language_Tscore = MSLelTscore,EarlyLearning_Composite = MSLelTscore) %>% 
+  mutate(Autism = case_when(dx2 == 2 ~ "Austim_Diagnosis",
+                            dx2 == 7 ~ "Major_Delay",
+                            dx2 == 6 ~ "Mild_Delay",
+                            dx2 == 9 ~ "High_Risk",
+                            TRUE ~ "General_Population")) %>% 
+  dplyr::select(-dx2)
+```
+
+
+```{r}
+DAPS_Outcomes <- DAPS_data_list[["DAPS_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,cact_act_cat_visit1,cact_act_cat_visit2,cact_act_cat_visit3,auea_2months_hospitalized_visit1,
+                auea_2months_hospitalized_visit2,auea_2months_hospitalized_visit3,
+                auea_2months_doctor_visit1,auea_2months_doctor_visit2,auea_2months_doctor_visit3,
+                exacerbation_assessment_a_visit1,exacerbation_assessment_a_visit2,exacerbation_assessment_a_visit3,
+                daytime_asthma_c_visit1,nighttime_asthma_c_visit1,lung_function_b_visit1,lung_function_b_visit2,lung_function_b_visit3,
+                cbc_wbc_visit1,cbc_wbc_visit2,
+                cbc_abs_eos_visit1,cbc_abs_eos_visit2,cbc_abs_neut_visit1,cbc_abs_neut_visit2, BMI = vital_bmi_visit1,final_control) %>% 
+  #mutate(Asthma = 1) %>% 
+  mutate(Severe_Asthma = case_when(if_any(contains("cact"), 
+     ~. < 3) ~ 1, TRUE ~ 0)) %>% 
+  dplyr::select(-cact_act_cat_visit1,cact_act_cat_visit3,cact_act_cat_visit2)
+  
+```
+
+
+```{r}
+DEPART_Outcomes <- DEPART_data_list[["DEPART_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,bmipct.1,bmipct.3,bmipct.4,bmipct.6,allergy_atopic) %>% 
+  mutate(Asthma = 1) 
+```
+
+```{r}
+DISCOVER_Outcomes <- DISCOVER_data_list[["DISCOVER_EPI"]] %>% 
+  dplyr::select(Child_PID = PID,severity2) %>% 
+  mutate(Asthma = 1) %>% 
+  mutate(Severe_Asthma = ifelse(severity2 >2,1,0)) %>% 
+  dplyr::select(-severity2)
+```
+
+
+```{r}
+#Lacks data dictionary
+#names(EEICC_data_list[["EEICC_Epi"]])
+
+# EEICC_data_list[["EEICC_Epi"]] %>% View
+#   dplyr::select(Child_PID = PID_child,Mat_PID = PID_mother) %>% 
+#   View
+```
+
+
+```{r}
+ELEMENT_Outcomes <- ELEMENT_data_list[["ELEMENT_Epi"]] %>%
+  dplyr::select(Child_PID = PID_child,Mat_PID = PID_mother,Gest_Age_Birth = DELIVERY_GESTAGE,
+                Birthweight = DELIVERY_WEIGHT,APGAR_1 = DELIVERY_APGAR1MIN, APGAR_5 = DELIVERY_APGAR5MIN) %>%
+  # BIRTHWEIGHT UNITS (2026-08-10): DELIVERY_WEIGHT is a CHARACTER column holding
+  # whole kilograms ("1","2","3","4") plus "." for missing. It is genuinely a
+  # weight, not a category code -- HHEAR's own ELEMENT_Harmonized object calls the
+  # same data "Child-Human-Weight-Kilogram-Birth". Converted to GRAMS so it pools
+  # with CCREOH/CEHC/MADRES/PARENTs (the ExWAS reports UNSTANDARDIZED betas, and
+  # ExWAS_Location_Heterogeneity compares betas ACROSS studies, so a kg-vs-g mix
+  # reads as effect heterogeneity).
+  # CAVEAT: only 4 distinct values, i.e. 1000 g resolution -- a weak continuous
+  # outcome. Kept per user decision 2026-08-10; revisit if it dominates a panel.
+  # The explicit na_if(".") also stops this character column from coercing the
+  # WHOLE pooled Birthweight column to character via rbindlist.
+  mutate(Birthweight = suppressWarnings(as.numeric(dplyr::na_if(as.character(Birthweight), "."))) * 1000) %>%
+  # DELIVERY_GESTAGE is likewise a character column using "." for missing (37
+  # rows), which was coercing the WHOLE pooled Gest_Age_Birth column to
+  # character across all cohorts. Values are already decimal weeks, so this is
+  # a type fix only -- no rescaling.
+  mutate(Gest_Age_Birth = suppressWarnings(as.numeric(dplyr::na_if(as.character(Gest_Age_Birth), "."))))
+```
+
+
+```{r}
+ESPINA_Outcomes <- ESPINA_data_list[["ESPINA_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,Child_Depression_Raw = c_cdi2_tot_r,Child_Anxiety_Raw = c_masc2_tot_r,
+                Child_Behavior_Assess_Raw = c_basc3_ap_raw,Child_Auditory_Attention = c_aatc) 
+```
+
+```{r}
+GOALS_Outcomes <- GOALS_data_list[["GOALS_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,Systolic_BP = SYS,Diastolic_BP = DIA,
+                ALT,Glucose = GLUCOSE,HBA1C,Cholesterol_HDL = HDLCHOL,Insulin_Resistance = HOMA_IR,
+                HSCRP,Insulin = INSULIN,Cholesterol_LDL = LDLCHOL,Cholesterol_Total = TOTCHOL,Triglycerides = TRIGLY,DIABETESDIAG) %>% 
+  mutate(Type_1_Diabetes = ifelse(DIABETESDIAG == 1,1,0)) %>% 
+  mutate(Type_2_Diabetes = ifelse(DIABETESDIAG == 2,1,0)) %>% 
+  dplyr::select(-DIABETESDIAG) 
+```
+
+
+```{r}
+GOC_Outcomes <- GOC_data_list[["GOC_Epi"]] %>% 
+  dplyr::select(Child_PID = pid,antro_baz_b1,antro_baz_b4,dxa_fgvpercent_b4,antro_baz_1pm) 
+```
+
+
+```{r}
+IMBEDD_Outcomes <- IMBEDD_data_list[["IMBEDD_Epi"]] %>% 
+  dplyr::select(Child_PID = CHILD_PID,ADOS_Severity = ADOStotSARRB,Visual_Tscore = MSLvrTscore,
+                Fine_Motor_Tscore = MSLfmTscore,Language_Tscore = MSLelTscore,EarlyLearning_Composite = MSLelTscore,Dx_alg,
+                Hypertension = HTN_EEQ,Preeclampsia = HTN_PE,Type_1_Diabetes = DM1_EEQ,Type_2_Diabetes = DM2_EEQ,
+                Gest_Diabetes = GDM,APGAR_1 = APGAR1,APGAR_5 = APGAR5,Gest_Age_Birth = GA_WKS,MSLelTscore,MSLvrTscore,
+                MSLfmTscore,MSLfmagequiv,MSLrlTscore,MSLrlagequiv,MSLelTscore,MSLelagequiv,MSLelcStandard) %>% 
+    mutate(Autism = case_when(Dx_alg == 1 ~1,
+                              Dx_alg == 2 ~ 1,
+                            TRUE ~ 0)) %>%  
+  dplyr::select(-Dx_alg) 
+```
+
+
+```{r}
+MADRES_Outcomes <- MADRES_data_list[["MADRES_Epi"]] %>% 
+  dplyr::select(Child_PID = child_pid,Gest_Age_Birth = GA,Gest_Diabetes = preg_diabetes,Birthweight = birthweight) 
+```
+
+
+```{r}
+MARBLES_Outcomes <- MARBLES_data_list[["MARBLES_Epi"]] %>% 
+    dplyr::select(Child_PID = CHILD_PID,ADOS_Severity = ADOScs,Visual_Tscore = MSLvrTscore,
+                Fine_Motor_Tscore = MSLfmTscore,Language_Tscore = MSLelTscore,EarlyLearning_Composite = MSLelTscore,Dx_alg,
+                Hypertension = HTN_EEQ,Preeclampsia = HTN_PE,Type_1_Diabetes = DM1_EEQ,Type_2_Diabetes = DM2_EEQ,
+                Gest_Diabetes = GDM) %>% 
+      mutate(Autism = case_when(Dx_alg == 1 ~ "Austim_Diagnosis",
+                              Dx_alg == 2 ~ "Mild_Delay",
+                            TRUE ~ "General_Population")) %>% 
+  dplyr::select(-Dx_alg)
+```
+
+
+```{r}
+MDUC_Outcomes <- MDUC_data_list[["MDUC_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,Sickle_Cell = sickler,Fine_Motor_Tscore = mulout12,Mental_Processing_Tscore = mpi12,
+                Early_Child_Vigilance_Tscore = ecvt12, Visual_Tscore = vdpt_12,Color_Object_Tscore = coatsc12,Seq_Procces_Tscore = seqpro12,
+                Interalizing_Tscore = intern12, Externalizing_Tscore = extern12,hct,wbc,plt,ly,mo,rbc,finden0,
+                malretin,seizeno,neudef,comatot,durhospdays,outcome,admit_12m,admitno_12m,multreadm_12m,malreadm_12m,
+                hrp2_pl1) 
+```
+
+
+```{r}
+MEBCO_Outcomes <- MEBCO_data_list[["MEBCO_Epi"]] %>%
+  dplyr::select(Child_PID = PID,Gest_Age_Birth = ga, Birthweight = birthweight) %>%
+  # BIRTHWEIGHT UNITS (2026-08-10): raw `birthweight` is KILOGRAMS (1.02-3.54).
+  # Converted to grams for cross-study comparability -- see the ELEMENT note.
+  mutate(Birthweight = Birthweight * 1000)
+```
+
+```{r}
+NASH_Outcomes <- NASH_data_list[["NASH_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,steatosis,lobular,balloon,portinflam,Steatohepatitis  = nashdx,fibrosis,ALT = alt,ast,ggt,Glucose = glucose,
+                Insulin = insulin,Insulin_Resistance = homair,Triglycerides = triglyc,
+                Cholesterol_HDL = cholesterol_hdl,Cholesterol_LDL = cholesterol_ldl,
+                Cholesterol_Total = cholesterol_t) %>%
+  mutate(NAFLD = 1) 
+```
+
+```{r}
+NFGS_Outcomes <- NFGS_data_list[["NFGS_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,Itchy_Rash = ITCHY, Eczema = ECZM,ADD,ATSM,DLAY,
+                Wheezing = WHEEZ,Asthma = ASTHM,Allergies = ALRG,Running_Nose = NOSE) %>% 
+        mutate(Autism = case_when(ATSM == 1 ~ "Austim_Diagnosis",
+                              DLAY == 1 ~ "Mild_Delay",
+                            TRUE ~ "General_Population")) %>% 
+  dplyr::select(-ATSM,-DLAY)
+```
+
+```{r}
+NHBCS_Outcomes <- NHBCS_data_list[["NHBCS_Epi"]] %>% 
+  dplyr::select(Child_PID = child_pid, Mat_PID = mother_pid,Gest_Age_Birth = gestage_all,wght_gain,BMI = maternalbmi) 
+```
+
+```{r}
+nuMoM2b_Outcomes<- nuMoM2b_data_list[["nuMoM2b_Epi"]] %>% 
+  dplyr::select(Mat_PID = PID,Hypertensive,Gest_Age_Birth = Gest_Age,
+                Preeclampsia = Y1_preec,Hypertension = y2_APhyp) %>%
+  mutate(Gest_Hypertension = ifelse(Hypertensive == 7,0,1)) %>%
+  dplyr::select(-Hypertensive) 
+```
+
+
+```{r}
+PARENTs_Outcomes<-PARENTs_data_list[["PARENTs_Epi"]] %>% 
+  dplyr::select(Mat_PID = PID,Birthweight = Infant_Weight,APGAR_1 = APGAR_1_min,APGAR_5 =APGAR_5_min,Low_Birthweight = LBW,
+               Gest_Age_Birth = Gestational_Age,Preterm_Birth = PTB,Placental_Hypoxia = Comp_Placental_Hypoxia,Gest_Hypertension = Comp_Gest_Hyp,
+               Preeclampsia = Comp_Preeclampsia,
+               IUGR = Comp_IUGR) %>% 
+  mutate(Low_Birthweight = ifelse(Low_Birthweight == "Yes",1,0)) %>%
+  mutate(Preterm_Birth = ifelse(Preterm_Birth == "Yes",1,0)) %>% 
+  mutate(Placental_Hypoxia = ifelse(Placental_Hypoxia == "Yes",1,0)) %>% 
+  mutate(Gest_Hypertension = ifelse(Gest_Hypertension == "Yes",1,0)) %>% 
+  mutate(Preeclampsia = ifelse(Preeclampsia == "Yes",1,0)) %>% 
+  mutate(IUGR = ifelse(IUGR == "Yes",1,0)) 
+```
+
+```{r}
+
+SEARCH_Outcomes <- SEARCH_data_list[["SEARCH_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,Triglycerides = trig_mgdl_base,Systolic_BP = sbp_base,Diastolic_BP = dbp_base,
+                Cholesterol_LDL = ldlchol_mgdl_base, Cholesterol_HDL = hdlchol_mgdl_base,type_prov,BMI_base,everything()) %>% 
+  mutate(Type_2_Diabetes = ifelse(type_prov == "2. TYPE 2",1,0)) %>% 
+  mutate(Type_1_Diabetes = ifelse(type_prov == "1. TYPE 1",1,0)) %>% 
+dplyr::select(-type_prov,-age_dx,-age_ipv,-clinic,-gender,-race_pl,-race_ethnic,-maxedu_base,maxedu_fu,
+              -momedlev_heaq,-dadedlev_heaq,-patedlev_splq)
+
+```
+
+```{r}
+remove <- c(
+"age",
+"gender_form03",
+"ethnicity_form03",
+"race_form03___am_indian",
+"race_form03___asian",
+"race_form03___hawaii",
+"race_form03___black",
+"race_form03___white",
+"race_form03___other",
+"race_form03___unknown",
+"race_form03___refused")
+
+SICAS_Outcomes <- SICAS_data_list[["SICAS_Epi"]] %>%
+  # NOT A BIRTHWEIGHT (2026-08-10): raw `birth_weight` holds only the values
+  # 1 (n=15) and 2 (n=149) -- 9.1% in level 1, and SICAS_Harmonized carries no
+  # birth-weight column at all. That matches CCREOH's Low_Birthweight 1/2 coding
+  # (66/583 = 10.2%), so this is a LOW-BIRTHWEIGHT INDICATOR that was misfiled
+  # under Birthweight, where it entered the ExWAS as a binary "weight" outcome.
+  # Remapped to Low_Birthweight with the project's 1 = case / 0 = control coding.
+  dplyr::select(Child_PID = PID,Low_Birthweight = birth_weight,bmi,everything()) %>%
+  mutate(Low_Birthweight = dplyr::case_when(Low_Birthweight == 1 ~ 1,
+                                            Low_Birthweight == 2 ~ 0,
+                                            TRUE ~ NA_real_)) %>%
+  dplyr::select(-all_of(remove)) %>% 
+  mutate(Asthma = 1)
+```
+
+
+```{r}
+#outcomes are genetic and transcriptomics
+#names(SLC_data_list[["SLC_Epi"]])
+# SLC_data_list[["SLC_Epi"]] %>% 
+#   dplyr::select(Child_PID = PID) %>% 
+#   View
+```
+
+```{r}
+
+TEDDY_Outcomes <- TEDDY_data_list[["TEDDY_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,CHEAR_IA_outcome_1,CHEAR_IA_outcome_2,CHEAR_T1D_case_ind_1,CHEAR_T1D_case_ind_2) %>% 
+  mutate(Type_1_Diabetes = case_when(!is.na(CHEAR_T1D_case_ind_1) ~ 1,
+                                     !is.na(CHEAR_T1D_case_ind_2) ~ 1,
+                                     TRUE ~ 0)) %>% 
+  mutate(IA = case_when(CHEAR_IA_outcome_1 == 1 ~ 1,
+                        CHEAR_IA_outcome_2 == 0 ~ 0,
+                        TRUE ~ 0)) %>% 
+  dplyr::select(Child_PID,Type_1_Diabetes,IA) 
+
+```
+
+
+```{r}
+TSIC_Outcomes <- TSIC_data_list[["TSIC_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,Asthma = medhx___1,Prematurity = medhx___2,Bronchiolitis = medhx___3,
+                Reactive_Airways_Disease = medhx___4,Penumonia = medhx___5) 
+```
+
+
+```{r}
+USCEHC_Outcomes <- USCEHC_data_list[["USCEHC_Epi"]] %>% 
+  dplyr::select(Child_PID = CHEAR_PID,Glucose = FastingGlucose,
+                Insulin = FastingInsulin,Insulin_Resistance = HOMA_IR,Leptin,BMI,PercentBodyFat,PM25,Total_NOx)
+```
+
+
+```{r}
+VAPS_Outcomes <- VAPS_data_list[["VAPS_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,Cardiovascular_Disease = Cardiovascular.disease,Liver_Disease = Chronic.liver.disease,Renal_Disease = Chronic.renal.disease,
+               Congenital_Anomaly = Congenital.anomaly.or.chromosomal.defect,Endocrine_Disease = Endocrine.disease,
+               Gastrointestinal_Disease = Gastrointestinal.disease,
+               Hematological_Disease = Hematological.disease,Immunological_Disorder = Immunological.disorder,
+               Metabolic_Disease = Metabolic.disease,Neurological_Disease = Neurological.disease,Cancer,Asthma) 
+```
+
+```{r}
+VDAART_Outcomes <- VDAART_data_list[["VDAART_Epi"]] %>% 
+  dplyr::select(Child_PID = PID,Asthma = asthmawheeze,Eczema = eczemawrash,Allergies = hayfever,Food_Allergy = foodallergy) 
+```
+
+```{r}
+ZIP_Outcomes <- ZIP_data_list[["ZIP_EPI_1"]] %>% 
+  dplyr::select(Child_PID = CHILD_PID,Mat_PID = MOTHER_PID,Preterm = deli_preterm1,
+                Gest_Age_Birth = infant_weeks,APGAR_1 = infant_apgar_1min,APGAR_5 = infant_apgar_5min,infant_wt,infant_wt_unit) %>%
+  # BIRTHWEIGHT UNITS BUG (fixed 2026-08-10). The old line was
+  #   mutate(Birthweight = infant_wt/infant_wt_unit)
+  # but `infant_wt_unit` is a UNIT CODE, not a divisor: it is 1 for n=893 and
+  # 2 for n=2. Dividing by it silently HALVED the two unit-2 rows. Those two
+  # carry infant_wt 7.0 and 8.8, i.e. POUNDS (code 2 = lb, code 1 = kg), so the
+  # old expression returned 3.5/4.4 kg where the truth is 3.18/3.99 kg. It went
+  # unnoticed because /2 happens to land in a plausible birthweight range.
+  # Now an explicit per-code conversion, and the result is in GRAMS to match
+  # CCREOH/CEHC/MADRES/PARENTs -- see the ELEMENT note on why units must agree.
+  mutate(Birthweight = dplyr::case_when(
+    infant_wt_unit == 1 ~ infant_wt * 1000,        # kg -> g
+    infant_wt_unit == 2 ~ infant_wt * 453.59237,   # lb -> g
+    TRUE                ~ NA_real_
+  )) %>%
+  dplyr::select(-infant_wt,-infant_wt_unit)
+```
+
+
+```{r}
+names(CTS_data_list[["CTS_EPI"]])
+
+# bmi is not carried over (2026-11-09): CTS codes it 0/1/2/9, not kg/m2, so it
+# cannot be pooled with the other cohorts' continuous BMI.
+CTS_Outcomes <- CTS_data_list[["CTS_EPI"]] %>% 
+  select(Mat_PID = pid, Type_2_Diabetes = diab, Breast_Cancer = bcstat) 
+
+```
+
+```{r}
+DCHS_Outcomes <- DCHS_data_list[["DCHS_EPI"]] %>%
+  select(
+    Mat_PID = mother_pid, Child_PID = child_pid, Preterm = preterm,
+    Gest_Age_Birth = gestation_delivery,Birth_Weight_Z = zbirth_weight,
+    HIV = hiv_infected_maternal) 
+
+```
+
+```{r}
+library(janitor)
+
+yn_to_int <- function(x) {
+  x_chr <- str_to_lower(trimws(as.character(x)))
+  case_when(
+    x_chr %in% c("yes", "y", "true", "t", "1") ~ 1L,
+    x_chr %in% c("no",  "n", "false","f", "0") ~ 0L,
+    x_chr %in% c("", "na", "n/a", "null")      ~ NA_integer_,
+    TRUE ~ NA_integer_
+  )
+}
+
+is_yes_no_col <- function(x) {
+  vals <- str_to_lower(trimws(as.character(x)))
+  vals <- vals[!is.na(vals)]
+  vals <- vals[vals != ""]
+  vals <- vals[!vals %in% c("na","n/a","null")]
+  length(vals) > 0 && all(vals %in% c("yes","no","y","n","true","false","t","f","0","1"))
+}
+
+
+
+names(OBSS_data_list[["OBSS_EPI"]])
+
+OBSS_Outcomes <- OBSS_data_list[["OBSS_EPI"]] %>% 
+    select(Mat_PID = PID,everything()) %>% 
+    mutate(across(where(is.character), ~ na_if(.x, "NA"))) %>%
+  mutate(across(where(is_yes_no_col), yn_to_int)) %>% 
+    #clean_names() %>%
+  # mutate(across(where(is.character), ~ na_if(.x, "NA"))) %>%
+  # mutate(across(where(is.character), ~ na_if(.x, ""))) %>% 
+    {
+      base <- names(.) %>% str_remove("_[12]$")
+      pairs <- base[base %in% str_remove(names(.), "_[12]$")]
+      pairs <- unique(pairs[str_detect(names(.), paste0("^", pairs, "_[12]$"), negate = FALSE)])
+      # coalesce each *_1 and *_2 into a single column
+      reduce(unique(str_remove(names(.)[str_detect(names(.), "_[12]$")], "_[12]$")),
+             ~ mutate(.x,
+                      !!.y := coalesce(.x[[paste0(.y, "_1")]], .x[[paste0(.y, "_2")]])),
+             .init = .) %>%
+        select(-matches("_[12]$"))
+    } %>%
+    mutate(across(where(is.character), readr::parse_number, .names = "{.col}")) %>% 
+  dplyr::select(-all_of(c("group","race" ,"sex","ethnicity","smoking","weight"))) 
+
+
+```
+
+
+```{r}
+THS_Outcomes <- THS_data_list[["THS_EPI"]] %>% 
+  dplyr::select(Mat_PID = PID,
+    BMI = BMI,
+    Waist_Circumference = WSTM_AVE,
+    Type_2_Diabetes = DM,
+    Total_Calf_Fat = T66Total_fat,
+    Calf_Muscle_Area = T66Muscle,
+    Calf_Subcutaneous_Fat = T66subc_fat,
+    Calf_Muscle_Attenuation = T66Muscle_Density1,
+    Calf_Intermuscular_Fat = T66IMAT,
+    Sleep_Efficiency = sleepefficiency,
+    Steps_per_Day = steps_day,
+    Sleep_Duration = sleep_day
+  )
+
+
+```
+
+```{r}
+NYUWHS_Outcomes <- NYUWHS_data_list[["NYUWHS_EPI"]] %>%  
+  dplyr::select(Mat_PID = PID, Type_2_Diabetes = diabetes,BMI,Breast_Cancer = Caco)
+
+```
+
+```{r}
+
+
+
+
+PROGRESS_Outcomes <- PROGRESS_data_list[["PROGRESS_EPI"]] %>%
+    dplyr::select(
+      Child_Pid = CHILD_PID,
+    Post_Bronchodilator_FVC        = post_fvc_a,
+    Post_Bronchodilator_FEV1       = post_fev1_a,
+    Post_Bronchodilator_FEV1_FVC   = post_fev1_fvc_a,
+    Post_Bronchodilator_FEF25_75   = post_fef_a,
+    Pre_Bronchodilator_FEV1        = pre_fev1_a,
+    Pre_Bronchodilator_FVC         = pre_fvc_a,
+    Pre_Bronchodilator_FEV1_FVC    = pre_fev1_fvc_a,
+    Pre_Bronchodilator_FEF25_75    = pre_fef_a,
+    Ever_Wheeze                    = as1_spiro,
+    Wheeze_Past_12_Months          = as2_spiro,
+    Asthma_Ever                    = as6_spiro
+  )
+
+
+```
+
+
+New cohorts (2026-08-10): GRAPHS / ATLAA / SWSD
+----------------------
+All three are MATERNAL-ONLY on the exposure side: every row in
+Harmonized_Targeted for these cohorts has a Mat_PID and NO Child_PID. The ExWAS
+splits into a `child` panel keyed on Child_PID and a `mat` panel keyed on
+Mat_PID, so outcomes MUST be keyed on Mat_PID -- minting child PIDs would put
+these birth outcomes in a panel with no exposures to join and produce zero
+tasks. The infant birth outcomes therefore sit on the maternal row.
+
+IMHRD is deliberately absent: it ships only year x analyte summary statistics
+with no participant identifiers, so it cannot carry an outcome.
+
+```{r}
+# GRAPHS -- Ghana, maternal urine PAH/VOC. The workbook's only participant-level
+# sheet is Participant_Metadata (5 columns); there are NO birth outcomes to map,
+# so maternal BMI is the single ExWAS-eligible outcome.
+# NOTE: GRAPHS will contribute no ExWAS results, because none of its 10 PAH/VOC
+# analytes is measured by any other cohort that has a maternal BMI outcome
+# (CCREOH/NHBCS/NYUWHS/OBSS/THS), so no pair reaches the n_studies >= 2
+# filter. Included for completeness and so it lands automatically if GRAPHS
+# birth outcomes ever arrive -- its NAP1/NAP2/PYR1/FLUO2 ARE the top eligible
+# exposures for maternal Birthweight and Gest_Age_Birth.
+GRAPHS_Outcomes <- GRAPHS_data_list[["GRAPHS_Epi"]] %>%
+  dplyr::select(Mat_PID = PID, BMI = Maternal_BMI) %>%
+  mutate(Mat_PID = as.character(Mat_PID))
+```
+
+```{r}
+# ATLAA -- Atlanta, maternal serum PFAS. Units read off the workbook's
+# "Data dictionary" sheet, NOT inferred from magnitude.
+#   birth_weight   : "birthweight", Unit = grams  (930-4320) -> used as-is
+#   FirstPretalBMI : "BMI at first prenatal visit", kg/m2    (sic, typo is in source)
+#   birthga        : "Gestational age in weeks.days (wks.days)"  <-- SEE BELOW
+#
+# GESTATIONAL AGE IS wks.days, NOT DECIMAL WEEKS. "39.6" means 39 weeks 6 days
+# = 39.857 weeks, not 39.6 weeks. Verified: every fractional digit is 0-6, none
+# is 7/8/9, and no value carries more than one decimal place. Existing cohorts
+# store true decimal weeks (NHBCS 39.14, MADRES 39.29, IMBEDD 33.57), so loading
+# this raw would compress the fractional part by 10/7 and be silently
+# inconsistent with them.
+ATLAA_Outcomes <- ATLAA_data_list[["ATLAA_Epi"]] %>%
+  dplyr::select(Mat_PID = Subjectid, Birthweight = birth_weight,
+                Gest_Age_Birth = birthga, BMI = FirstPretalBMI) %>%
+  mutate(
+    Mat_PID        = as.character(Mat_PID),
+    Birthweight    = suppressWarnings(as.numeric(Birthweight)),   # already grams
+    BMI            = suppressWarnings(as.numeric(BMI)),
+    Gest_Age_Birth = {
+      ga   <- suppressWarnings(as.numeric(Gest_Age_Birth))
+      wks  <- floor(ga)
+      days <- round((ga - wks) * 10)      # one decimal place, values 0-6
+      wks + days / 7
+    }
+  )
+```
+
+```{r}
+# SWSD -- Thailand, maternal urine neonicotinoids. Units read off the workbook's
+# "Dictionary" sheet:
+#   birthwt : "Birth weight", Unit = kg  (1.21-4.05) -> x1000 to grams
+#   BMI_v1  : "BMI at first visit", kg/m2
+#   GA_wks  : "Gestational age (weeks)", 29-41, complete
+#   GA_day  : "Gestational age (days)", takes EXACTLY the values 0-6 (uniform),
+#             so it is the remainder day within the week, not a total-days count.
+#             => decimal weeks = GA_wks + GA_day/7.
+# GA_day is NA for 2 of 296 subjects while GA_wks is present for both; those two
+# are coalesced to the whole week rather than dropped (at most 6/7 of a week of
+# resolution lost, versus losing the subjects entirely).
+# The raw sheet is one row per subject x trimester; SWSD_Epi is already
+# distinct(), but distinct() is repeated here so a future reader change cannot
+# silently duplicate maternal rows.
+SWSD_Outcomes <- SWSD_data_list[["SWSD_Epi"]] %>%
+  dplyr::select(Mat_PID = subjectid, Birthweight = birthwt,
+                BMI = BMI_v1, GA_wks, GA_day) %>%
+  distinct() %>%
+  mutate(
+    Mat_PID        = as.character(Mat_PID),
+    Birthweight    = suppressWarnings(as.numeric(Birthweight)) * 1000,  # kg -> g
+    BMI            = suppressWarnings(as.numeric(BMI)),
+    Gest_Age_Birth = suppressWarnings(as.numeric(GA_wks)) +
+                     dplyr::coalesce(suppressWarnings(as.numeric(GA_day)), 0) / 7
+  ) %>%
+  dplyr::select(-GA_wks, -GA_day)
+```
+
+```{r}
+rm(Outcomes_Data_All)
+Pattern1<-grep("Outcomes",names(.GlobalEnv),value=TRUE)
+bind_list<-do.call("list",mget(Pattern1))
+
+Outcomes_Data_All <- rbindlist( bind_list, use.names = TRUE, fill = TRUE,idcol = "Study" )
+
+# Participant IDs are CHARACTER across all harmonized artifacts (2026-08).
+# Some cohorts (e.g. ATLAA) use alphanumeric IDs such as "E0604", which cannot be
+# numeric, so Harmonized_Targeted / Harmonized_SDOH carry character IDs. Coerce
+# here too so joins between Outcomes and those tables don't fail on type mismatch.
+Outcomes_Data_All <- Outcomes_Data_All %>%
+  mutate(across(any_of(c("Child_PID","Mat_PID")), as.character))
+
+```
+
+
+```{r}
+names(Outcomes_Data_All)
+save(Outcomes_Data_All,file = "../Input/Harmonized_Datasets/Harmonized_Outcomes.RData")
+write_csv(Outcomes_Data_All, file = "../Input/Harmonized_Datasets/Harmonized_Outcomes.csv")
+```
+
+```{r}
+
+```
+
+

@@ -1,0 +1,386 @@
+---
+title: "Harmonized Targeted LOD Analysis"
+output: html_document
+date: "2026-05-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+```{r view-shim}
+# View() opens an interactive viewer and ERRORS under rmarkdown::render(). These
+# documents were written to be run chunk-by-chunk in RStudio, so View() scratch is
+# scattered through them. Shim to a no-op so a headless render works. (2026-08-11)
+View <- function(x, ...) invisible(x)
+```
+
+## Packages
+
+```{r}
+library(tidyverse)
+library(patchwork)
+library(scales)
+library(knitr)
+```
+
+```{r harmonization-helpers}
+# to_ng_per_mL(), std_study(). Added 2026-08-11; see CODE_AUDIT_2026-08-11.md.
+local({
+  cands <- c("../harmonization_helpers.R", "harmonization_helpers.R",
+             "Coding/Paper1_Submission2/harmonization_helpers.R")
+  hit <- cands[file.exists(cands)]
+  if (length(hit) == 0) stop("Cannot locate harmonization_helpers.R")
+  source(hit[[1]], local = FALSE)
+})
+```
+
+## Input Files
+
+```{r}
+resolve_existing_path <- function(candidates) {
+  existing <- candidates[file.exists(candidates)]
+  if (length(existing) == 0) {
+    stop(
+      "Could not find the LOD input directory. Checked:\n",
+      paste(candidates, collapse = "\n")
+    )
+  }
+  existing[[1]]
+}
+
+lod_input_dir <- resolve_existing_path(c(
+  "../Input/Harmonized_Datasets",
+  "../../Input/Harmonized_Datasets",
+  "../../../Input/Harmonized_Datasets",
+  "Input/Harmonized_Datasets"
+))
+
+lod_summary_file <- file.path(lod_input_dir, "Harmonized_Targeted_LOD_Summary.csv")
+lod_crossstudy_file <- file.path(lod_input_dir, "Harmonized_Targeted_LOD_CrossStudy_Summary.csv")
+lod_flagged_file <- file.path(lod_input_dir, "Harmonized_Targeted_LOD_CrossStudy_Flagged.csv")
+lod_study_analyte_file <- file.path(lod_input_dir, "Harmonized_Targeted_Study_Analyte_LOD.csv")
+
+lod_summary <- readr::read_csv(lod_summary_file, show_col_types = FALSE)
+lod_crossstudy <- readr::read_csv(lod_crossstudy_file, show_col_types = FALSE)
+lod_flagged <- readr::read_csv(lod_flagged_file, show_col_types = FALSE)
+lod_study_analyte <- readr::read_csv(lod_study_analyte_file, show_col_types = FALSE)
+
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+```
+
+## Quick Overview
+
+```{r}
+overview_tbl <- tibble(
+  Dataset = c(
+    "LOD summary by study-analyte",
+    "Cross-study LOD summary",
+    "Flagged cross-study analytes",
+    "Study-analyte within-study LOD summary"
+  ),
+  Rows = c(
+    nrow(lod_summary),
+    nrow(lod_crossstudy),
+    nrow(lod_flagged),
+    nrow(lod_study_analyte)
+  ),
+  Columns = c(
+    ncol(lod_summary),
+    ncol(lod_crossstudy),
+    ncol(lod_flagged),
+    ncol(lod_study_analyte)
+  )
+)
+
+kable(overview_tbl)
+```
+
+```{r}
+high_level_metrics <- tibble(
+  Metric = c(
+    "Unique studies in LOD summary",
+    "Unique analytes in LOD summary",
+    "Unique analytes in cross-study summary",
+    "Flagged analytes",
+    "Analytes with within-study LOD variation",
+    "Study-analyte rows with more than one unique LOD"
+  ),
+  Value = c(
+    dplyr::n_distinct(lod_summary$Study),
+    dplyr::n_distinct(lod_summary$Analyte_Code),
+    dplyr::n_distinct(lod_crossstudy$Analyte_Code),
+    nrow(lod_flagged),
+    sum(lod_crossstudy$Any_Within_Study_LOD_Variation, na.rm = TRUE),
+    sum(lod_study_analyte$N_Unique_LOD_Within_Study > 1, na.rm = TRUE)
+  )
+)
+
+kable(high_level_metrics)
+```
+
+## Summary Tables
+
+```{r}
+study_summary_tbl <- lod_summary %>%
+  group_by(Study) %>%
+  summarise(
+    N_Analytes = n(),
+    Median_Pct_Below_LOD = median(Pct_Results_Below_LOD, na.rm = TRUE),
+    Mean_Pct_Below_LOD = mean(Pct_Results_Below_LOD, na.rm = TRUE),
+    N_All_Below_LOD = sum(Pct_Results_Below_LOD == 100, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Median_Pct_Below_LOD), desc(N_All_Below_LOD)) %>% 
+  dplyr::filter(!is.na(Median_Pct_Below_LOD))
+
+kable(study_summary_tbl, digits = 2)
+```
+
+```{r}
+top_crossstudy_tbl <- lod_crossstudy %>%
+  arrange(desc(LOD_Fold_Difference), desc(N_Studies)) %>%
+  select(
+    Chemical_Group,
+    Analyte_Code,
+    Units,
+    N_Studies,
+    Min_Study_LOD,
+    Median_Study_LOD,
+    Max_Study_LOD,
+    LOD_Fold_Difference,
+    Any_Within_Study_LOD_Variation
+  ) %>%
+  slice_head(n = 20)
+
+kable(top_crossstudy_tbl, digits = 3)
+```
+
+## Plot 1: Percent of Results Below LOD Across Studies
+
+```{r}
+p_pct_below_hist <- lod_summary %>%
+  ggplot(aes(x = Pct_Results_Below_LOD)) +
+  geom_histogram(binwidth = 5, fill = "#2C7FB8", color = "white") +
+  scale_x_continuous(labels = label_percent(scale = 1)) +
+  labs(
+    title = "Distribution of Percent of Results Below the LOD",
+    x = "Percent of results below LOD",
+    y = "Study-analyte combinations"
+  ) +
+  theme_minimal(base_size = 13)
+
+p_pct_below_hist
+```
+
+## Plot 2: Median Percent Below LOD by Study
+
+```{r}
+p_study_median <- study_summary_tbl %>%
+  arrange(Median_Pct_Below_LOD) %>%
+  mutate(Study = factor(Study, levels = unique(Study))) %>%
+  ggplot(aes(x = Study, y = Median_Pct_Below_LOD)) +
+  geom_col(fill = "#1B9E77") +
+  coord_flip() +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  labs(
+    title = "Median Percent Below LOD by Study",
+    x = NULL,
+    y = "Median percent of results below LOD"
+  ) +
+  theme_minimal(base_size = 13)
+
+p_study_median
+```
+
+## Plot 3: Largest Cross-Study LOD Differences
+
+```{r}
+top_crossstudy_plot_df <- lod_crossstudy %>%
+  mutate(
+    Analyte_Label = paste(Chemical_Group, Analyte_Code, sep = " :: ")
+  ) %>%
+  slice_max(order_by = LOD_Fold_Difference, n = 25, with_ties = FALSE) %>%
+  arrange(LOD_Fold_Difference) %>%
+  mutate(Analyte_Label = factor(Analyte_Label, levels = unique(Analyte_Label)))
+
+p_crossstudy_diff <- top_crossstudy_plot_df %>%
+  ggplot(aes(x = Analyte_Label, y = LOD_Fold_Difference, fill = N_Studies)) +
+  geom_col() +
+  coord_flip() +
+  scale_y_log10(labels = label_number(accuracy = 1)) +
+  scale_fill_gradient(low = "#9ECAE1", high = "#08519C") +
+  labs(
+    title = "Top Analytes by Cross-Study LOD Fold Difference",
+    x = NULL,
+    y = "LOD fold difference (log scale)",
+    fill = "N studies"
+  ) +
+  theme_minimal(base_size = 13)
+
+p_crossstudy_diff
+```
+
+## Plot 4: Cross-Study LOD Range Versus Number of Studies
+
+```{r}
+p_crossstudy_scatter <- lod_crossstudy %>%
+  ggplot(aes(
+    x = N_Studies,
+    y = LOD_Fold_Difference,
+    color = Any_Within_Study_LOD_Variation
+  )) +
+  geom_point(alpha = 0.8, size = 2.8) +
+  scale_y_log10(labels = label_number(accuracy = 1)) +
+  scale_color_manual(values = c(`TRUE` = "#D95F0E", `FALSE` = "#238B45")) +
+  labs(
+    title = "Cross-Study LOD Spread by Number of Studies",
+    x = "Number of studies contributing to analyte",
+    y = "LOD fold difference (log scale)",
+    color = "Within-study\nvariation"
+  ) +
+  theme_minimal(base_size = 13)
+
+p_crossstudy_scatter
+```
+
+## Plot 5: Within-Study LOD Variation by Study
+
+```{r}
+within_study_summary <- lod_study_analyte %>%
+  group_by(Study) %>%
+  summarise(
+    N_Analytes = n(),
+    N_With_Within_Study_Variation = sum(N_Unique_LOD_Within_Study > 1, na.rm = TRUE),
+    Pct_With_Within_Study_Variation = 100 * N_With_Within_Study_Variation / N_Analytes,
+    Median_Unique_LOD = median(N_Unique_LOD_Within_Study, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(Pct_With_Within_Study_Variation), desc(Median_Unique_LOD))
+
+kable(within_study_summary, digits = 2)
+```
+
+```{r}
+p_within_study <- within_study_summary %>%
+  arrange(Pct_With_Within_Study_Variation) %>%
+  mutate(Study = factor(Study, levels = unique(Study))) %>%
+  ggplot(aes(x = Study, y = Pct_With_Within_Study_Variation, fill = Median_Unique_LOD)) +
+  geom_col() +
+  coord_flip() +
+  scale_fill_gradient(low = "#FEE8C8", high = "#E34A33") +
+  labs(
+    title = "Within-Study LOD Variation by Study",
+    x = NULL,
+    y = "Percent of analytes with >1 unique LOD",
+    fill = "Median\nunique LODs"
+  ) +
+  theme_minimal(base_size = 13)
+
+p_within_study
+```
+
+## Plot 6: Heatmap for Flagged Analytes
+
+```{r}
+flagged_analytes <- lod_flagged %>%
+  arrange(desc(LOD_Fold_Difference)) %>%
+  slice_head(n = 20) %>%
+  select(Chemical_Group, Analyte_Code)
+
+flagged_heatmap_df <- lod_study_analyte %>%
+  semi_join(flagged_analytes, by = c("Chemical_Group", "Analyte_Code")) %>%
+  mutate(
+    Analyte_Label = paste(Chemical_Group, Analyte_Code, sep = " :: "),
+    Study = std_study(Study)
+  ) %>%
+  group_by(Analyte_Label) %>%
+  mutate(Study_LOD_Median_Scaled = Study_LOD_Median / min(Study_LOD_Median, na.rm = TRUE)) %>%
+  ungroup()
+
+flagged_heatmap_levels <- flagged_heatmap_df %>%
+  group_by(Analyte_Label) %>%
+  summarise(Max_Scaled_LOD = max(Study_LOD_Median_Scaled, na.rm = TRUE), .groups = "drop") %>%
+  arrange(Max_Scaled_LOD) %>%
+  pull(Analyte_Label)
+
+p_flagged_heatmap <- flagged_heatmap_df %>%
+  mutate(Analyte_Label = factor(Analyte_Label, levels = flagged_heatmap_levels)) %>%
+  ggplot(aes(
+    x = Study,
+    y = Analyte_Label,
+    fill = Study_LOD_Median_Scaled
+  )) +
+  geom_tile(color = "white") +
+  scale_fill_viridis_c(
+    trans = "log10",
+    labels = label_number(accuracy = 0.1)
+  ) +
+  labs(
+    title = "Relative Median LOD Across Studies for Flagged Analytes",
+    x = NULL,
+    y = NULL,
+    fill = "Median LOD /\nminimum study LOD"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+p_flagged_heatmap
+```
+
+## Combined Snapshot
+
+```{r, fig.width=14, fig.height=12}
+lod_patch <- (p_pct_below_hist | p_study_median)+ plot_annotation(tag_levels = 'A')
+
+ggsave(
+  filename = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots//LOD_Patch.pdf",
+  plot = lod_patch,
+  device = "pdf",
+  height = 8,
+  width = 15
+)
+```
+
+
+```{r}
+study_summary_tbl %>%
+  View
+
+lod_summary %>%
+  group_by(Study,Analyte_Code) %>% 
+  summarise(mean_pct_lod = mean(Pct_Results_Below_LOD,na.rm = T)) %>% 
+   View
+
+median(study_summary_tbl$Median_Pct_Below_LOD,na.rm=T)
+```
+
+
+## Notes
+
+```{r}
+notes_tbl <- tibble(
+  Observation = c(
+    "Rows in the flagged file",
+    "Maximum observed cross-study fold difference",
+    "Median cross-study fold difference",
+    "Study-analyte rows with all results below the LOD",
+    "Study-analyte rows with any within-study LOD variation"
+  ),
+  Value = c(
+    nrow(lod_flagged),
+    signif(max(lod_crossstudy$LOD_Fold_Difference, na.rm = TRUE), 4),
+    signif(median(lod_crossstudy$LOD_Fold_Difference, na.rm = TRUE), 4),
+    sum(lod_summary$Pct_Results_Below_LOD == 100, na.rm = TRUE),
+    sum(lod_study_analyte$N_Unique_LOD_Within_Study > 1, na.rm = TRUE)
+  )
+)
+
+kable(notes_tbl)
+```

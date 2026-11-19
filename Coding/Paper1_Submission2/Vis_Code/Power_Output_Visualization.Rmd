@@ -1,0 +1,699 @@
+---
+title: "Targeted Quantile Power Results"
+output: html_document
+date: "2026-05-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+## Packages
+
+```{r}
+library(tidyverse)
+library(scales)
+library(knitr)
+library(patchwork)
+library(glue)
+library(paletteer)
+```
+
+## Input Files
+
+```{r}
+resolve_existing_path <- function(candidates) {
+  existing <- candidates[file.exists(candidates)]
+  if (length(existing) == 0) {
+    stop(
+      "Could not find the power output directory. Checked:\n",
+      paste(candidates, collapse = "\n")
+    )
+  }
+  existing[[1]]
+}
+
+# Power_Output/ holds the SLURM run of 2026-05-11, which predates GRAPHS, ATLAA
+# and SWSD. Power_Output_2026-08/ is the local re-run that includes them. Listed
+# first so the fresh run wins where it exists, with the May run as a fallback.
+power_dir <- resolve_existing_path(c(
+  "../../../Output/Paper1_Output_Submission2/Power_Output_2026-08",
+  "Output/Paper1_Output_Submission2/Power_Output_2026-08",
+  "../../../Output/Paper1_Output_Submission2/Power_Output",
+  "Output/Paper1_Output_Submission2/Power_Output"
+))
+message("power_dir = ", normalizePath(power_dir, mustWork = FALSE))
+
+power_results_file <- file.path(power_dir, "targeted_quantile_power_results.csv")
+screening_results_file <- file.path(power_dir, "targeted_quantile_power_screening.csv")
+summary_file <- file.path(power_dir, "targeted_quantile_power_collection_summary.csv")
+missing_tasks_file <- file.path(power_dir, "targeted_quantile_power_missing_tasks.csv")
+mapping_file <- resolve_existing_path(c(
+  "../../../Input/Harmonized_Datasets/Targeted_Analyte_Category_Mapping.csv",
+  "../../Input/Harmonized_Datasets/Targeted_Analyte_Category_Mapping.csv",
+  "../Input/Harmonized_Datasets/Targeted_Analyte_Category_Mapping.csv",
+  "Input/Harmonized_Datasets/Targeted_Analyte_Category_Mapping.csv"
+))
+
+power_results <- readr::read_csv(power_results_file, show_col_types = FALSE)
+screening_results <- readr::read_csv(screening_results_file, show_col_types = FALSE)
+collection_summary <- readr::read_csv(summary_file, show_col_types = FALSE)
+analyte_mapping <- readr::read_csv(mapping_file, show_col_types = FALSE) %>%
+  distinct(Code, Category)
+missing_tasks <- if (file.exists(missing_tasks_file)) {
+  readr::read_csv(missing_tasks_file, show_col_types = FALSE)
+} else {
+  tibble()
+}
+
+power_results <- power_results %>%
+  left_join(analyte_mapping, by = c("analyte" = "Code")) %>%
+  mutate(
+    tau = factor(tau, levels = sort(unique(tau))),
+    analysis = recode(
+      analysis,
+      within_study_demographics = "Within-study demographics",
+      pooled_study = "Pooled study"
+    ),
+    panel = recode(str_to_title(panel), Maternal = "Adult"),
+    Category = replace_na(Category, "Unmapped")
+  )
+
+screening_results <- screening_results %>%
+  left_join(analyte_mapping, by = c("analyte" = "Code")) %>%
+  mutate(
+    analysis = recode(
+      analysis,
+      within_study_demographics = "Within-study demographics",
+      pooled_study = "Pooled study"
+    ),
+    panel = recode(str_to_title(panel), Maternal = "Adult"),
+    Category = replace_na(Category, "Unmapped")
+  )
+
+analysis_palette <- c(
+  "Within-study demographics" = "#0F4C5C",
+  "Pooled study" = "#D17A22"
+)
+
+panel_palette <- stats::setNames(
+  as.character(paletteer::paletteer_d("ggsci::default_igv")[1:2]),
+  c("Child", "Adult")
+)
+
+category_levels <- power_results %>%
+  distinct(Category) %>%
+  arrange(Category) %>%
+  pull(Category)
+
+category_palette_base <- c(
+  "FlameRetardants" = "#FFD23F",
+  "Flame_Retardant" = "#FFD23F",
+  "PAH" = "#6C8FD9",
+  "Parabens" = "#9AA3AD",
+  "PCB" = "#D7B07A",
+  "PCBs" = "#D7B07A",
+  "Pesticides" = "#FF6B3A",
+  "Pesticide" = "#FF6B3A",
+  "PFAS" = "#D8E58A",
+  "Phenols" = "#2D8FD5",
+  "Phthalates" = "#F45A2A",
+  "TraceElements" = "#69C3EC",
+  "Trace_Elements" = "#69C3EC",
+  "Smoking" = "#4C8A2B",
+  "VOC" = "#4B0D57",
+  "VOCs" = "#4B0D57"
+)
+
+category_palette_fallback <- stats::setNames(
+  rep(as.character(paletteer::paletteer_d("ggsci::springfield_simpsons")), length.out = length(category_levels)),
+  category_levels
+)
+
+category_palette <- category_palette_fallback
+matched_categories <- intersect(names(category_palette_base), category_levels)
+category_palette[matched_categories] <- category_palette_base[matched_categories]
+
+power_theme <- function() {
+  theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 15, color = "#14213D"),
+      plot.subtitle = element_text(size = 10.5, color = "#4F5D75"),
+      axis.title = element_text(face = "bold", color = "#14213D"),
+      axis.text = element_text(color = "#2B2D42"),
+      strip.text = element_text(face = "bold", color = "#14213D"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_line(color = "#E6E8EF", linewidth = 0.3),
+      panel.grid.major.y = element_line(color = "#D9DEE8", linewidth = 0.35),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      legend.background = element_rect(fill = "transparent", colour = NA)
+    )
+}
+
+study_power_dist <- power_results %>%
+  filter(study != "Pooled") %>%
+  group_by(panel, analysis, study) %>%
+  summarise(
+    models = n(),
+    median_power = median(power, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+category_power_dist <- power_results %>%
+  group_by(panel, analysis, Category) %>%
+  summarise(
+    models = n(),
+    median_power = median(power, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+power_by_covariate <- power_results %>%
+  mutate(covariates_used = replace_na(covariates_used, "")) %>%
+  tidyr::separate_rows(covariates_used, sep = ";") %>%
+  mutate(
+    covariates_used = stringr::str_trim(covariates_used),
+    covariate_type = dplyr::case_when(
+      covariates_used == "" ~ NA_character_,
+      covariates_used %in% c("Child_Age", "Mat_Age") ~ "Age",
+      covariates_used %in% c("Child_Sex", "Adult_Sex") ~ "Sex",
+      covariates_used %in% c("Mat_Race", "Child_Race", "Mat_Child_Comb_Race") ~ "Race",
+      covariates_used %in% c("Mat_Edu", "Edu_Any", "Mat_Edu_Binary") ~ "Education",
+      covariates_used %in% c("Mat_Income", "Mat_Income_Binary", "Family_Income_Cont") ~ "Income",
+      covariates_used %in% c("Sample_Collection_Year", "Year") ~ "Time",
+      covariates_used %in% c("Study", "Location", "Location_Region", "Center", "Location_Country", "Site_Location", "State", "Country") ~ "Geography/Study",
+      TRUE ~ "Other"
+    )
+  ) %>%
+  filter(!is.na(covariate_type)) %>%
+  distinct(task_id, analyte, tau, panel, analysis, study, covariate_type, power, observed_p, n)
+```
+
+## Collection Summary
+
+```{r}
+kable(collection_summary)
+```
+
+```{r}
+overview_tbl <- tibble(
+  Metric = c(
+    "Power result rows",
+    "Unique task IDs with power results",
+    "Unique analytes",
+    "Unique analyte categories",
+    "Unique studies",
+    "Unique pooled/within analysis types",
+    "Missing tasks"
+  ),
+  Value = c(
+    nrow(power_results),
+    n_distinct(power_results$task_id),
+    n_distinct(power_results$analyte),
+    n_distinct(power_results$Category),
+    n_distinct(power_results$study),
+    n_distinct(power_results$analysis),
+    nrow(missing_tasks)
+  )
+)
+
+kable(overview_tbl)
+```
+
+## Screening Overview
+
+```{r}
+screening_status_tbl <- screening_results %>%
+  count(panel, analysis, status, sort = TRUE)
+
+kable(screening_status_tbl)
+```
+
+```{r}
+screening_ok_tbl <- screening_results %>%
+  filter(status == "ok") %>%
+  group_by(panel, analysis) %>%
+  summarise(
+    tasks = n(),
+    median_n = median(n, na.rm = TRUE),
+    min_n = min(n, na.rm = TRUE),
+    max_n = max(n, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+kable(screening_ok_tbl, digits = 1)
+```
+
+## Power Summary
+
+```{r}
+power_summary_tbl <- power_results %>%
+  group_by(panel, analysis, tau) %>%
+  summarise(
+    models = n(),
+    median_power = median(power, na.rm = TRUE),
+    mean_power = mean(power, na.rm = TRUE),
+    median_observed_p = median(observed_p, na.rm = TRUE),
+    median_n = median(n, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+kable(power_summary_tbl, digits = 3)
+```
+
+## Category Summary
+
+```{r}
+category_summary_tbl <- power_results %>%
+  group_by(panel, analysis, Category) %>%
+  summarise(
+    models = n(),
+    analytes = n_distinct(analyte),
+    median_power = median(power, na.rm = TRUE),
+    mean_power = mean(power, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(panel, analysis, desc(median_power), desc(models))
+
+kable(category_summary_tbl, digits = 3)
+```
+
+## Demographic Variable Summary
+
+```{r}
+covariate_summary_tbl <- power_by_covariate %>%
+  group_by(panel, analysis, covariate_type) %>%
+  summarise(
+    models = n(),
+    median_power = median(power, na.rm = TRUE),
+    mean_power = mean(power, na.rm = TRUE),
+    median_n = median(n, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(panel, analysis, desc(median_power), desc(models))
+
+kable(covariate_summary_tbl, digits = 3)
+```
+
+## Top Powered Results
+
+```{r}
+top_power_tbl <- power_results %>%
+  arrange(desc(power), observed_p, panel, analysis, study, analyte) %>%
+  select(panel, analysis, study, analyte, tau, n, power, observed_p, mcse) %>%
+  slice_head(n = 25)
+
+kable(top_power_tbl, digits = 3)
+```
+
+## Plot 1: Power Distribution by Tau
+
+```{r}
+p_power_hist <- power_results %>%
+  ggplot(aes(x = power, fill = analysis)) +
+  geom_histogram(bins = 28, alpha = 0.78, position = "identity", color = "white", linewidth = 0.2) +
+  facet_grid(panel ~ tau) +
+  scale_fill_manual(values = analysis_palette) +
+  scale_x_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "Distribution of Estimated Power",
+    subtitle = "Power estimates across quantiles for within-study and pooled models",
+    x = "Estimated power",
+    y = "Number of models",
+    fill = "Analysis"
+  ) +
+  power_theme()
+
+p_power_hist
+```
+
+## Plot 2: Median Power by Tau and Analysis
+
+```{r}
+p_median_power <- power_results %>%
+  group_by(panel, analysis, tau) %>%
+  summarise(
+    median_power = median(power, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = tau, y = median_power, color = analysis, group = analysis)) +
+  geom_line(linewidth = 1.15) +
+  geom_point(size = 2.6) +
+  facet_wrap(~ panel) +
+  scale_color_manual(values = analysis_palette) +
+  scale_y_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "Median Power Across Quantiles",
+    subtitle = "Higher curves indicate more consistently powered model families",
+    x = "Tau",
+    y = "Median power",
+    color = "Analysis"
+  ) +
+  power_theme()
+
+p_median_power
+```
+
+## Plot 3: Sample Size vs Power
+
+```{r}
+p_n_power <- power_results %>%
+  ggplot(aes(x = n, y = power, color = analysis)) +
+  geom_point(alpha = 0.28, size = 1.4) +
+  geom_smooth(se = FALSE, linewidth = 0.95, method = "loess", span = 0.9) +
+  facet_grid(panel ~ tau) +
+  scale_color_manual(values = analysis_palette) +
+  scale_y_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "Sample Size and Power",
+    subtitle = "Larger analytic samples generally correspond to higher empirical power",
+    x = "Model sample size",
+    y = "Estimated power",
+    color = "Analysis"
+  ) +
+  power_theme()
+
+p_n_power
+```
+
+## Plot 4: Top Studies by Median Power
+
+```{r}
+# Study-panels where every simulation failed come through with median_power NA.
+# slice_max keeps them and fct_reorder below then errors on the NA level, which
+# takes down the whole document. Drop them here and say how many, rather than
+# letting a silent NA decide what the figure shows.
+n_all_na <- sum(is.na(study_power_dist$median_power))
+if (n_all_na > 0)
+  message("power figure: dropping ", n_all_na,
+          " study-panel(s) with no successful simulations: ",
+          paste(unique(study_power_dist$study[is.na(study_power_dist$median_power)]),
+                collapse = ", "))
+
+study_power_tbl <- study_power_dist %>%
+  filter(!is.na(median_power)) %>%
+  group_by(panel, analysis) %>%
+  slice_max(order_by = median_power, n = 15, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(study = as.character(study))
+
+p_top_studies <- study_power_tbl %>%
+  mutate(study = forcats::fct_reorder(study, median_power)) %>%
+  ggplot(aes(x = study, y = median_power, fill = analysis)) +
+  geom_col(position = position_dodge(width = 0.72), width = 0.66, color = "white", linewidth = 0.15) +
+  coord_flip() +
+  facet_wrap(~ panel, scales = "free_y") +
+  scale_fill_manual(values = analysis_palette) +
+  scale_y_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "Studies with Highest Median Power",
+    subtitle = "Top studies ranked within each panel and analysis family",
+    x = NULL,
+    y = "Median power",
+    fill = "Analysis"
+  ) +
+  power_theme()
+
+p_top_studies
+```
+
+## Plot 5: Histogram of Power Per Study
+
+```{r}
+# Same guard as Plot 4: a study whose simulations all failed has an NA median
+# and fct_reorder cannot place it, which aborts the knit.
+all_studies_hist <- power_results %>%
+  filter(study != "Pooled") %>%
+  group_by(study) %>%
+  mutate(study_median_power = median(power, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(!is.na(study_median_power)) %>%
+  mutate(study = forcats::fct_reorder(as.character(study), study_median_power))
+
+p_power_hist_by_study <- power_results %>%
+  filter(study != "Pooled") %>%
+  mutate(study = as.character(study)) %>%
+  left_join(
+    all_studies_hist %>% mutate(study = as.character(study)) %>%
+      distinct(study, study_median_power),
+    by = "study"
+  ) %>%
+  # The join brings back the all-NA studies that all_studies_hist dropped, so
+  # filter again on this side before ordering.
+  filter(!is.na(study_median_power)) %>%
+  mutate(study = forcats::fct_reorder(study, study_median_power)) %>%
+  ggplot(aes(x = power, fill = analysis)) +
+  geom_histogram(bins = 24, alpha = 0.82, position = "identity", color = "white", linewidth = 0.2) +
+  facet_wrap(~ study, scales = "free_y", ncol = 6) +
+  scale_fill_manual(values = analysis_palette) +
+  scale_x_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "Power Distribution Within Studies",
+    subtitle = "All within-study cohorts, ordered by overall median power",
+    x = "Estimated power",
+    y = "Number of models",
+    fill = "Analysis"
+  ) +
+  power_theme()
+
+p_power_hist_by_study
+```
+
+## Plot 6: Power by Analyte Category
+
+```{r}
+p_category_power <- power_results %>%
+  group_by(panel, analysis, Category, tau) %>%
+  summarise(
+    median_power = median(power, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = forcats::fct_reorder(Category, median_power), y = median_power, fill = Category)) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+  coord_flip() +
+  facet_grid(panel + analysis ~ tau) +
+  scale_fill_manual(values = category_palette, guide = "none") +
+  scale_y_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "Median Power by Analyte Category",
+    subtitle = "Category-level summaries after attaching the targeted analyte mapping",
+    x = NULL,
+    y = "Median power"
+  ) +
+  power_theme()
+
+p_category_power
+```
+
+## Plot 7: Within-Category Power Distributions
+
+```{r}
+top_categories_hist <- category_power_dist %>%
+  group_by(Category) %>%
+  summarise(models = sum(models), .groups = "drop") %>%
+  slice_max(order_by = models, n = 10, with_ties = FALSE)
+
+p_category_hist <- power_results %>%
+  semi_join(top_categories_hist, by = "Category") %>%
+  ggplot(aes(x = power, fill = Category)) +
+  geom_histogram(bins = 24, alpha = 0.9, color = "white", linewidth = 0.2) +
+  facet_wrap(~ Category, scales = "free_y") +
+  scale_fill_manual(values = category_palette, guide = "none") +
+  scale_x_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "Within-Category Power Distributions",
+    subtitle = "Top analyte categories by number of model results",
+    x = "Estimated power",
+    y = "Number of models"
+  ) +
+  power_theme()
+
+p_category_hist
+```
+
+## Plot 8: Power by Demographic Variable Type
+
+```{r}
+covariate_type_levels <- c(
+  "Age",
+  "Sex",
+  "Race",
+  "Education",
+  "Income",
+  "Time",
+  "Geography/Study",
+  "Other"
+)
+
+p_covariate_power <- power_by_covariate %>%
+  mutate(covariate_type = factor(covariate_type, levels = covariate_type_levels)) %>%
+  group_by(panel, analysis, covariate_type, tau) %>%
+  summarise(
+    median_power = median(power, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = covariate_type, y = median_power, fill = analysis)) +
+  geom_col(position = position_dodge(width = 0.74), width = 0.68, color = "white", linewidth = 0.15) +
+  coord_flip() +
+  facet_grid(panel ~ tau) +
+  scale_fill_manual(values = analysis_palette) +
+  scale_y_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "Median Power by Demographic Variable Type",
+    subtitle = "Power results grouped by the covariate families included in each model",
+    x = NULL,
+    y = "Median power",
+    fill = "Analysis"
+  ) +
+  power_theme()
+
+p_covariate_power
+```
+
+## Suggested Supplementary Figure Panel
+
+```{r fig.width=16, fig.height=20}
+supp_fig_a <- power_results %>%
+  group_by(panel, analysis, tau) %>%
+  summarise(
+    median_power = median(power, na.rm = TRUE),
+    q25 = quantile(power, 0.25, na.rm = TRUE),
+    q75 = quantile(power, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  ggplot(aes(x = tau, y = median_power, color = analysis, group = analysis, fill = analysis)) +
+  geom_ribbon(aes(ymin = q25, ymax = q75), alpha = 0.14, linewidth = 0, show.legend = FALSE) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.7) +
+  facet_wrap(~ panel) +
+  scale_color_manual(values = analysis_palette) +
+  scale_fill_manual(values = analysis_palette) +
+  scale_y_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "A. Median power across quantiles",
+    x = "Tau",
+    y = "Median power",
+    color = "Analysis"
+  ) +
+  power_theme()
+
+supp_fig_b <- power_results %>%
+  filter(study != "Pooled") %>%
+  mutate(study = as.character(study)) %>%
+  left_join(
+    all_studies_hist %>% mutate(study = as.character(study)) %>%
+      distinct(study, study_median_power),
+    by = "study"
+  ) %>%
+  # As above: drop study-panels with no successful simulations before ordering.
+  # This is the S9B panel, so those cohorts are absent from the published figure.
+  filter(!is.na(study_median_power)) %>%
+  mutate(study = forcats::fct_reorder(study, study_median_power)) %>%
+  ggplot(aes(x = power, fill = analysis)) +
+  geom_histogram(bins = 22, alpha = 0.8, position = "identity", color = "white", linewidth = 0.2) +
+  facet_wrap(~ study, scales = "free_y", ncol = 6) +
+  scale_fill_manual(values = analysis_palette) +
+  scale_x_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "B. Study-specific power distributions",
+    x = "Estimated power",
+    y = "Models",
+    fill = "Analysis"
+  ) +
+  power_theme()
+
+supp_fig_c <- power_results %>%
+  group_by(panel, analysis, Category) %>%
+  summarise(
+    median_power = median(power, na.rm = TRUE),
+    models = n(),
+    .groups = "drop"
+  ) %>%
+  filter(Category %in% top_categories_hist$Category) %>%
+  ggplot(aes(x = median_power, y = forcats::fct_reorder(Category, median_power), fill = Category)) +
+  geom_col(width = 0.64, color = "white", linewidth = 0.15) +
+  facet_grid(panel ~ analysis) +
+  scale_fill_manual(values = category_palette, guide = "none") +
+  scale_x_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "C. Category-level median power",
+    x = "Median power",
+    y = NULL
+  ) +
+  power_theme()
+
+supp_fig_d <- power_results %>%
+  ggplot(aes(x = n, y = power, color = panel)) +
+  geom_point(alpha = 0.18, size = 1.2) +
+  geom_smooth(se = FALSE, linewidth = 1.0, method = "loess", span = 0.9) +
+  facet_wrap(~ analysis) +
+  scale_color_manual(values = panel_palette) +
+  scale_y_continuous(limits = c(0, 1), labels = label_percent(accuracy = 1)) +
+  labs(
+    title = "D. Sample size versus power",
+    x = "Model sample size",
+    y = "Estimated power",
+    color = "Panel"
+  ) +
+  power_theme()
+
+supp_patchwork <- (
+  supp_fig_a /
+    supp_fig_b 
+    #(p_covariate_power + p_category_hist)
+) +
+  plot_annotation(
+    title = "Power characteristics of targeted censored quantile models",
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 17, color = "#14213D"),
+      plot.subtitle = element_text(size = 11, color = "#4F5D75")
+    )
+  ) &
+  theme(legend.position = "bottom")
+
+
+supp_patchwork <- supp_patchwork + plot_layout(guides = "collect", heights = c(0.7, 1.3))
+
+
+ggsave(
+  filename = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/Wihtin_Cohort_Power_Patchplot.pdf",
+  plot = supp_patchwork,
+  device = "pdf",
+  height = 16,
+  width = 12
+)
+```
+
+```{r}
+power_results %>%
+  group_by(panel,analysis, tau) %>%
+  summarise(
+    median_power = median(power, na.rm = TRUE),
+    iqr_power = IQR(power,na.rm = T),
+    q25 = quantile(power, 0.25, na.rm = TRUE),
+    q75 = quantile(power, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  kable(digits = 3)
+
+```
+
+```{r}
+ power_results %>%
+  filter(study != "Pooled") %>% 
+  group_by(study,panel,analysis) %>% 
+  summarise(
+    median_power = median(power, na.rm = TRUE),
+    iqr_power = IQR(power,na.rm = T),
+    q25 = quantile(power, 0.25, na.rm = TRUE),
+    q75 = quantile(power, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  dplyr::mutate(power_over_90 = ifelse(median_power > 0.9,1,0)) %>% 
+  count(power_over_90, name = "n_studies") %>% 
+  kable(digits = 3)
+```

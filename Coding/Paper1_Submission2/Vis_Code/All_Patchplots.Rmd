@@ -1,0 +1,285 @@
+---
+title: "Final_Patchplots"
+output: html_document
+date: "2026-02-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(patchwork)
+library(png)
+library(ggtext)
+
+```
+
+```{r}
+
+#Figure 1
+
+# PANEL A (updated 2026-08-11).
+#
+# Was Paper1_OutputV2/Plots/Final_Patchplots/Map_Figure.png -- a hand-composited
+# raster dated 9 February 2026, living in the PREVIOUS submission's output tree.
+# It predated three cohorts (ATLAA, SWSD, GRAPHS) and never updated on a rerun.
+#
+# Replaced with the new composed panel, and copied into THIS submission's tree so
+# the figure no longer reaches across into Paper1_OutputV2. Verified against
+# Figure1_Map_Handoff/cohort_key.csv: 38 donuts, indices matching the current
+# cohort set, and the six United-States-only cohorts (20 NASH, 21 NFGS,
+# 23 NUMOM2B, 28 SEARCH, 35 VAPS, 36 VDAART) broken out into their own box.
+#
+# NOTE this is still a raster, so it does not regenerate from data. If the cohort
+# set changes the donut indices re-key and this panel must be rebuilt --
+# see Figure1_Map_Handoff/INSTRUCTIONS.md.
+map_img <- readPNG("../../../Output/Paper1_Output_Submission2/Plots/Figure1_PanelA.png")
+
+
+load( "../../../Output/Paper1_Output_Submission2/Plots/r2_barplot_pooled_study_focus.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/All_Country_Intervals.RData")
+
+load("../../../Output/Paper1_Output_Submission2/Plots/conc_ride_color.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/r2_barplot_matched.RData")
+
+
+#Figure 2
+load("../../../Output/Paper1_Output_Submission2/Plots/conc_year.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/year_outcome_scatter.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/mat_child_scatter.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/vi_plot.RData")
+
+#Figure 2 (moved here): education / race concentration panels
+load("../../../Output/Paper1_Output_Submission2/madres_plots.RData")
+
+#Figure 3: four real-data / cost panels (spread, decomp, div, cost)
+fig3_panels <- readRDS("../../../Output/Paper1_Output_Submission2/Cohort_Regime_Diagnostic/figure3_panels.rds")
+
+```
+
+#Figure 1
+
+
+```{r}
+p_pdf <- ggplot() +
+  annotation_raster(map_img, xmin = -Inf, xmax = Inf,
+                     ymin = -Inf, ymax = Inf) +
+  theme_void()
+
+```
+
+
+```{r}
+# patch <- (r2_barplot_pooled_Cohort + ggtitle("Explanatory Power by Location") + theme(legend.position = "none") + 
+#             r2_barplot_matched)/ all_plot / conc_ride_color + theme(legend.position = "none")
+
+patch <- p_pdf / all_plot / conc_ride_color + theme(legend.position = "none",
+                                                    plot.title = element_text(hjust = 0,size = 14),
+                                                    axis.text.x = element_text(size = 12,face = "bold")) + 
+  labs(title = "Exposure Concentrations Across Matched Strata")
+
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/Figure1_All.pdf",height = 25,width =20)
+patch + 
+    plot_layout(heights = c(4, 2,2)) +
+  #plot_layout(guides = "collect") +    
+  plot_annotation(
+  title = 'Geography as the Primary Driver of Exposomic Variation',
+  #tag_levels = list(c("B", "C", "D","E"))
+  tag_levels = "A")   &
+  theme(plot.tag = element_text(size = 24), face = "bold")
+dev.off()
+```
+
+#Figure 2
+-----
+```{r}
+# Canonical exposure-category colors so a category is the same color everywhere
+source("category_palette.R")
+recolor_cat <- function(p) suppressMessages(
+  p + scale_fill_manual(values = CATEGORY_PALETTE, na.value = "grey80") +
+      scale_colour_manual(values = CATEGORY_PALETTE, na.value = "grey80"))
+sum_yr               <- recolor_cat(sum_yr)
+year_outcome_scatter <- recolor_cat(year_outcome_scatter)
+vi_plot              <- recolor_cat(vi_plot)
+
+# Education / race exposure-concentration panels (moved here from Figure 3)
+# Both panels are CCREOH only -- the race/ethnicity categories (Creole,
+# Hindustani, Javanese, Maroon) are Suriname-specific, so the generic titles
+# read as though the panels were cross-cohort. Name the cohort in the title.
+# Subtitle explains the median/IQR marks, which the panels carried unlabelled.
+sdoh_marks <- "Points: participants. Dot: median. Thick bar: IQR. Thin bar: upper interval to Tau95."
+edu_plot <- madres_plots[["CCREOH__Mat_Edu"]] +
+  theme(axis.text.x = element_text(size = 16),
+        axis.title.y = element_blank())+
+    labs(color = "Education", subtitle = sdoh_marks) +
+  ggtitle("Exposome Concentration by Maternal Education - CCREOH (Suriname)")
+race_plot <- madres_plots[["CCREOH__Mat_Race"]] +
+    theme(axis.text.x = element_text(size = 16),
+        axis.title.y = element_blank()) +
+    labs(color = "Race/Ethnicity", subtitle = sdoh_marks) +
+  ggtitle("Exposome Concentration by Race/Ethnicity - CCREOH (Suriname)")
+
+fig2_patch <- sum_yr / (year_outcome_scatter  + mat_child_scatter) / vi_plot /
+  edu_plot / race_plot
+
+
+fig2_patch <- fig2_patch +
+    # Panel A is a 4x4 facet grid; at 4/12 of the height its panels came out
+    # ~4in wide by ~2.2in tall and the series read as squashed. 6/14 of a
+    # taller canvas gives A about 4in per row while leaving B-F the same
+    # absolute height they had before.
+    plot_layout(heights = c(6, 2, 2, 2, 2)) + plot_annotation(tag_levels = "A") &
+  theme(plot.tag = element_text(size = 24), face = "bold")
+
+ggsave(fig2_patch,file = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/Figure2_All.pdf",height = 38,width =18)
+
+```
+
+#Figure 3
+----
+```{r}
+# New Figure 3: 4-panel square of the cohort-heterogeneity / pooling story.
+#   A = cohort effect spread by location   B = within vs naive-pooled decomposition
+#   C = I^2 vs concentration divergence    D = between-cohort share of exposure
+#                                              variance vs distortion from pooling
+# (D was the budget-allocation simulation until 2026-08-10; see the note below.)
+design <- "
+AB
+CD
+"
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/Figure3_All.pdf",height = 18,width =20)
+# PANEL D SWAPPED 2026-08-10: was fig3_panels$cost (the fixed-budget allocation
+# simulation), now fig3_panels$varshare (between-cohort share of exposure variance
+# vs the distortion from pooling). The budget panel was the only non-empirical
+# panel in Figure 3 and its ~25-cohort crossover is a property of the simulation's
+# data-generating model, not of these cohorts; it now ships as
+# Final_Patchplots/Supp_Pooling_Budget_Tradeoff.pdf. The new panel is empirical,
+# is the mechanism behind A-C, and is estimable at two cohorts where panel B's
+# ecological slope is not. See combined_realdata_figure.R section 2c.
+# free(type = "label") on C and D, 2026-08-12. patchwork aligns axis TITLES
+# across the whole layout, not just within a row. Panels A and B carry ~44
+# y-axis rows of exposure-outcome names, so the title gutter for column 1 is as
+# wide as those strings; C and D have short numeric ticks ("100", "0.3") and
+# their y-titles were being pushed to the far left of that gutter, leaving a
+# large empty band between the axis and its label. free() lets C and D place
+# their own y-title next to their own axis while the PANELS stay aligned.
+patch <- fig3_panels$spread + fig3_panels$decomp +
+  free(fig3_panels$div + ggtitle("Heterogeneity and Concentration"),
+       type = "label", side = "l") +
+  free(fig3_panels$varshare + ggtitle("Effect Distortion and Exposure Variance"),
+       type = "label", side = "l")
+patch +
+  plot_layout(design = design, heights = c(1.4, 1)) +
+  plot_annotation(
+  # Title changed 2026-08-10: "cost" referred to the fixed-budget simulation that
+  # was panel D until that panel moved to supplementary. All four panels are now
+  # diagnostic, so "consequences" is what the figure actually shows.
+  title = 'Cross-cohort heterogeneity and the consequences of pooling associations',
+  tag_levels = "A",
+  # Sized above the 17pt panel titles so the figure title still reads as the
+  # top of the hierarchy after the 2026-08-10 type scale-up.
+  theme = theme(plot.title = element_text(size = 26, face = "bold", color = "#14213D"))
+)   &
+  # `face = "bold"` used to sit here as an argument to theme() rather than to
+  # element_text(), where it did nothing. Folded into the element.
+  theme(plot.tag = element_text(size = 28, face = "bold"))
+dev.off()
+```
+
+#Supp Patchplots
+-----------
+```{r}
+load("../../../Output/Paper1_Output_Submission2/Plots/Demo_Patch.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/cum_conc_plot.RData")
+
+load("../../../Output/Paper1_Output_Submission2/Plots/Avg_World_Map.RData")
+load( "../../../Output/Paper1_Output_Submission2/Plots/r2_barplot_pooled_study_focus.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/r2_barplot_matched.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/r2_barplot_loc.RData")
+
+load("../../../Output/Paper1_Output_Submission2/Plots/year_hist.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/child_adult_mean_bar.RData")
+
+```
+
+
+```{r}
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/Demo_Conc_Patch.pdf",height = 20,width =14)
+patch <- demo_patch/ cum_conc 
+patch + 
+  plot_layout(heights = c(1,1, 4)) +
+  #plot_layout(guides = "collect") +    
+  plot_annotation(
+  tag_levels = "A"
+)  &
+  theme(plot.tag = element_text(size = 20))
+dev.off()
+
+```
+
+```{r}
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/Loc_Supp_Patch.pdf",height = 14,width =16)
+patch <- (average_map + r2_barplot_pooled_Cohort + ggtitle("Distributional Contribution of Location")) / (r2_barplot_matched + ggtitle("Distributional Contribution of Location") + r2_barplot_loc + ggtitle("Distributional Contribution of Location"))
+patch + 
+  plot_layout(heights = c(1,1,1,1)) +
+  #plot_layout(guides = "collect") +    
+  plot_annotation(
+  tag_levels = "A"
+)  &
+  theme(plot.tag = element_text(size = 20))
+dev.off()
+
+```
+
+
+```{r}
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/Time_Supp.pdf",height = 12,width =10)
+patch <- (year_hist + child_adult_mean_bar) 
+patch + 
+  plot_layout(heights = c(1,3)) +
+  #plot_layout(guides = "collect") +    
+  plot_annotation(
+  tag_levels = "A"
+)  &
+  theme(plot.tag = element_text(size = 20))
+dev.off()
+
+```
+
+
+ExWAS Supp
+```{r}
+load("../../../Output/Paper1_Output_Submission2/Plots/ExWAS_Example_Forest.RData")
+load("../../../Output/Paper1_Output_Submission2/Plots/ExWAS_Example_Ridge.RData")
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/ExWAS_Supp.pdf",height = 12,width =10)
+patch <-child_ridge_plot/ p_forest_exposure +
+  plot_annotation(
+  tag_levels = "A"
+)
+print(patch)
+dev.off()
+
+```
+
+
+Mapping Table
+```{r}
+source("../../../Coding/targeted_analyte_mapping.R")
+
+mapping_path <- "../../../Input/Harmonized_Datasets/Targeted_Analyte_Category_Mapping.csv"
+targeted_mapping <- read_targeted_analyte_mapping(mapping_path)
+
+plot_categories <- c(
+  "TraceElements", "Phenols", "Phthalates", "PAH", "PCB", "Parabens",
+  "Smoking", "Pesticides", "VOCs", "FlameRetardants", "PFAS"
+)
+
+targeted_category_lookup <- targeted_mapping %>%
+  dplyr::filter(Category %in% plot_categories) %>%
+  dplyr::select(Code,Full_Name,CAS, Category) %>%
+  dplyr::distinct()
+
+```
+

@@ -1,0 +1,575 @@
+---
+title: "Burden_Plots"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r view-shim}
+# View() opens an interactive viewer and ERRORS under rmarkdown::render(). These
+# documents were written to be run chunk-by-chunk in RStudio, so View() scratch is
+# scattered through them. Shim to a no-op so a headless render works. (2026-08-11)
+View <- function(x, ...) invisible(x)
+```
+
+```{r}
+library(tidyverse)
+library(paletteer)
+library(ggdist)
+# gghalves is not on CRAN for this R version and no geom_half_* is used anywhere
+# in this file, so the import is dropped rather than the package installed.
+# library(gghalves)
+library(patchwork)
+```
+
+Load Data
+----
+```{r}
+
+load("../../../Output/Paper1_Output_Submission2/Burden_Child.RData")
+load("../../../Output/Paper1_Output_Submission2/Burden_Mat.RData")
+load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+```
+
+```{r}
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+mutate(Location_Country = case_when(Location == "United_States"  ~ "United_States",
+                                    Location == "NorthEast_US" ~ "United_States",
+                                    Location == "New_Hampshire" ~ "United_States",
+                                    Location == "Washington_State" ~ "United_States",
+                                    Location == "Midwestern_US" ~ "United_States",
+                                    Location == "Denver" ~ "United_States",
+                                    Location == "Baltimore" ~ "United_States",
+                                    Location == "Sacramento" ~ "United_States",
+                                    Location == "Southern_California" ~ "United_States",
+                                    Location == "Syracuse" ~ "United_States",
+                                    Location == "Michigan" ~ "United_States",
+                                    Location == "California" ~ "United_States",
+                                    Location == "SanFrancisco" ~ "United_States",
+                                    Location == "Massachusetts" ~ "United_States",
+                                    TRUE ~ "Worldwide")) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+  Mat_Edu %in% c("No_Education",
+                 "Primary_Education",
+                 "Primary_School",
+                 "High_School") ~ "No_College",
+  Mat_Edu %in% c("Some_College",
+                 "Four_Year_College_Degree",
+                 "Some_Grad_School") ~ "Some_College",
+  Mat_Edu == "Not_Reported" ~ NA
+)) %>% 
+  mutate(Mat_Income_Binary = case_when(
+  Mat_Income %in% c("0_25k", "25_49k") ~ "Under_49k",
+  Mat_Income %in% c("50_74k", "75_99k", "100_124k", 
+                "Over_100k", "Over_125k", "Over_49k") ~ "Over_49k",
+  TRUE ~ NA
+)) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) 
+
+
+ExWAS_SDOH_Exposures$Mat_Edu <- ExWAS_SDOH_Exposures$Mat_Edu %>%
+  fct_recode(
+    "Primary"       = "Primary_School",
+    "Primary"       = "Primary_Education",
+    "High School"   = "High_School",
+    "Some College"  = "Some_College",
+    "College"       = "Four_Year_College_Degree",
+    "Grad School"   = "Some_Grad_School",
+    "Other"         = "Other",
+    "None"          = "No_Education"
+  ) %>%
+  fct_relevel("None", "Primary", "High School", "Some College",
+              "College", "Grad School", "Other")
+
+
+Ref_Vars <- c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu","Child_Age","Mat_Race","Child_Race","Child_Sex")
+
+
+
+Child_SDOH <- ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  dplyr::select(Study,Child_PID,Mat_PID,all_of(Ref_Vars)) 
+
+
+Mat_SDOH <- ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Mat_PID) ) %>% 
+  dplyr::select(Study,Child_PID,Mat_PID,all_of(Ref_Vars)) 
+
+```
+
+
+Visualize Burden By Study 
+---
+```{r}
+# mypal <- paletteer_d("ggthemes::Tableau_20")
+# 
+# summary(curr_data$Burden_Adj)
+# 
+# pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Burden_ByCohort.pdf",height = 6, width = 6)
+# 
+#   curr_data <- Burden_Df_Child %>% 
+#     arrange(Study) %>% 
+#     rownames_to_column("ID") %>% 
+#     mutate(plot_value = Total_Val,
+#            ID = as.numeric(ID)) 
+# 
+# 
+#   p <- ggplot() +
+#     geom_point(data = curr_data, aes(x = Burden_Adj,y = ID, color = Study), size = .5,alpha = 1) +
+#     scale_color_manual(values = mypal) +
+#     theme_classic() +
+#     labs(title = paste0("Child - Exposure Burden - Z-Score Adjustment"), x = "Burden Value", y = "Participant")
+# print(p)
+#   
+#   curr_data <- Burden_Df_Mat %>% 
+#     arrange(Study) %>% 
+#     rownames_to_column("ID") %>% 
+#     mutate(plot_value = Total_Val,
+#            ID = as.numeric(ID)) 
+# 
+# 
+#   p <- ggplot() +
+#     geom_point(data = curr_data, aes(x = Burden_Adj,y = ID, color = Study), size = .5,alpha = 1) +
+#     scale_color_manual(values = mypal) +
+#     theme_classic() +
+#     labs(title = paste0("Mat - Exposure Burden - Z-Score Adjustment"), x = "Burden Value", y = "Participant")
+# print(p)
+#   
+# 
+# dev.off()
+
+```
+
+
+```{r}
+mypal <- paletteer_d("ggthemes::Tableau_20")
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Burden_RainCloud.pdf",height = 8, width = 10)
+  curr_data_child <- Burden_Df_Child %>% 
+    arrange(Study) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(plot_value = Total_Val,
+           ID = as.numeric(ID)) %>% 
+      mutate(Study_num = as.numeric(factor(Study)) * 8,
+             Group = "Child")   # *2 doubles the gap
+    studies <- levels(factor(curr_data_child$Study))
+
+  p_child <- ggplot(curr_data_child,aes(x = factor(Study), y = Burden_Adj, fill = factor(Study))) + 
+    ggdist::stat_halfeye(adjust = .5, width = .8, .width = 0, justification = -.3, point_colour = NA) + 
+    geom_boxplot(width = .4, outlier.shape = NA,lwd = .1) +
+    #ggdist::stat_dots(side = "left", dotsize = .5, justification = 1.1, binwidth = .1) +
+    geom_jitter(width = .05, alpha = .3,size = 0.2) +
+    scale_fill_manual(values = mypal) +
+    ggtitle("Child Aggregate Exposure") +
+    labs(x = "Study",
+         y = "Score",
+         fill = "Study") +
+    theme_classic() +
+    theme(legend.position = "bottom") +
+    coord_flip()
+  #print(p)
+  
+  curr_data_mat <- Burden_Df_Mat %>% 
+    arrange(Study) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(plot_value = Total_Val,
+           ID = as.numeric(ID)) %>% 
+      mutate(Study_num = as.numeric(factor(Study)) * 8) %>% 
+    mutate(Group = "Mat")# *2 doubles the gap
+    studies <- levels(factor(curr_data_mat$Study))
+    
+  p_adult <- ggplot(curr_data_mat,aes(x = factor(Study), y = Burden_Adj, fill = factor(Study))) + 
+    ggdist::stat_halfeye(adjust = .5, width = .8, .width = 0, justification = -.3, point_colour = NA) + 
+    geom_boxplot(width = .4, outlier.shape = NA,lwd = .1) +
+    #ggdist::stat_dots(side = "left", dotsize = .5, justification = 1.1, binwidth = .1) +
+    geom_jitter(width = .05, alpha = .3,size = 0.2) +
+    scale_fill_manual(values = mypal) +
+    ggtitle("Adult Women Aggregate Exposure ") +
+        labs(x = "Study",
+         y = "Score",
+         fill = "Study") +
+    theme_classic() +
+        theme(legend.position = "bottom") +
+
+    coord_flip()
+  #print(p)
+  
+  All_Data <- bind_rows(curr_data_child,curr_data_mat)
+
+    p <- ggplot(All_Data,aes(x = factor(Study), y = Burden_Adj, fill = factor(Study))) + 
+    ggdist::stat_halfeye(adjust = .5, width = .8, .width = 0, justification = -.3, point_colour = NA) + 
+    geom_boxplot(width = .4, outlier.shape = NA,lwd = .1) +
+    #ggdist::stat_dots(side = "left", dotsize = .5, justification = 1.1, binwidth = .1) +
+    geom_jitter(width = .05, alpha = .3,size = 0.2) +
+   # scale_fill_manual(values = mypal) +
+    ggtitle("Burden Raincloud Plot") +
+      labs(x = "Score") +
+    theme_classic() +
+      facet_wrap(~Group,scales = "free") +
+    coord_flip()
+  #print(p)
+  
+  patch <- p_child + p_adult
+  print(patch)
+dev.off()
+
+
+
+
+
+```
+
+
+```{r}
+# pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Ref_Interval_Manuscript_Plots/Burden_Hist_Adj.pdf",height = 4,width = 6)
+# ggplot(Res_Burden, aes(x=Burden_Adj)) +
+#   geom_histogram(fill = "darkorchid4") +
+#   labs(x = "Burden Value",title = "Exposome Burden Distribution") +
+#   theme_classic()
+# dev.off()
+```
+
+```{r}
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Burden_to_N.pdf",height = 6, width = 12)
+p_child <- ggplot(data = Burden_Df_Child) + 
+  geom_jitter(aes(x = non_missing_count,y = Burden_Adj, color = Study),size = .5,alpha = 1) +
+  labs(x = "Number of Exposures Measured",title = "Exposure Score to Number of Exposure Measured By Cohort - Child and Adult",
+       y = "Aggregate Score") + 
+  scale_color_manual(values = mypal) +
+  theme_classic() +
+  theme(legend.position = "bottom")
+#print(p)
+
+p_adult <- ggplot(data = Burden_Df_Mat) + 
+  geom_jitter(aes(x = non_missing_count,y = Burden_Adj, color = Study),size = .5,alpha = 1) +
+  labs(x = "Number of Exposures Measured",title = "",
+       y = "Aggregate Score") + 
+  scale_color_manual(values = mypal) +
+  theme_classic()+
+  theme(legend.position = "bottom")
+#print(p)
+patch <- p_child + p_adult + plot_annotation(tag_levels = 'A')
+print(patch)
+dev.off()
+
+```
+
+
+
+
+
+Burden Test Cases
+------
+
+
+
+
+
+```{r}
+Burden_Df_Child_Cat <- Burden_Df_Child %>%
+    mutate(across(
+      ends_with("_Percentile"),
+      ~ case_when(
+        is.na(.x) ~ NA,
+        .x <= 33.33 ~ "Low",
+        .x <= 66.66 ~ "Medium",
+        TRUE ~ "High"
+      ),
+      .names = "{.col}_Category"
+    ))  %>% 
+    select(Child_PID,Study,non_missing_count,contains("_Category"))
+
+Burden_Df_Mat_Cat <- Burden_Df_Mat %>%
+    mutate(across(
+      ends_with("_Percentile"),
+      ~ case_when(
+        is.na(.x) ~ NA,
+        .x <= 33.33 ~ "Low",
+        .x <= 66.66 ~ "Medium",
+        TRUE ~ "High"
+      ),
+      .names = "{.col}_Category"
+    ))  %>%  
+    select(Mat_PID,Study,non_missing_count,contains("_Category"))
+
+Level_Data <- Burden_Df_Child_Cat %>%
+  pivot_longer(-c(Child_PID,Study,non_missing_count), names_to = "variable", values_to = "level") %>%
+  group_by(Child_PID,Study ,level) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  pivot_wider(names_from = level, values_from = n, values_fill = 0) %>%
+  pivot_longer(-c(Child_PID,Study), names_to = "Level", values_to = "Count") %>% 
+  dplyr::filter(Level != "NA") %>% 
+  left_join(.,Burden_Df_Child %>% dplyr::select(Child_PID,Burden_Adj), by = "Child_PID")
+
+Level_Data_Mat <- Burden_Df_Mat_Cat %>%
+  pivot_longer(-c(Mat_PID,Study,non_missing_count), names_to = "variable", values_to = "level") %>%
+  group_by(Mat_PID,Study ,level) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  pivot_wider(names_from = level, values_from = n, values_fill = 0) %>%
+  pivot_longer(-c(Mat_PID,Study), names_to = "Level", values_to = "Count") %>% 
+  dplyr::filter(Level != "NA") %>% 
+  left_join(.,Burden_Df_Mat %>% dplyr::select(Mat_PID,Burden_Adj), by = "Mat_PID")
+
+
+
+```
+
+```{r}
+#mypal <- paletteer_d("ggthemes::Tableau_20")
+
+Level_Data_All <- bind_rows(Level_Data %>% 
+                              dplyr::select(PID = Child_PID,everything()),
+                            Level_Data_Mat %>% 
+                              dplyr::select(PID = Mat_PID,everything()))
+
+person_summary <- Level_Data_All %>%
+  group_by(PID,Study) %>%
+  summarise(
+    Total_Low = sum(Count[Level == "Low"]),
+    Total_Medium = sum(Count[Level == "Medium"]),
+    Total_High = sum(Count[Level == "High"]),
+    Total = sum(Count),
+    Burden_Adj = first(Burden_Adj)
+  ) %>%
+  ungroup()
+mypal <- paletteer_d("ggsci::default_igv")
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+# pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Burden_toExposureProp.pdf",height = 6, width = 6)
+# burden_prop <- ggplot(person_summary, aes(x = Total_High / Total, y = Burden_Adj)) +
+#   geom_point(alpha = 0.6) +
+#   scale_color_manual(values = mypal) +
+#   #geom_vline(xintercept = 0.5, linetype = "dashed", color = "red") +
+#   #geom_hline(yintercept = burden_cutoff, linetype = "dashed", color = "blue") +
+#   labs(
+#     title = "Exposure Score vs Proportion of High Exposures",
+#     x = "Proportion High Exposure (0-100%)",
+#     y = "Exposure Score"
+#   ) +
+#   facet_wrap(~Study) +
+#   theme_classic() +
+#   theme(axis.text.y = element_text(size = 16,face = "bold"),
+#         axis.text.x =element_blank(),
+#         axis.title.x = element_text(size = 20,face = "bold"),
+#         axis.title.y = element_text(size = 20,face = "bold"))
+# print(burden_prop)
+# dev.off()
+# 
+# save(burden_prop,file = "../../../Output/Paper1_Output_Submission2/Plots/Burden_Prop_Plot.RData")
+```
+
+
+```{r}
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+person_summary <- Level_Data_All %>%
+  group_by(PID, Study) %>%
+  summarise(
+    Total_Low    = sum(Count[Level == "Low"]),
+    Total_Medium = sum(Count[Level == "Medium"]),
+    Total_High   = sum(Count[Level == "High"]),
+    Total        = sum(Count),
+    Burden_Adj   = first(Burden_Adj),
+    .groups = "drop"
+  ) %>%
+  mutate(prop_high = Total_High / Total) %>% 
+  mutate(Over_Exp = factor(ifelse(Total >=16,1,0)))
+
+
+cols_01 <- setNames(c("#5050FFFF","#5DB1DDFF"), c("0","1"))
+
+# 2) Cohort colors (one per Study) using your palette
+study_levels <- sort(unique(person_summary$Study))
+base_cols <- paletteer_d("ggsci::default_igv")
+mypal <- setNames(base_cols[seq_along(study_levels)], study_levels)
+str(person_summary$Over_Exp)
+
+# 3) Soft alternating x-axis bands (0–100% in 10% steps), tinted by each Study color
+#    We alternate alpha to create subtle "striping" down the x-axis.
+bin_edges <- seq(0, 1, by = 0.10)
+bands <- lapply(study_levels, function(s) {
+  n_bins <- length(bin_edges) - 1
+  data.frame(
+    Study   = rep(s, n_bins),
+    xmin    = head(bin_edges, -1),
+    xmax    = tail(bin_edges, -1),
+    fill_col= rep(unname(mypal[s]), n_bins),
+    alpha   = rep(c(0.05, 0.10), length.out = n_bins),
+    stringsAsFactors = FALSE
+  )
+}) %>% dplyr::bind_rows()
+
+# 4) Plot
+pdf("../../../Output/Paper1_Output_Submission2/Plots/Burden_toExposureProp.pdf", height = 6, width = 7.5)
+
+burden_prop <- ggplot(person_summary, aes(x = prop_high, y = Burden_Adj,color = Over_Exp)) +
+  geom_vline(xintercept = c(0.25, 0.50, 0.75), linetype = "dashed", linewidth = 0.4, color = "grey35") +
+  # points
+  geom_point(size = 1.8, alpha = 0.7) +
+  # lightweight trend per facet
+  geom_smooth(method = "lm", se = FALSE, linewidth = 0.8, color = "grey40", alpha = 0.7) +
+  # axes & scales
+  scale_x_continuous(
+    breaks = c(0, 0.5, 1),
+    labels = c("0%", "50%", "100%"),
+    limits = c(0, 1),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  scale_color_manual(values = cols_01) +
+  labs(
+    title = "Exposure Score vs Proportion of High Exposures",
+    x = "Proportion High Exposure",
+    y = "Exposure Score",
+    color = "Over 20 Exposures Measured"
+  ) +
+  #facet_wrap(~ Study) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title      = element_text(size = 18, face = "bold", hjust = 0.5),
+    legend.position  = "bottom",
+    plot.subtitle   = element_text(size = 12, color = "grey30", hjust = 0.5),
+    axis.title.x    = element_text(size = 14, face = "bold"),
+    axis.title.y    = element_text(size = 14, face = "bold"),
+    axis.text.x     = element_text(size = 9, face = "bold"),
+    axis.text.y     = element_text(size = 12, face = "bold"),
+    strip.background= element_rect(fill = "grey95", color = "grey80"),
+    strip.text      = element_text(size = 12, face = "bold"),
+    panel.border    = element_rect(color = "grey85", fill = NA, linewidth = 0.6),
+      panel.spacing.x = unit(0.75, "cm"),  # increase or decrease as needed
+
+  )
+
+print(burden_prop)
+dev.off()
+
+# Persist for the S14 assembler (Agg_Score_Patchplot_S2.Rmd). Panel C of that
+# figure is this plot; without the save it had to be rebuilt by hand each time,
+# which is why S14 shipped as loose panels rather than one assembled figure.
+save(burden_prop, file = "../../../Output/Paper1_Output_Submission2/Plots/Burden_Prop_Plot.RData")
+save(burden_prop,file = "../../../Output/Paper1_Output_Submission2/Burden_Prop_Plot.RData")
+
+```
+
+
+```{r}
+mypal
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Burden_qq.pdf",height = 10,width =10)
+qq_plot <- ggplot(Level_Data_All, aes(sample = Burden_Adj)) +
+  stat_qq(alpha = 0.6, color = "#4E79A7FF") +
+  stat_qq_line(color = "#E15759FF", linetype = "dashed") +
+  #facet_wrap(~Study, scales = "free") +
+  theme_classic(base_size = 14) +
+  labs(
+    title = "Q-Q Plots of Aggregate Score",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  )
+print(qq_plot)
+dev.off()
+
+save(qq_plot,file = "../../../Output/Paper1_Output_Submission2/Burden_qqplot.RData")
+
+```
+
+
+
+
+Age vs Burden
+-----
+```{r}
+Child_Burden_SDOH <- left_join(Child_SDOH,Burden_Df_Child %>% 
+                               dplyr::select(Child_PID,Study,Burden_Adj), by = c("Child_PID","Study")) %>% 
+  mutate(Population = "Child")
+
+Mat_Burden_SDOH <- left_join(Mat_SDOH,Burden_Df_Mat 
+          %>% dplyr::select(Mat_PID,Study,Burden_Adj), by = c("Mat_PID","Study")) %>% 
+  mutate(Population = "Adult")
+
+All_Burden_SDOH <- bind_rows(Child_Burden_SDOH,Mat_Burden_SDOH)
+```
+
+```{r}
+
+#mystudies <- c("SICAS|DEPART|VDAART|TEDDY")
+
+Plot_Burden_Age <-  bind_rows(
+  All_Burden_SDOH %>% 
+  #dplyr::filter(str_detect(Study,mystudies) )
+  dplyr::filter(!is.na(Child_Age)) %>% 
+  dplyr::select(Child_PID,Age = Child_Age,Burden_Adj,Population,Study),
+
+  All_Burden_SDOH %>% 
+  #dplyr::filter(str_detect(Study,mystudies) )
+  dplyr::filter(!is.na(Mat_Age)) %>% 
+  dplyr::select(Mat_PID,Age = Mat_Age,Burden_Adj,Population,Study)
+)
+```
+
+```{r}
+
+Child_Age_Data <- All_Burden_SDOH %>% 
+  #dplyr::filter(str_detect(Study,mystudies) )
+  dplyr::filter(!is.na(Child_Age)) %>% 
+  dplyr::select(Child_PID,Age = Child_Age,Burden_Adj,Population,Study)
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Burden_Age_Scatter.pdf",height = 5,width =14)
+
+ggplot(data = Child_Age_Data,aes(x = Age,y = Burden_Adj,color = Study)) +
+  geom_point() +
+  facet_wrap(~Study,scales = "free_x") +
+  theme_classic()
+dev.off()
+```
+
+
+```{r}
+exposure_summary <- Level_Data_All %>%
+  group_by(PID, Level) %>%
+  summarise(Count = sum(Count), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Level, values_from = Count, values_fill = 0)
+
+# Step 2: Join burden back
+exposure_summary <- exposure_summary %>%
+  left_join(Level_Data_All %>% select(PID,Study, Burden_Adj) %>% distinct(), by = "PID")
+
+# Step 3: Add totals and category flags
+exposure_summary <- exposure_summary %>%
+  mutate(
+    Total = Low + Medium + High,
+    Dominant_Level = case_when(
+      Low == Total ~ "All Low",
+      Medium == Total ~ "All Medium",
+      High == Total ~ "All High",
+      Low / Total >= 0.5 ~ "Mostly Low",
+      Medium / Total >= 0.5 ~ "Mostly Medium",
+      High / Total >= 0.5 ~ "Mostly High",
+      TRUE ~ "Mixed"
+    )
+  )
+
+```
+
+
+```{r}
+exposure_summary %>% 
+  #dplyr::filter(Study == "DCHS") %>% 
+  group_by(Dominant_Level) %>% 
+  summarise(Mean_High = mean(High,na.rm = T),
+            Mean_Med = mean(Medium,na.rm = T),
+            Mean_Low = mean(Low,na.rm = T),
+            Burden_mean = mean(Burden_Adj,na.rm = T)) %>% 
+  View
+```
+

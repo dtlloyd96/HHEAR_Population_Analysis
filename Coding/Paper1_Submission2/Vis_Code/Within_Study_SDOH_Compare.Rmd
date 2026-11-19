@@ -1,0 +1,1303 @@
+---
+title: "Quant_Reg_Results_Plots"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r view-shim}
+# View() opens an interactive data viewer and ERRORS under rmarkdown::render().
+# These documents were written to be run chunk-by-chunk in RStudio, so View()
+# calls are scattered through them as scratch. Shim it to a no-op so a headless
+# render works; the pipelines still evaluate, they just do not display.
+# (2026-08-11)
+View <- function(x, ...) invisible(x)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(paletteer)
+library(data.table)
+library(ggdist)
+library(ggrepel)
+library(missMDA)
+library(FactoMineR)
+library(factoextra)
+library(patchwork)
+library(ggpubr)
+library(scales)
+source("../../../Coding/targeted_analyte_mapping.R")
+
+std_study <- function(x) {
+  stringr::str_remove(x, '[_]\\w+|:')  # CHECK: ensure this collapse is intended
+}
+```
+
+```{r harmonization-helpers}
+# apply_scan_fdr(), assert_has_inference(), std_study(), to_ng_per_mL().
+# Added 2026-08-11 -- see CODE_AUDIT_2026-08-11.md.
+local({
+  cands <- c("../harmonization_helpers.R",
+             "harmonization_helpers.R",
+             "Coding/Paper1_Submission2/harmonization_helpers.R")
+  hit <- cands[file.exists(cands)]
+  if (length(hit) == 0) stop("Cannot locate harmonization_helpers.R")
+  source(hit[[1]], local = FALSE)
+})
+```
+
+
+
+```{r}
+mapping_path <- "../../../Input/Harmonized_Datasets/Targeted_Analyte_Category_Mapping.csv"
+targeted_mapping <- read_targeted_analyte_mapping(mapping_path)
+
+plot_categories <- c(
+  "TraceElements", "Phenols", "Phthalates", "PAH", "PCB", "Parabens",
+  "Smoking", "Pesticides", "VOCs", "FlameRetardants", "PFAS"
+)
+
+targeted_category_lookup <- targeted_mapping %>%
+  dplyr::filter(Category %in% plot_categories) %>%
+  dplyr::select(Code, Category) %>%
+  dplyr::distinct()
+
+theme_codes <- targeted_theme_codes(targeted_mapping)
+
+get_theme <- function(category_name) {
+  if (category_name %in% names(theme_codes)) {
+    unique(theme_codes[[category_name]])
+  } else {
+    character()
+  }
+}
+
+Trace_Elements_Theme <- get_theme("TraceElements")
+Phenols_Theme <- get_theme("Phenols")
+PAH_Theme <- get_theme("PAH")
+Phthalates_Theme <- get_theme("Phthalates")
+Parabens_Theme <- get_theme("Parabens")
+Smoking_Theme <- get_theme("Smoking")
+Inflam_Theme <- get_theme("Inflammation")
+Pesticide_Theme <- get_theme("Pesticides")
+VOC_Theme <- get_theme("VOCs")
+OXID_Theme <- get_theme("OxidativeStress")
+PFAS_Theme <- get_theme("PFAS")
+Flame_Retardant_Theme <- get_theme("FlameRetardants")
+PCB_Theme <- get_theme("PCB")
+Other_Theme <- character()
+
+add_plot_category <- function(data, code_col = "Outcome") {
+  dplyr::left_join(
+    data,
+    targeted_category_lookup,
+    by = stats::setNames("Code", code_col)
+  )
+}
+
+all_chem_table <- targeted_mapping %>%
+  dplyr::filter(Category %in% plot_categories) %>%
+  dplyr::select(Code,Full_Name, CAS, Category) %>%
+  dplyr::distinct() 
+
+write_csv(all_chem_table, file = "../../../Input/Harmonized_Datasets/All_Chem_Table.csv")
+```
+Input Data
+------------
+
+```{r}
+ 
+data_files <- list.files(
+  path = "../../../Output/Paper1_Output_Submission2",
+  pattern = "*By_",   # matches files that end with 'All.RData'
+  recursive = FALSE,
+  full.names = TRUE
+)
+
+invisible(lapply(data_files, load, .GlobalEnv))  # loads data_*_list objects into .GlobalEnv
+
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+load("../../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+```
+
+
+```{r}
+All_Chem_Study_Table <- Targeted_Data_All %>% 
+  mutate(Study = std_study(Study)) %>%       
+  left_join(.,targeted_category_lookup, by =c("Analyte_Code" = "Code")) %>% 
+  group_by(Study) %>% 
+  summarise(All_Chems = paste(unique(Analyte_Code), collapse = ", ")) 
+
+write_csv(All_Chem_Study_Table, file = "../../../Input/Harmonized_Datasets/All_Chem_Study_Table.csv")
+
+```
+
+
+```{r}
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>%
+  mutate(
+    # Prefer Max_Edu but fall back to Mat_Edu
+    Edu_Any = dplyr::coalesce(Max_Edu, Mat_Edu),
+    # Prefer Child_Race but fall back to Mat_Race
+    Mat_Child_Comb_Race = dplyr::coalesce(Child_Race, Mat_Race),
+    Mat_Age = suppressWarnings(as.numeric(Mat_Age)),  # NOTE: coercion; NAs may be introduced
+    # Make Location a factor with reference "United_States"
+    Location = stats::relevel(as.factor(Location), ref = "United_States"),
+    # Collapse various US-specific locations to a single "United_States"
+    Location_Country = dplyr::case_when(
+      Location %in% c(
+        "United_States","NorthEast_US","New_Hampshire","Washington_State",
+        "Midwestern_US","Denver","Baltimore","Sacramento",
+        "Southern_California","Syracuse","Michigan","California",
+        "SanFrancisco","Massachusetts"
+      ) ~ "United_States",
+      TRUE ~ "Worldwide"
+    ),
+    # Binary maternal education bucket
+    Mat_Edu_Binary = dplyr::case_when(
+      Mat_Edu %in% c("No_Education","Primary_Education","Primary_School","High_School") ~ "No_College",
+      Mat_Edu %in% c("Some_College","Four_Year_College_Degree","Some_Grad_School") ~ "Some_College",
+      Mat_Edu == "Not_Reported" ~ NA_character_,
+      TRUE ~ NA_character_  # CHECK: any unexpected levels?
+    ),
+    # Binary maternal income bucket
+    Mat_Income_Binary = dplyr::case_when(
+      Mat_Income %in% c("0_25k","25_49k") ~ "Under_49k",
+      Mat_Income %in% c("50_74k","75_99k","100_124k","Over_100k","Over_125k","Over_49k") ~ "Over_49k",
+      TRUE ~ NA_character_
+    )
+  )
+
+ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(Study == "DISCOVER_SDOH") %>% 
+  View
+```
+
+```{r}
+table(ExWAS_SDOH_Exposures$Location)
+```
+
+
+Results Parse Function
+-----
+```{r}
+Parse_Results <- function(Results_List = Child_SDOH_Metab_Quantile_Results_SexByStudy,Cohort_Meta = Cohort_Meta){
+  
+  
+  if(Cohort_Meta == T){
+    
+    All_Res <- list()
+  
+  for(i in seq_along(Results_List)){
+    
+    curr_study <- Results_List[[i]]
+    
+             #print(i)
+      
+         curr_results <- try(curr_study[[1]][["Regression_Results"]] %>% 
+             dplyr::filter(Variable != "(Intercept)") %>% 
+             mutate(
+            Study = names(Results_List[i])) )
+
+         if(is.character(curr_results)){
+           next
+         }
+         
+         All_Res[[i]] <- curr_results
+        
+  }
+  Final_Res <- bind_rows(All_Res)
+    
+  }else{
+  
+  
+  All_Res <- list()
+  
+  for(i in seq_along(Results_List)){
+    
+    curr_study <- Results_List[[i]]
+    
+    curr_study_all_res <- list() 
+             #print(i)
+
+    for(j in seq_along(curr_study)){
+      
+         curr_results <- try(curr_study[[j]][[1]][["Regression_Results"]] %>% 
+             dplyr::filter(Variable != "(Intercept)") %>% 
+             mutate(
+            Study = names(Results_List[i])) )
+
+         if(is.character(curr_results)){
+           next
+         }
+         
+         curr_study_all_res[[j]] <- curr_results
+        
+      }
+      
+      curr_study_all_res <-  curr_study_all_res[lengths(curr_study_all_res) != 0]
+
+    Results <- bind_rows(curr_study_all_res)
+    
+      All_Res[[i]] <- Results
+
+  }
+  Final_Res <- bind_rows(All_Res)
+  }
+# FDR SCOPE (fixed 2026-08-11, CODE_AUDIT_2026-08-11.md section 2.8).
+# p.adjust() used to run INSIDE the loop above, correcting across the handful of
+# coefficients in a single model rather than across the whole scan. It now runs
+# once, on the bound results, via apply_scan_fdr() in harmonization_helpers.R.
+# That helper also asserts the p-values are not all NA, which is what happens
+# when the upstream fit was run with summary_R < 25 (see audit section 1.5).
+  return(apply_scan_fdr(Final_Res, what = "Within_Study_SDOH_Compare / Final_Res"))
+}
+```
+
+
+Process Results
+----------
+
+```{r}
+Process_Quant_Results <- function(Mat_Quant_Results) {
+  All_Outcome_Results_Mat <- list()
+  
+  for (i in seq_along(Mat_Quant_Results)) {
+    Curr_Reg_Results <- Mat_Quant_Results[[i]]
+    Curr_Reg_Results <- Filter(is.list, Curr_Reg_Results)
+    
+    All_Reg_Results <- list()
+    for (j in seq_along(Curr_Reg_Results)) {
+      Res <- Curr_Reg_Results[[j]][[1]]
+      All_Reg_Results[[j]] <- Res
+    }
+    
+    if (length(All_Reg_Results) == 0) {
+      next
+    }
+    
+    All_Reg_Results <- bind_rows(All_Reg_Results) %>%
+      filter(!str_detect(Variable, "(Intercept)"))
+    
+    All_Outcome_Results_Mat[[i]] <- All_Reg_Results
+    names(All_Outcome_Results_Mat)[i] <- unique(All_Reg_Results$Outcome)
+  }
+  
+  All_Outcome_Results_Mat_Df <- bind_rows(All_Outcome_Results_Mat)
+# FDR SCOPE (fixed 2026-08-11, CODE_AUDIT_2026-08-11.md section 2.8).
+# p.adjust() used to run INSIDE the loop above, correcting across the handful of
+# coefficients in a single model rather than across the whole scan. It now runs
+# once, on the bound results, via apply_scan_fdr() in harmonization_helpers.R.
+# That helper also asserts the p-values are not all NA, which is what happens
+# when the upstream fit was run with summary_R < 25 (see audit section 1.5).
+  return(apply_scan_fdr(All_Outcome_Results_Mat_Df, what = "Within_Study_SDOH_Compare / All_Outcome_Results_Mat_Df"))
+}
+
+```
+
+```{r}
+make_results_bystudy <- function(results_list,Model_Type,Population) {
+  all_results <- lapply(seq_along(results_list), function(i) {
+    curr_study <- names(results_list)[i]
+    Process_Quant_Results(Mat_Quant_Results = results_list[[i]]) %>%
+      mutate(
+        Model_Type = Model_Type,
+        Study = curr_study,
+        Population = Population
+      )
+  })
+  
+  bind_rows(all_results)
+}
+
+```
+
+```{r}
+All_Child_Results_DF <- make_results_bystudy(results_list = By_Study_Single_Exp_Results_Child,
+                                             Model_Type = "Single_Exposure_Study",Population = "Children") %>% 
+  dplyr::filter(Variable == "Sample_Collection_Year") %>% 
+  mutate(Model_Type = "Sample_Collection_Year")
+
+All_Child_Age <- make_results_bystudy(results_list = By_Study_Age_Child,
+                                             Model_Type = "Age",Population = "Children")
+
+All_Child_Results_All_SDOH <- make_results_bystudy(results_list = By_Study_AllSDOH_Child,
+                                             Model_Type = "All_SDOH",Population = "Children")
+All_Child_Age_Sex <-  make_results_bystudy(results_list = By_Study_AgeSex_Child,
+                                             Model_Type = "Age_Sex",Population = "Children")
+All_Child_Age_Sex_Race <-  make_results_bystudy(results_list = By_Study_AgeSexRace_Child,
+                                             Model_Type = "Age_Sex_Race",Population = "Children")
+All_Child_Age_Sex_Edu <-  make_results_bystudy(results_list = By_Study_AgeSexEdu_Child,
+                                             Model_Type = "Age_Sex_Edu",Population = "Children")
+All_Child_Age_Sex_Race_Edu <-  make_results_bystudy(results_list = By_Study_AgeSexRaceEdu_Child,
+                                             Model_Type = "Age_Sex_Race_Edu",Population = "Children")
+
+```
+
+```{r}
+All_Mat_Results_DF <- make_results_bystudy(results_list = By_Study_Single_Exp_Results_Mat,
+                                           Model_Type = "Single_Exposure_Study",Population = "Adults")%>% 
+  dplyr::filter(Variable == "Sample_Collection_Year") %>% 
+  mutate(Model_Type = "Sample_Collection_Year")
+
+All_Mat_Results_All_SDOH <- make_results_bystudy(results_list = By_Study_AllSDOH_Mat,
+                                           Model_Type = "All_SDOH",Population = "Adults")
+
+All_Mat_Age <- make_results_bystudy(results_list = By_Study_Age_Mat,
+                                           Model_Type = "Age",Population = "Adults")
+
+All_Mat_Age_Race <- make_results_bystudy(results_list = By_Study_AgeRace_Mat,
+                                           Model_Type = "Age_Race",Population = "Adults")
+All_Mat_Age_Edu <- make_results_bystudy(results_list = By_Study_AgeEdu_Mat,
+                                           Model_Type = "Age_Edu",Population = "Adults")
+All_Mat_Age_Race_Edu<- make_results_bystudy(results_list = By_Study_AgeRaceEdu_Mat,
+                                           Model_Type = "Age_Race_Edu",Population = "Adults")
+
+
+```
+
+
+```{r}
+
+Child_Res <- bind_rows(All_Child_Results_DF,All_Child_Results_All_SDOH,All_Child_Age,
+                       All_Child_Age_Sex,All_Child_Age_Sex_Race,All_Child_Age_Sex_Edu,
+                       All_Child_Age_Sex_Race_Edu) 
+Mat_Res <- bind_rows(All_Mat_Results_DF,All_Mat_Results_All_SDOH,All_Mat_Age,All_Mat_Age_Race,All_Mat_Age_Edu,All_Mat_Age_Race_Edu)
+
+```
+
+
+
+
+
+Plots
+-------
+
+
+```{r}
+Child_R2_Data <- Child_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  #dplyr::filter(!is.na(Sig_10)) %>% 
+  #dplyr::filter(!Exposure %in% c("Mat_Child_Comb_Race")) %>% 
+  add_plot_category() %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+  group_by(Model_Type,Study) %>% 
+  summarise(plot_R2 = weighted.mean(plot_R2, w, na.rm = TRUE)) %>% 
+  dplyr::filter(!is.na(plot_R2))
+
+Mat_R2_Data <- Mat_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  #dplyr::filter(!is.na(Sig_10)) %>% 
+  #dplyr::filter(!Exposure %in% c("Mat_Child_Comb_Race")) %>% 
+  add_plot_category() %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+  group_by(Model_Type,Study) %>% 
+  summarise(plot_R2 = weighted.mean(plot_R2, w, na.rm = TRUE)) %>% 
+  dplyr::filter(!is.na(plot_R2))
+```
+
+
+```{r}
+Mat_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  #dplyr::filter(!is.na(Sig_10)) %>% 
+  #dplyr::filter(!Exposure %in% c("Mat_Child_Comb_Race")) %>% 
+  add_plot_category() %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+dplyr::filter(Category == "PFAS") %>% 
+  dplyr::filter(Variable == "Sample_Collection_Year", Model_Type == "Sample_Collection_Year") %>% 
+  group_by(Model_Type,Outcome,Study) %>% 
+  summarise(plot_R2 = round(weighted.mean(plot_R2, w, na.rm = TRUE),4)) %>% 
+  View
+
+
+Child_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  #dplyr::filter(!is.na(Sig_10)) %>% 
+  #dplyr::filter(!Exposure %in% c("Mat_Child_Comb_Race")) %>% 
+  add_plot_category() %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+dplyr::filter(Category == "PFAS") %>% 
+  dplyr::filter(Variable == "Sample_Collection_Year", Model_Type == "Sample_Collection_Year") %>% 
+  group_by(Model_Type,Outcome,Study) %>% 
+  summarise(plot_R2 = round(weighted.mean(plot_R2, w, na.rm = TRUE),4)) %>% 
+  View
+```
+
+
+```{r}
+All_R2_Data <- bind_rows(Child_R2_Data,Mat_R2_Data) %>% 
+  mutate(Model_Type = ifelse(Model_Type == "Sample_Collection_Year","SY",Model_Type)) 
+unique(All_R2_Data$Model_Type)
+
+
+
+```
+
+
+
+
+```{r}
+
+
+vars <- c(
+  "SY","Age", "Age_Sex","Age_Edu","Age_Race","Age_Sex_Edu","Age_Sex_Race","Age_Race_Edu",
+  "Age_Sex_Race_Edu","All_SDOH"
+)
+
+# Normalize order of variable names within each string
+vars_normalized <- sapply(vars, function(x) {
+  paste(sort(strsplit(x, ":")[[1]]), collapse = ":")
+})
+
+# Check results
+#data.frame(original = vars, normalized = vars_normalized)
+
+
+```
+
+
+
+
+```{r}
+
+ALl_R2 <-All_R2_Data %>% 
+  dplyr::mutate(Model_Type = ifelse(Model_Type == "All_SDOH","Additional_Socio_Values",Model_Type))
+
+unique(ALl_R2$Model_Type)
+model_seq <- unique(ALl_R2$Model_Type)
+element_lengths <- nchar(model_seq)
+
+sorted_indices <- order(element_lengths)
+
+# Sort the original vector using these indices
+model_seq <- model_seq[sorted_indices]
+
+df_f <- ALl_R2 %>% 
+  #group_by(Outcome,Tau,Population,Model_Type,Category,pseudo_R) %>% 
+  #summarise(All_Vars = paste(unique(Demo_Var), collapse = ":")) %>% 
+  #mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  #dplyr::filter(Tau == 0.50) %>%  
+  filter(Model_Type %in% model_seq) %>% 
+  group_by(Study, Model_Type) %>% 
+  #dplyr::filter(Study == "CCREOH") %>% 
+  summarise(mean_R2 = mean(plot_R2, na.rm = TRUE), .groups = "drop") %>%  
+  arrange(Study, match(Model_Type, model_seq)) %>%
+  group_by(Study) %>%
+  mutate(
+    # Force baseline to 0 and ensure monotonic increase
+    #mean_R2 = cummax(mean_R2),  
+    total_R2 = max(mean_R2, na.rm = TRUE),
+    contrib = pmax(mean_R2 - lag(mean_R2, default = 0), 0),
+    component = if_else(row_number() == 1,
+                        paste0("Baseline: ", Model_Type),
+                        paste0("+ ", Model_Type))
+  ) %>%
+  ungroup() 
+
+comp_levels <- model_seq
+
+pool <- c(
+  "#FED439FF", "#709AE1FF", "#8A9197FF", "#D2AF81FF",
+  "#FD7446FF", "#D5E4A2FF", "#197EC0FF", "#F05C3BFF",
+  "#46732EFF", "#71D0F5FF", "#370335FF", "#075149FF",
+  "#C80813FF", "#91331FFF", "#1A9993FF", "#FD8CC1FF"
+)
+mypal <- setNames(pool[seq_along(comp_levels)], comp_levels)
+
+df_plot <- df_f%>%
+  mutate(
+    Study  = fct_reorder(Study, total_R2),
+    component = factor(Model_Type, levels = comp_levels)
+  ) %>% 
+  group_by(Study) %>%
+  arrange(Study, component, .by_group = TRUE) %>%
+  # compute stack geometry
+  mutate(
+    xmin = cumsum(lag(contrib, default = 0)),
+    xmax = xmin + contrib,
+    xmid = (xmin + xmax) / 2,
+    frac = contrib / sum(contrib, na.rm = TRUE)
+  ) %>%
+  # flag largest slice (break ties deterministically by first factor level)
+  mutate(is_max = contrib == max(contrib, na.rm = TRUE)) %>%
+  ungroup() %>% 
+  mutate(component = factor(component, levels = names(mypal)))
+
+totals <- df_plot %>%
+  group_by(Study) %>%
+  summarise(total = sum(contrib, na.rm = TRUE), .groups = "drop")
+
+fill_order <- rev(c(
+  "SY","Age", "Age_Sex","Age_Edu","Age_Race","Age_Sex_Edu","Age_Sex_Race","Age_Race_Edu",
+  "Age_Sex_Race_Edu","Additional_Socio_Values"
+))
+
+
+df_plot2 <- df_plot %>% 
+  group_by(Study) %>% 
+  mutate(
+    total_R2_study = max(total_R2, na.rm = TRUE),        # the max you want bar to reach
+    prop_of_total  = contrib / sum(contrib, na.rm = TRUE),# share of contribution
+    contrib_scaled = prop_of_total * total_R2_study       # rescaled so bar = total_R2
+  ) %>% 
+  ungroup() %>% 
+  dplyr::filter(Study != "DISCOVER") 
+
+df_plot2$Model_Type <- factor(df_plot2$Model_Type, levels = fill_order)
+
+
+
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/R2_Barplot_ByStudy.pdf",height=10,width = 10)
+r2_barplot <- ggplot(df_plot2, aes(x = contrib_scaled, y = Study, fill = Model_Type)) +
+  geom_col(width = 0.7, color = "white", linewidth = 0.2) +
+  scale_fill_manual(values = mypal, drop = FALSE) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0.06)),
+    labels = label_number(accuracy = 0.01)
+  ) +
+  labs(
+    title = "Average Demographic Contribution by Model",
+    x = expression(Contribution~to~prediction~("(" * mean~R^2 * ")")),
+    y = "",
+    fill = "Model term"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title      = element_text(size = 16, face = "bold", hjust = 0),
+    axis.title.x    = element_text(size = 18, face = "bold"),
+    axis.title.y    = element_text(size = 14, face = "bold"),
+    axis.text.x     = element_text(size = 18, face = "bold"),
+    axis.text.y     = element_text(size = 13, face = "bold"),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor.x = element_blank(),
+    axis.ticks.y    = element_blank(),
+    legend.position = "bottom",
+    legend.title    = element_text(size = 11, face = "bold"),
+    legend.text     = element_text(size = 10)
+  ) +
+  coord_cartesian(xlim = c(0, max(df_plot2$total_R2_study, na.rm = TRUE) * 1.12))
+
+r2_barplot_bystudy <- r2_barplot
+print(r2_barplot_bystudy)
+dev.off()
+save(r2_barplot_bystudy, file = "../../../Output/Paper1_Output_Submission2/Plots/R2_Barplot_ByStudy.RData")
+```
+
+
+
+
+```{r}
+# Interactive View() scratch, disabled 2026-08-11: it is a DANGLING pipeline (the
+# verbs below have no data piped in), which aborts rmarkdown::render(). Nothing is saved here.
+# df_plot %>% 
+#   group_by(Model_Type) %>% 
+#   summarise(meanbymodel = mean(mean_R2/total_R2,na.rm = T)) %>% 
+#   View
+
+# df_plot %>% 
+#   dplyr::filter(Study == "PARENTs") %>% View
+#   group_by(Study,Model_Type) %>% 
+#   #summarise(meanbymodel = mean(mean_R2,na.rm = T)) %>% View
+
+#   summarise(meanbymodel = mean(mean_R2/total_R2,na.rm = T)) %>% View
+#   dplyr::filter(Model_Type == "Age") %>% 
+#   View
+
+ccreoh_sdoh <- SDOH_Data_All %>% 
+  dplyr::filter(Study == "CCREOH_SDOH") 
+
+Targeted_Data_All %>% 
+  dplyr::filter(Study == "CCREOH_Targeted") %>% 
+  left_join(.,ccreoh_sdoh, by = "Mat_PID") %>% 
+  group_by(Mat_Race, Analyte_Code) %>% 
+  summarise(mean_conc = mean(Concentration,na.rm =T)) %>% 
+  View
+
+df_plot %>% 
+  group_by(Model_Type) %>% 
+  summarise(Total_R2 = mean(total_R2,na.rm = T)) %>% View
+
+```
+
+
+Sample Time Plots
+--------
+
+```{r}
+sy_r2 <- df_plot %>% 
+  group_by(Study,Model_Type) %>% 
+  summarise(meanbymodel = mean(mean_R2/total_R2,na.rm = T)) %>% 
+  dplyr::filter(Model_Type == "SY") 
+
+```
+
+```{r}
+year_r2 <- Targeted_Data_All %>% 
+      mutate(Study = std_study(Study)) %>%                   # standardize label
+  mutate(Sample_Collection_Year = as.numeric(Sample_Collection_Year)) %>% 
+  dplyr::filter(Sample_Collection_Year >= 1980) %>% 
+  group_by(Study) %>%
+  summarise(
+    min_year = min(Sample_Collection_Year, na.rm = TRUE),
+    max_year = max(Sample_Collection_Year, na.rm = TRUE),
+    year_range = max_year - min_year,
+    .groups = "drop"
+  ) %>% 
+  left_join(.,sy_r2, by = "Study") %>% 
+  dplyr::filter(Study != "VAPS")
+
+fit <- lm(meanbymodel ~ year_range,
+          data = year_r2)
+
+summary(fit)
+
+
+
+year_mean_scatter <- ggplot(year_r2, 
+       aes(x = year_range, 
+           y = meanbymodel)) +
+  
+  # Points (with outline for visibility on log scale)
+  geom_point(aes(color = Category), 
+             alpha = 0.75, 
+             size = 4, 
+             stroke = 0.2) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    linewidth = 1.1,
+    color = "black",
+    linetype = "dashed"
+  ) +
+
+  # Log scales with cleaner breaks
+  # Custom palette
+  #scale_color_manual(values = mypal, name = "Category") +
+  
+  labs(
+    title = "Year Range vs Sample Year Proportion of Explanatory Power",
+    subtitle = "Adjusted R2 = 0.07",
+    x = "Year Range",
+    y = "Proportion of Sample Year Explanatory Power"
+  ) +
+  
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, colour = "grey30"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12),
+    legend.text  = element_text(size = 10)
+  )
+# pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Year_R2_ByCohort",height=5,width = 5)
+# print(year_mean_scatter)
+# dev.off()
+```
+
+```{r}
+Child_Exp_R2_Data <- Child_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  #dplyr::filter(!is.na(Sig_10)) %>% 
+  #dplyr::filter(!Exposure %in% c("Mat_Child_Comb_Race")) %>% 
+  add_plot_category() %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+  group_by(Model_Type,Study,Category,Outcome) %>% 
+  summarise(plot_R2 = weighted.mean(plot_R2, w, na.rm = TRUE)) %>% 
+  dplyr::filter(!is.na(plot_R2))
+
+Mat_Exp_R2_Data <- Mat_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  #dplyr::filter(!is.na(Sig_10)) %>% 
+  #dplyr::filter(!Exposure %in% c("Mat_Child_Comb_Race")) %>% 
+  add_plot_category() %>%
+  dplyr::filter(!is.na(Category)) %>% 
+  dplyr::mutate(
+    w = exp(-((Tau - 0.5)^2) / (2 * 0.15^2))) %>% 
+  group_by(Model_Type,Study,Category,Outcome) %>% 
+  summarise(plot_R2 = weighted.mean(plot_R2, w, na.rm = TRUE)) %>% 
+  dplyr::filter(!is.na(plot_R2))
+
+All_Exp_R2_Data <- bind_rows(Child_Exp_R2_Data,Mat_Exp_R2_Data) %>% 
+  mutate(Model_Type = ifelse(Model_Type == "Sample_Collection_Year","SY",Model_Type)) %>% 
+  dplyr::filter(Study != "DISCOVER") %>% 
+  dplyr::filter(Model_Type == "SY")
+
+
+Outcome_Plot_Data <- Targeted_Data_All %>% 
+      mutate(Study = std_study(Study)) %>%                   # standardize label
+  mutate(Sample_Collection_Year = as.numeric(Sample_Collection_Year)) %>% 
+  dplyr::filter(Sample_Collection_Year >= 1980) %>% 
+  group_by(Study) %>%
+  summarise(
+    min_year = min(Sample_Collection_Year, na.rm = TRUE),
+    max_year = max(Sample_Collection_Year, na.rm = TRUE),
+    year_range = max_year - min_year,
+    .groups = "drop"
+  ) %>% 
+  left_join(.,All_Exp_R2_Data, by = c("Study")) %>% 
+  dplyr::filter(Study != "VAPS") %>% 
+  group_by(year_range,Category,Study) %>% 
+  summarise(mean_r2 = mean(plot_R2,na.rm = T)) %>% 
+  dplyr::filter(!is.na(Category))
+
+```
+
+```{r}
+Outcome_Plot_Data %>% 
+  group_by(Category) %>% 
+  summarise(n = n(),
+    mean_r2_cat = mean(mean_r2,na.rm = T)) %>% 
+  View
+```
+
+
+```{r}
+
+fit <- lm(mean_r2 ~ year_range ,
+          data = Outcome_Plot_Data)
+
+summary(fit)
+
+
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+year_outcome_scatter <- ggplot(Outcome_Plot_Data, 
+       aes(x = year_range, 
+           y = mean_r2)) +
+  
+  # Points (with outline for visibility on log scale)
+  geom_jitter(aes(color = Category), 
+             alpha = 0.9, 
+             size = 4, 
+             stroke = 0.2) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    linewidth = 1.1,
+    color = "black",
+    linetype = "dashed"
+  ) +
+
+  # Log scales with cleaner breaks
+  # Custom palette
+  scale_color_manual(values = mypal, name = "Category") +
+  
+  labs(
+    title = "Year Range vs Sample Year Contribution by Category",
+    subtitle = sprintf("Adjusted R² = %.2f", summary(fit)$adj.r.squared),   # was hardcoded 0.18 (Mar 2026 data)
+    x = "Year Range",
+    y = "Sample Year Distributional Contribution"
+  ) +
+  
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, colour = "grey30"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
+    panel.grid.minor = element_blank(),
+    legend.position = "none",
+    legend.title = element_text(size = 12),
+    legend.text  = element_text(size = 10)
+  )
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Year_R2_ByOutcome.pdf",height=5,width = 7)
+print(year_outcome_scatter)
+dev.off()
+save(year_outcome_scatter, file = "../../../Output/Paper1_Output_Submission2/Plots/year_outcome_scatter.RData")
+
+```
+
+
+```{r}
+All_Outcome_SY_R2<- Targeted_Data_All %>% 
+      mutate(Study = std_study(Study)) %>%                   # standardize label
+  mutate(Sample_Collection_Year = as.numeric(Sample_Collection_Year)) %>% 
+  dplyr::filter(Sample_Collection_Year >= 1980) %>% 
+  group_by(Study) %>%
+  summarise(
+    min_year = min(Sample_Collection_Year, na.rm = TRUE),
+    max_year = max(Sample_Collection_Year, na.rm = TRUE),
+    year_range = max_year - min_year,
+    .groups = "drop"
+  ) %>% 
+  left_join(.,All_Exp_R2_Data, by = c("Study")) %>% 
+  dplyr::filter(Study != "VAPS") %>% 
+  group_by(year_range,Category,Study) %>% 
+  #summarise(mean_r2 = mean(plot_R2,na.rm = T)) %>% 
+  dplyr::filter(!is.na(Category))
+
+
+fit <- lm(plot_R2 ~ year_range ,
+          data = All_Outcome_SY_R2)
+
+summary(fit)
+
+
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+year_outcome_scatter_all <- ggplot(All_Outcome_SY_R2, 
+       aes(x = year_range, 
+           y = plot_R2)) +
+  
+  # Points (with outline for visibility on log scale)
+  geom_jitter(aes(color = Category), 
+             alpha = 0.9, 
+             size = 4, 
+             stroke = 0.2) +
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    linewidth = 1.1,
+    color = "black",
+    linetype = "dashed"
+  ) +
+
+  # Log scales with cleaner breaks
+  # Custom palette
+  scale_color_manual(values = mypal, name = "Category") +
+  
+  labs(
+    title = "Year Range vs Sample Year Explanatory Power by Category",
+    subtitle = "Adjusted R2 = 0.18",
+    x = "Year Range",
+    y = "Sample Year Explanatory Power"
+  ) +
+  
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, colour = "grey30"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
+    panel.grid.minor = element_blank(),
+    legend.position = "none",
+    legend.title = element_text(size = 12),
+    legend.text  = element_text(size = 10)
+  )
+
+year_outcome_scatter_all
+# pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Year_R2_ByOutcome.pdf",height=5,width = 7)
+# print(year_outcome_scatter)
+# dev.off()
+# save(year_outcome_scatter, file = "../../../Output/Paper1_Output_Submission2/Plots/year_outcome_scatter.RData")
+
+```
+
+
+```{r}
+# to_ng_per_mL() comes from harmonization_helpers.R (sourced above). The local
+# copy that shadowed it (defined AFTER the source call) has been removed.
+
+
+over_5<- Outcome_Plot_Data %>% 
+  ungroup() %>% 
+  dplyr::select(-Category) %>% 
+  distinct(Study,year_range) %>% 
+  dplyr::filter(year_range >=5) %>% 
+  pull(Study)
+
+Plot_Targeted <- Targeted_Data_All %>%                          # keep child samples
+  mutate(
+    Units = if_else(is.na(Units), "ng/mL", Units),        # default units
+    Concentration = to_ng_per_mL(Concentration, Units)    # normalize units
+  ) %>%
+      mutate(Study = std_study(Study)) %>%                   # standardize label
+  mutate(Sample_Collection_Year = as.numeric(Sample_Collection_Year)) %>%   
+  dplyr::filter(Sample_Collection_Year >= 1980) %>% 
+  add_plot_category(code_col = "Analyte_Code") %>%
+  dplyr::filter(!is.na(Category)) 
+```
+
+
+
+```{r}
+plot_sum <- Plot_Targeted %>%
+  group_by(Study, Sample_Collection_Year, Category) %>%
+  summarise(
+    n      = n(),
+    median = median(Concentration, na.rm = TRUE),
+    q25    = quantile(Concentration, 0.25, na.rm = TRUE),
+    q75    = quantile(Concentration, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  ) %>% 
+  dplyr::filter(str_detect(Study,paste0(over_5,collapse = "|")))
+
+
+## ---------------------------------------------------------------------------
+## IMHRD supplementary panel (added 2026-08)
+##
+## IMHRD cannot enter Harmonized_Targeted -- it ships ONLY aggregated year x
+## analyte statistics (median / IQR / LOQ / n) with no participant records, so
+## there is no per-person value to pool. It is however the most year-rich of the
+## new cohorts: 21 collection years (2003-2023), comfortably past the >=5-year
+## threshold above, where GRAPHS has only 3.
+##
+## To show it without inventing a data path, we feed the reconstruction built by
+## Coding/IMHRD_Reconstruct_Distribution.R (a deterministic lognormal quantile
+## lattice matched to each cell's published median + IQR) through the SAME
+## unit-normalisation / category / group_by-summarise code used for every other
+## study, so the panel is computed identically rather than special-cased.
+##
+## The facet is labelled "IMHRD (reconstructed)" so it can never be mistaken for
+## participant-level data. Marginals only -- do not read it as individual-level.
+## If the reconstruction is absent the block is skipped and the figure is
+## unchanged, so this Rmd still knits standalone.
+## ---------------------------------------------------------------------------
+imhrd_recon <- "../../../Input/Reference/IMHRD_PFAS_Reconstructed.RData"
+if (file.exists(imhrd_recon)) {
+  imhrd_env <- new.env(); load(imhrd_recon, envir = imhrd_env)
+  imhrd_sum <- imhrd_env$IMHRD_Reconstructed %>%
+    dplyr::mutate(
+      Units = dplyr::if_else(is.na(Units), "ng/mL", Units),
+      Concentration = to_ng_per_mL(Concentration, Units),
+      Sample_Collection_Year = as.numeric(Sample_Collection_Year)
+    ) %>%
+    dplyr::filter(Sample_Collection_Year >= 1980) %>%
+    add_plot_category(code_col = "Analyte_Code") %>%
+    dplyr::filter(!is.na(Category)) %>%
+    dplyr::mutate(Study = "IMHRD (reconstructed)") %>%
+    dplyr::group_by(Study, Sample_Collection_Year, Category) %>%
+    dplyr::summarise(
+      n      = dplyr::n(),
+      median = median(Concentration, na.rm = TRUE),
+      q25    = quantile(Concentration, 0.25, na.rm = TRUE),
+      q75    = quantile(Concentration, 0.75, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  message("IMHRD supplementary panel: ", nrow(imhrd_sum), " year x category rows, ",
+          dplyr::n_distinct(imhrd_sum$Sample_Collection_Year), " collection years")
+  plot_sum <- dplyr::bind_rows(plot_sum, imhrd_sum)
+} else {
+  message("IMHRD reconstruction not found - secular-time panel built without it. ",
+          "Run Coding/IMHRD_Reconstruct_Distribution.R to include it.")
+}
+
+
+## ---------------------------------------------------------------------------
+## Presentation fixes (2026-08):
+##
+##  1. EQUAL-DECADE y axes. Three options were on the table and the middle one
+##     wins:
+##       - fully free y (the original): each panel autoscales, so a study whose
+##         medians sit at 0.02 ng/mL and one at 63 draw identical flat lines.
+##         A given vertical distance means a different fold-change in every
+##         panel, so no trend can be compared against any other.
+##       - fully shared y: honest about magnitude, but the pooled range is 4.76
+##         decades while the median study needs only 1.96. Most panels ended up
+##         near-empty with their trends flattened into horizontal lines --
+##         worse than the problem it solved.
+##       - equal SPAN, free POSITION (this): every panel covers the same number
+##         of decades, centred on its own data. Vertical distance now means the
+##         same fold-change everywhere, so slopes ARE comparable, and each
+##         panel is filled. Absolute level is read off the axis labels, which
+##         differ by panel -- that trade is stated in the subtitle.
+##     Span is max(3 decades, what the study needs), so nothing is ever
+##     clipped; 14 of 16 studies land on exactly 3 (DCHS needs 4.14, CHARGE
+##     3.39). To go back to plain autoscaling, drop the geom_blank layer below.
+##  2. log10 rather than log1p. All medians and IQR bounds are strictly
+##     positive (min q25 = 0.0011), and log1p is near-linear below 1, which
+##     crushed the low-concentration studies. Fixed decade breaks also end the
+##     tick collisions that made CEHC/CHARGE/MARBLES/SEARCH/MDUC print
+##     "50/40/30/20" on top of itself.
+##  3. IMHRD is drawn dashed on a lightly tinted panel. It is reconstructed
+##     from published summaries, not participant data, and previously rendered
+##     identically to real cohorts -- distinguishable only by the facet title.
+## ---------------------------------------------------------------------------
+plot_sum <- plot_sum %>%
+  dplyr::mutate(Is_Reconstructed = Study == "IMHRD (reconstructed)")
+
+recon_panels <- plot_sum %>%
+  dplyr::filter(Is_Reconstructed) %>%
+  dplyr::distinct(Study)
+
+## Two invisible anchor points per study fix that panel's y range under
+## scales = "free". x is set to a year the study actually has, so this cannot
+## widen the x range.
+MIN_DECADES <- 3
+y_anchors <- plot_sum %>%
+  dplyr::group_by(Study) %>%
+  dplyr::summarise(
+    lo = min(q25, na.rm = TRUE),
+    hi = max(q75, na.rm = TRUE),
+    x  = min(Sample_Collection_Year, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    span = pmax(MIN_DECADES, log10(hi / lo)) + 0.12,   # 0.12 = breathing room
+    mid  = (log10(lo) + log10(hi)) / 2,
+    ymin = 10^(mid - span / 2),
+    ymax = 10^(mid + span / 2)
+  ) %>%
+  dplyr::select(Study, x, ymin, ymax) %>%
+  tidyr::pivot_longer(c(ymin, ymax), names_to = NULL, values_to = "y")
+
+sum_yr <- ggplot(
+  plot_sum,
+  aes(
+    x = Sample_Collection_Year,
+    y = median,
+    color = Category,
+    fill  = Category,
+    group = Category
+  )
+) +
+  # tint the reconstructed panel so it reads as different in kind
+  geom_rect(data = recon_panels, inherit.aes = FALSE,
+            xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf,
+            fill = "grey95") +
+  # invisible anchors that equalise the decade span of every panel
+  geom_blank(data = y_anchors, aes(x = x, y = y), inherit.aes = FALSE) +
+  # ribbons behind lines
+  geom_ribbon(aes(ymin = q25, ymax = q75),
+              alpha = 0.18, linewidth = 0, show.legend = FALSE) +
+  geom_line(aes(linetype = Is_Reconstructed), linewidth = 1.05) +
+  # anchor the median at each year (optional but often helps)
+  geom_point(aes(size = n), alpha = 0.9) +
+
+  scale_linetype_manual(values = c(`FALSE` = "solid", `TRUE` = "22"),
+                        guide = "none") +
+  scale_size_continuous(name = "Samples (n)", range = c(0.7, 3.4),
+                        breaks = scales::breaks_extended(3)) +
+  scale_y_log10(
+    breaks = 10^(-5:3),
+    labels = function(v) trimws(formatC(v, format = "fg", digits = 3)),
+    expand = expansion(mult = c(0.01, 0.01))
+  ) +
+  # n = 4, not 6: with free x, six breaks pushed the last label of one panel
+  # into the first label of the next along the whole facet row.
+  scale_x_continuous(
+    breaks = pretty_breaks(n = 4),
+    expand = expansion(mult = c(0.04, 0.04))
+  ) +
+
+  scale_color_manual(values = mypal, name = "Category") +
+  scale_fill_manual(values = mypal, guide = "none") +
+
+  facet_wrap(~Study, scales = "free") +
+
+  labs(
+    title = "Median Concentration Over Time - Studies with five or more sample collection years",
+    subtitle = paste("Lines show yearly medians; ribbons show IQR (25th-75th percentile); point size shows sample size.",
+                     "\nEvery panel spans the same number of log decades, so the STEEPNESS of a trend is comparable across studies;",
+                     "absolute level is not - read it off each panel's own axis.",
+                     "\nDashed line on the tinted panel: IMHRD, reconstructed from published year-level summary statistics (no participant-level data)."),
+    x = "Sample collection year",
+    y = "Median concentration, ng/mL (log10 scale)"
+  ) +
+
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 18, hjust = 0),
+    #plot.subtitle = element_text(size = 12, color = "grey30", margin = margin(b = 8)),
+
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "grey90", linewidth = 0.4),
+
+    strip.background = element_rect(fill = "grey95", color = NA),
+    strip.text       = element_text(face = "bold", size = 11),
+
+    axis.title = element_text(face = "bold"),
+    axis.text  = element_text(color = "grey15"),
+
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    legend.text  = element_text(size = 11),
+    legend.key.height = unit(0.35, "cm"),
+    plot.subtitle = element_text(size = 12, color = "grey30", margin = ggplot2::margin(b = 8)),
+    legend.margin = ggplot2::margin(t = 6),
+    panel.spacing.x = unit(1.8, "lines"),   # keeps adjacent year labels apart
+    panel.spacing.y = unit(1.0, "lines")
+  ) +
+  guides(
+    color = guide_legend(nrow = 2, byrow = TRUE, override.aes = list(linewidth = 2))
+  )
+
+
+
+# 4 rows x 4 cols. At 15x20 each panel was ~5in wide by ~3.2in tall, so the
+# series were stretched flat; taller and narrower gives roughly square panels.
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Conc_ByYear.pdf",height=18,width = 17)
+print(sum_yr)
+dev.off()
+save(sum_yr, file = "../../../Output/Paper1_Output_Submission2/Plots/conc_year.RData")
+
+```
+
+
+```{r}
+# Dangling View() scratch, disabled 2026-08-11 (verbs after the View have no data).
+# plot_sum %>% 
+#   dplyr::filter(Study == "DCHS") %>%
+#   dplyr::filter(Category == "Smoking") %>% View
+#   group_by(Sample_Collection_Year) %>% 
+#   summarise(mean_conc = mean(median,na.rm = T)) %>% 
+#   View
+```
+
+
+```{r}
+mypal36 <- c(
+  # ---- YELLOWS / GOLDS ----
+  "#FED439FF",  # soft gold
+  "#E3C78AFF",  # pale ochre
+  "#D2AF81FF",  # warm sand
+  "#C9A24DFF",  # antique gold
+
+  # ---- BLUES ----
+  "#709AE1FF",  # muted periwinkle
+  "#4F7CCBFF",  # denim
+  "#197EC0FF",  # strong blue
+  "#3A5F9EFF",  # steel blue
+  "#71D0F5FF",  # light sky
+  "#8EC7E8FF",  # powder blue
+
+  # ---- GREENS / OLIVES ----
+  "#D5E4A2FF",  # pale green
+  "#A8C686FF",  # soft sage
+  "#46732EFF",  # olive
+  "#6B8F3FFF",  # moss
+  "#8FBF8FFF",  # muted mint
+
+  # ---- TEALS ----
+  "#075149FF",  # deep teal
+  "#1A9993FF",  # turquoise
+  "#3FB5ADFF",  # sea teal
+  "#5FB7A6FF",  # seafoam
+
+  # ---- ORANGES / CORALS ----
+  "#FD7446FF",  # coral orange
+  "#F05C3BFF",  # red-orange
+  "#F4A261FF",  # peach
+  "#E8894EFF",  # burnt apricot
+
+  # ---- REDS / MAROONS ----
+  "#C80813FF",  # deep red
+  "#91331FFF",  # brick
+  "#B44A3AFF",  # rust
+  "#8F2D2AFF",  # oxblood
+
+  # ---- PURPLES / PINKS ----
+  "#370335FF",  # deep plum
+  "#8E5AAEFF",  # muted violet
+  "#C77DBBFF",  # dusty rose
+  "#FD8CC1FF",  # soft pink
+
+  # ---- NEUTRALS ----
+  "#8A9197FF",  # cool gray
+  "#B3B7BCFF"   # light gray
+)
+
+```
+
+
+```{r}
+hist_plot <- Plot_Targeted %>% 
+  group_by(Study,Child_PID,Mat_PID,Sample_Collection_Year) %>% 
+  summarise(n = n()) %>% 
+  mutate(
+    Study = fct_reorder(Study, Sample_Collection_Year, .fun = median, .desc = FALSE)
+  )
+
+summary(hist_plot$Sample_Collection_Year)
+
+sd(hist_plot$Sample_Collection_Year)
+
+
+year_hist <- ggplot(hist_plot, aes(x = Sample_Collection_Year),) +
+
+  geom_histogram(
+    binwidth = 1,
+    boundary = 0,
+    color = "white",
+    linewidth = 0.25,
+    fill = "gray50"
+  ) +
+
+  scale_fill_manual(values = mypal36, name = "Study") +
+
+  scale_x_continuous(
+    breaks = pretty_breaks(n = 8),
+    expand = expansion(mult = c(0.01, 0.03))
+  ) +
+
+  labs(
+    title = "Sample Collection Over Time",
+    subtitle = "Stacked counts by study",
+    x = "Sample collection year",
+    y = "Number of samples"
+  ) +
+
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 18, hjust = 0),
+    plot.subtitle = element_text(size = 12, color = "grey30", margin =  ggplot2::margin(b = 8)),
+
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.major.y = element_line(color = "grey90", linewidth = 0.4),
+
+    axis.title = element_text(face = "bold"),
+    axis.text  = element_text(color = "grey20"),
+
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    legend.text  = element_text(size = 10),
+    legend.key.height = unit(0.35, "cm"),
+    legend.margin =  ggplot2::margin(t = 6),
+
+    panel.spacing = unit(0.8, "lines")
+  ) +
+  guides(
+    fill = guide_legend(nrow = 3, byrow = TRUE)
+  )
+save(year_hist, file = "../../../Output/Paper1_Output_Submission2/Plots/year_hist.RData")
+
+```
+
+
+```{r}
+
+```
+
+`

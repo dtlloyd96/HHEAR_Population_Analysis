@@ -1,0 +1,46 @@
+# OS and editor cruft
+.DS_Store
+.Rhistory
+.Rapp.history
+.Rproj.user/
+*.Rproj
+__pycache__/
+*.py[cod]
+*.bak
+node_modules/
+
+# Knit and run artefacts. The .html renders of these Rmds embed printed data
+# frames, so they are participant data as much as they are documentation.
+*.html
+*_files/
+*_cache/
+Rplots.pdf
+*.log
+
+# Participant data never belongs in this repository. Input/ and Output/ are
+# structural placeholders only -- the underlying HHEAR data must be obtained
+# from https://hheardatacenter.mssm.edu/ and run through the cleaning scripts
+# locally. If a genuinely non-sensitive file ever needs tracking, add an
+# explicit `!` exception below rather than relaxing these rules.
+Input/*
+Output/*
+!Input/README.md
+!Output/README.md
+
+# Data interchange formats, anywhere in the tree
+*.RData
+*.rda
+*.rds
+*.Rds
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.sav
+*.dta
+*.parquet
+*.feather
+
+# Manuscript binaries (generated -- see Coding/Supplementary_Build/)
+*.docx
+*.doc

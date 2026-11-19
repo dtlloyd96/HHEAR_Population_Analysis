@@ -61,13 +61,17 @@ AIRWEIGHS_SDOH <- AIRWEIGHS_data_list[["AIRWEIGHS_Epi"]] %>%
       dmgrphcincome == 11 ~ "Over_49k"
     )
   ) %>%
+  mutate(Location = "Baltimore",
+         Location_Region = "East_Coast",
+         Year = "2017",
+         Center = "Michigan") %>% 
   select(-tsgender, -childrace_all, -dmgrphcprimaryeducation, -dmgrphcincome, -dmgrphcchldrace)
 
 # CCREOH ------------------------------------------------------------------
-CCREOH_SDOH <- CCREOH_data_list[["CCREOH_Epi"]] %>%
+CCREOH_SDOH <- CCREOH_data_list[["CCREOH_Epi"]] %>% 
   select(
     Mat_PID = PID, Child_PID = CHILD_PID, Mat_Age = v107,
-    Mat_Edu_Cat = v112a, Mat_Income_Cat = v115a, Mat_BMI = v111c, b030
+    Mat_Edu_Cat = v112a, Mat_Income_Cat = v115a, Mat_BMI = v111c, b030, v113c,Mat_Income = v115a
   ) %>%
   mutate(
     Child_Sex = ifelse(b030 == 1, "M", "F"),  # CHECK: verify coding (1=male?)
@@ -81,11 +85,51 @@ CCREOH_SDOH <- CCREOH_data_list[["CCREOH_Epi"]] %>%
       Mat_Edu_Cat == 7 ~ "Four_Year_College_Degree",
       Mat_Edu_Cat == 8 ~ "Some_Grad_School",
       is.na(Mat_Edu_Cat) ~ NA_character_
+    ),
+    # Income, added 2026-08-10. The note here used to read "Mat_Income_Cat
+    # available but not mapped; left dropped below" -- but the raw code was
+    # aliased into Mat_Income in the select() above, so CCREOH was the only
+    # cohort carrying bare ordinal codes 1-8 where everything else carries
+    # bracket labels. Anything grouping on Mat_Income dropped CCREOH silently.
+    #
+    # v115a is MONTHLY income in Surinamese dollars, so it has no direct
+    # conversion to the US annual USD brackets. Per the Methods ("in
+    # international cohorts with different education and income strata than the
+    # United States, we used the relative rank of each for harmonization"), the
+    # eight ordered SRD bands are mapped onto the three US bands by rank:
+    #   1  0-399      2  400-799     3  800-1499    -> lowest   (0_25k)
+    #   4  1500-2999  5  3000-4999                  -> middle   (25_49k)
+    #   6  5000-9999  7  10000-14999  8  15000+     -> highest  (Over_49k)
+    # This is a rank correspondence, not a currency conversion. JUDGEMENT CALL:
+    # the 3/2/3 split is even across the eight bands; confirm it matches how the
+    # other international cohorts were harmonized before relying on the numbers.
+    Mat_Income = case_when(
+      Mat_Income_Cat %in% 1:3 ~ "0_25k",
+      Mat_Income_Cat %in% 4:5 ~ "25_49k",
+      Mat_Income_Cat %in% 6:8 ~ "Over_49k",
+      TRUE ~ NA_character_
     )
-    # NOTE: Mat_Income_Cat available but not mapped; left dropped below.
   ) %>%
-  select(-Mat_Edu_Cat, -Mat_Income_Cat, -b030, -Child_PID)
+  mutate(Year = "2018",
+         Center = "Wadsworth",
+         Location_Region = "South_America") %>% 
+    mutate(
+    Mat_Race = case_when(
+      v113c == 1 ~ "Chinese",
+      v113c == 2 ~ "Creole",
+      v113c == 3 ~ "Hindustani",
+      v113c == 4 ~ "Indigenous",
+      v113c == 5 ~ "Javanese",
+      v113c == 6 ~ "Maroon",
+      v113c == 7 ~ "Mixed",
+      v113c == 8 ~ "Else",
+      is.na(v113c) ~ NA_character_,
+      TRUE ~ "Other / Unknown"
+    )
+  ) %>% 
+  select(-Mat_Edu_Cat, -Mat_Income_Cat, -b030, -Child_PID,-v113c)
 
+length(unique(CCREOH_SDOH$Mat_PID))
 # CEHC --------------------------------------------------------------------
 CEHC_SDOH <- CEHC_data_list[["CEHC_Epi"]] %>%
   select(
@@ -132,6 +176,9 @@ CEHC_SDOH <- CEHC_data_list[["CEHC_Epi"]] %>%
     ),
     Child_Sex = ifelse(sex == 1, "F", "M")  # FIXME: confirm coding; 1→Female seems unusual
   ) %>%
+  mutate(Year = "2018",
+         Center = "Michigan:Minnesota",
+         Location_Region ="Midwest") %>% 
   select(-Mat_Income_Cat, -Mat_Race_Cat, -sex, -marital_status, -Mat_Edu_Cat, -Child_PID)
 
 # CHARGE ------------------------------------------------------------------
@@ -187,6 +234,9 @@ CHARGE_SDOH <- CHARGE_data_list[["CHARGE_Epi"]] %>%
       ChildRace_3cat == 3 ~ "Hispanic"
     )
   ) %>%
+  mutate(Year = "2018",
+         Center = "Wadsworth",
+         Location_Region = "West_Coast") %>% 
   select(-MomEdu_4cat, -DadEdu_4cat, -MaxEdu_4cat, -MomRace, -DadRace, -ChildRace_3cat, -ChildAgeMos)
 
 # DAPS --------------------------------------------------------------------
@@ -216,6 +266,9 @@ DAPS_SDOH <- DAPS_data_list[["DAPS_Epi"]] %>%
       demo_school_code %in% c(13, 14, 15) ~ "Some_College"
     )
   ) %>%
+  mutate(Year = "2016",
+         Center = "Emory:Minnesota",
+         Location_Region = "Midwest") %>% 
   select(-daps_spiro_gender_visit1, -demo_hisp_latino, -demo_racialafam, -demo_income_code, -demo_school_code)
 
 # DEPART ------------------------------------------------------------------
@@ -232,6 +285,9 @@ DEPART_SDOH <- DEPART_data_list[["DEPART_Epi"]] %>%
       fam_income == 4 ~ "Over_49k"
     )
   ) %>%
+  mutate(Year = "2017",
+         Center = "Mount_Sinai",
+         Location_Region = "West_Coast") %>% 
   select(-race, -ethnicity, -gender, -fam_income)
 
 # DISCOVER ----------------------------------------------------------------
@@ -260,6 +316,9 @@ DISCOVER_SDOH <- DISCOVER_data_list[["DISCOVER_EPI"]] %>%
       grade_care == 3 ~ "Some_College"
     )
   ) %>%
+  mutate(Year = "2017",
+         Center = "Michigan",
+         Location_Region = "East_Coast") %>% 
   select(-insurance, -income, -grade_care, -male, -black) %>%
   group_by(Child_PID) %>%
   slice_head(n = 1) %>%
@@ -268,7 +327,10 @@ DISCOVER_SDOH <- DISCOVER_data_list[["DISCOVER_EPI"]] %>%
 # EEICC -------------------------------------------------------------------
 EEICC_SDOH <- EEICC_data_list[["EEICC_Epi"]] %>%
   select(Child_PID = PID, Child_Age = age) %>%
-  mutate(Location = "Baltimore")
+  mutate(Location = "Baltimore",
+         Year = "2018",
+         Center = "Michigan",
+         Location_Region = "East_Coast")
 
 # ELEMENT -----------------------------------------------------------------
 ELEMENT_SDOH <- ELEMENT_data_list[["ELEMENT_Epi"]] %>%
@@ -291,7 +353,11 @@ ELEMENT_SDOH <- ELEMENT_data_list[["ELEMENT_Epi"]] %>%
       MARITAL_STATUS == 7 ~ "Not_Answered"
     )
   ) %>%
+  mutate(Year = "2016",
+         Center = "Michigan",
+         Location_Region = "Central_America") %>% 
   select(-DELIVERY_SEX, -SmHx, -MARITAL_STATUS)
+save(ELEMENT_SDOH, file = "../Input/Harmonized_Datasets/ELEMENT_SDOH_Clean.RData")
 
 # (DEBUG) Example joins; comment out for production -----------------------
 # left_join(ELEMENT_Targeted, ELEMENT_SDOH, by = "Child_PID") %>% View   # NOTE: interactive
@@ -337,6 +403,9 @@ ESPINA_SDOH <- ESPINA_data_list[["ESPINA_Epi"]] %>%
       TRUE ~ "No_Education"
     )
   ) %>%
+  mutate(Year = "2018",
+         Center = "Emory:Minnesota",
+         Location_Region = "South_America") %>% 
   select(-c_gender, -c_d8civilstatusm, -c_d8civilstatus)
 
 # GOALS -------------------------------------------------------------------
@@ -370,6 +439,9 @@ GOALS_SDOH <- GOALS_data_list[["GOALS_Epi"]] %>%
     ),
     Own_Home = ifelse(OWNHOME == 1, "Yes", "No")
   ) %>%
+  mutate(Year = "2017",
+         Center = "Minnesota",
+         Location_Region = "West_Coast") %>% 
   select(-CHISPRACE, -CHISP, -SEX, -MARITAL, -INCOME, -MAX_PARED, -OWNHOME)
 
 # GOC ---------------------------------------------------------------------
@@ -389,6 +461,9 @@ GOC_SDOH <- GOC_data_list[["GOC_Epi"]] %>%
       educ_mom_y == 99 ~ NA_character_
     )
   ) %>%
+  mutate(Year = "2017",
+         Center = "Emory:Mount_Sinai",
+         Location_Region = "South_America") %>% 
   select(-educ_mom_y)
 
 # IMBEDD ------------------------------------------------------------------
@@ -453,6 +528,9 @@ IMBEDD_SDOH <- IMBEDD_data_list[["IMBEDD_Epi"]] %>%
       MaxEdu %in% 7:8 ~ "Some_Grad_School"
     )
   ) %>%
+  mutate(Year = "2016",
+         Center = "Emory",
+         Location_Region = "West_Coast") %>% 
   select(-MomEdu, -DadEdu, -MaxEdu, -OwnHome, -COIRace, -MomRace, -DadRace)
 
 # MADRES (maternal PID) ---------------------------------------------------
@@ -464,7 +542,7 @@ MADRES_SDOH <- MADRES_data_list[["MADRES_Epi"]] %>%
     gender, t1_home
   ) %>%
   mutate(
-    Location = "Los_Angeles",
+    Location = "California",
     Child_Age = 0,
     Child_Sex = ifelse(gender == 1, "M", "F"),
     Mat_Edu = case_when(
@@ -529,6 +607,9 @@ MADRES_SDOH <- MADRES_data_list[["MADRES_Epi"]] %>%
       t1_home == 9 ~ "Garage"
     )
   ) %>%
+  mutate(Year = "2016",
+         Center = "Emory",
+         Location_Region = "West_Coast") %>% 
   select(
     -t1_demo_dad_race, -t1_demo_dad_hispanic, -t1_demo_hispanic, -t1_demo_race,
     -t1_demo_edu, -t1_demo_marital, -t1_demo_dad_edu, -baby_race, -baby_hispanic,
@@ -599,6 +680,9 @@ MARBLES_SDOH <- MARBLES_data_list[["MARBLES_Epi"]] %>%
       MaxEdu %in% 7:8 ~ "Some_Grad_School"
     )
   ) %>%
+    mutate(Year = "2016",
+         Center = "Emory",
+         Location_Region = "West_Coast") %>% 
   select(-MomEdu, -DadEdu, -MaxEdu, -OwnHome, -COIRace, -MomRace, -DadRace, -Child_YOB)
 
 # MDUC --------------------------------------------------------------------
@@ -624,9 +708,15 @@ MDUC_SDOH <- MDUC_data_list[["MDUC_Epi"]] %>%
       levelf == 66 ~ "No_Education"
     )
   ) %>%
+  mutate(Year = "2016",
+         Center = "Emory:Mount_Sinai",
+         Location_Region = "Africa") %>% 
   select(-sex, -race, -highesteducation, -levelm, -levelf)
 
 # MEBCO -------------------------------------------------------------------
+
+mean(MEBCO_data_list[["MEBCO_Epi"]]$wateras_c1,na.rm = T)
+  
 MEBCO_SDOH <- MEBCO_data_list[["MEBCO_Epi"]] %>%
   select(Child_PID = PID, Mat_BMI = bmi, education, gender, Mat_Age = age) %>%
   mutate(
@@ -643,6 +733,9 @@ MEBCO_SDOH <- MEBCO_data_list[["MEBCO_Epi"]] %>%
     Child_Sex = ifelse(gender == 1, "M", "F"),  # CHECK: verify coding
     Child_Age = 0
   ) %>%
+  mutate(Year = "2016",
+         Center = "RTI",
+         Location_Region = "Asia") %>% 
   select(-gender, -education)
 
 # NASH --------------------------------------------------------------------
@@ -663,13 +756,16 @@ NASH_SDOH <- NASH_data_list[["NASH_Epi"]] %>%
     ),
     Child_Sex = ifelse(sex == 1, "M", "F")
   ) %>%
+  mutate(Year = "2017",
+         Center = "Emory",
+         Location_Region = "United_States") %>% 
   select(-sex, -ethnicity, -race1_indian, -race2_asian, -race3_black, -race4_native, -race5_white, -race6_refused)
 
 # NFGS --------------------------------------------------------------------
 NFGS_SDOH <- NFGS_data_list[["NFGS_Epi"]] %>%
   select(
     Child_PID = PID, Child_Age = CHILD_AGE, CHILD_GENDER, AI_AK, ASIAN, BLACK, HW_PI,
-    WHITE, MIXED, CHILD_ETH, MOM_EDUC, DAD_EDUC, INCOME, Child_BMI = BMI
+    WHITE, MIXED, CHILD_ETH, MOM_EDUC, DAD_EDUC, INCOME, Child_BMI = BMI,Site_Location = SITE
   ) %>%
   mutate(
     Location = "United_States",
@@ -701,6 +797,9 @@ NFGS_SDOH <- NFGS_data_list[["NFGS_Epi"]] %>%
       INCOME %in% 9:10 ~ "Over_100k"
     )
   ) %>%
+  mutate(Year = "2018",
+         Center = "Michigan",
+         Location_Region = "United_States") %>% 
   select(-CHILD_GENDER, -AI_AK, -ASIAN, -BLACK, -HW_PI, -WHITE, -MIXED, -CHILD_ETH, -MOM_EDUC, -DAD_EDUC, -INCOME)
 
 # NHBCS_Cot ---------------------------------------------------------------
@@ -744,6 +843,9 @@ NHBCS_Cot_SDOH <- NHBCS_Cot_data_list[["NHBCS_Cot_Epi"]] %>%
       PNQSchoolLvl == 5 ~ "Some_Grad_School"
     )
   ) %>%
+  mutate(Year = "2016",
+         Center = "Minnesota",
+         Location_Region = "East_Coast") %>% 
   select(-PNQRelatStat, -sex, -PNQSchoolLvl, -Bby_Hisp, -bby_race, -Mth_Hisp, -mth_race) %>%
   mutate(Mat_Age = ifelse(Mat_Age >= 60, NA, Mat_Age))
 
@@ -770,14 +872,17 @@ NHBCS_SDOH <- NHBCS_data_list[["NHBCS_Epi"]] %>%
       PNQSchoolLvl == 5 ~ "Some_Grad_School"
     ),
     Mat_Race = ifelse(mth_white == 1, "White", "NonWhite")
-  ) %>%
+  )   %>% 
+  mutate(Year = "2016",
+         Center = "Minnesota",
+         Location_Region = "East_Coast") %>% 
   select(-PNQRelatStat, -bbymale, -PNQSchoolLvl, -mth_white, -Child_PID)
 
 # nuMoM2b -----------------------------------------------------------------
 nuMoM2b_SDOH <- nuMoM2b_data_list[["nuMoM2b_Epi"]] %>%
   select(
     Mat_PID = PID, sex = CBAA02, Mat_Smoking = V1AG07, newrace, Mat_BMI = BMI,
-    fam_income = V1AF14, Mat_Age = Age_at_V1
+    fam_income = V1AF14, Mat_Age = Age_at_V1, Site
   ) %>%
   mutate(
     Location = "United_States",
@@ -798,7 +903,25 @@ nuMoM2b_SDOH <- nuMoM2b_data_list[["nuMoM2b_Epi"]] %>%
       fam_income %in% 12:14 ~ "Over_100k"
     )
   ) %>%
-  select(-sex, -newrace, -fam_income)
+  mutate(Year = "2016",
+         Center = "Michigan",
+         Location_Region = "United_States") %>% 
+  mutate(
+    Site_Location = case_when(
+      Site == 1 ~ "Case Western Reserve University",
+      Site == 2 ~ "Columbia University",
+      Site == 3 ~ "Indiana University",
+      Site == 4 ~ "Magee-Women's Hospital",
+      Site == 5 ~ "Northwestern University",
+      Site == 6 ~ "University of California Irvine",
+      Site == 7 ~ "University of Pennsylvania",
+      Site == 8 ~ "University of Utah",
+      is.na(Site) ~ NA_character_,
+      TRUE ~ "Other / Unknown"
+    )
+  ) %>% 
+  select(-sex, -newrace, -fam_income,-Site)
+save(nuMoM2b_SDOH, file = "../Input/Harmonized_Datasets/nuMoM2b_SDOH_Clean.RData")
 
 # PARENTs -----------------------------------------------------------------
 PARENTs_SDOH <- PARENTs_data_list[["PARENTs_Epi"]] %>%
@@ -833,11 +956,15 @@ PARENTs_SDOH <- PARENTs_data_list[["PARENTs_Epi"]] %>%
       income_personal == "More than $100,000" ~ "Over_100k"
     )
   ) %>%
+  mutate(Year = "2017",
+         Center = "Emory",
+         Location_Region = "West_Coast") %>% 
   select(-smoking, -Race_of_mother, -education_of_mother, -income_personal)
 
 # SEARCH ------------------------------------------------------------------
-SEARCH_SDOH <- SEARCH_data_list[["SEARCH_Epi"]] %>%
-  select(Child_PID = PID, Child_Sex = gender, race_ethnic, maxedu_base, Child_Age = age_ipv) %>%
+SEARCH_SDOH <- SEARCH_data_list[["SEARCH_Epi"]] %>% 
+  select(Child_PID = PID, Child_Sex = gender, race_ethnic, maxedu_base, Child_Age = age_ipv,
+         Site_Location = clinic) %>%
   mutate(
     Location = "United_States",
     Child_Race = case_when(
@@ -852,6 +979,9 @@ SEARCH_SDOH <- SEARCH_data_list[["SEARCH_Epi"]] %>%
       maxedu_base == 4 ~ "Some_College"
     )
   ) %>%
+  mutate(Year = "2017",
+         Center = "Emory",
+         Location_Region = "United_States") %>% 
   select(-race_ethnic, -maxedu_base)
 
 # SICAS -------------------------------------------------------------------
@@ -883,6 +1013,9 @@ SICAS_SDOH <- SICAS_data_list[["SICAS_Epi"]] %>%
       household_income %in% 9:10 ~ "0_25k"
     )
   ) %>%
+  mutate(Year = "2020",
+         Center = "Mount_Sinai",
+         Location_Region = "East_Coast") %>% 
   select(
     -gender_form03, -ethnicity_form03, -race_form03___am_indian, -race_form03___asian,
     -race_form03___hawaii, -race_form03___black, -race_form03___white, -race_form03___other,
@@ -911,6 +1044,9 @@ SLC_SDOH <- SLC_data_list[["SLC_Epi"]] %>%
       income_VIS1 %in% 8:10 ~ "Over_49k"
     )
   ) %>%
+  mutate(Year = "2020",
+         Center = "Wadsworth",
+         Location_Region = "East_Coast") %>% 
   select(-race, -gender, -education_VIS1, -income_VIS1, -childage_VIS1)
 
 # TEDDY -------------------------------------------------------------------
@@ -957,6 +1093,9 @@ TEDDY_SDOH <- TEDDY_data_list[["TEDDY_Epi"]] %>%
       cc == 6 ~ "Sweden"
     )
   ) %>%
+  mutate(Year = "2017",
+         Center = "Mount_Sinai",
+         Location_Region = "Worldwide") %>% 
   select(
     -Sex, -Race_Asian, -Race_BlackorAfricanAmerican,
     -Race_NativeAmericanAlaskanNati, -Race_NativeHawaiianorotherPaci,
@@ -967,7 +1106,7 @@ TEDDY_SDOH <- TEDDY_data_list[["TEDDY_Epi"]] %>%
 save(TEDDY_SDOH, file = "../Input/Harmonized_Datasets/TEDDY_SDOH_Clean.RData")
 
 # TSIC --------------------------------------------------------------------
-TSIC_SDOH <- TSIC_data_list[["TSIC_Epi"]] %>%
+TSIC_SDOH <- TSIC_data_list[["TSIC_Epi"]] %>% 
   select(
     Child_PID = PID, Mat_Age = age, edu, ethnic, race, income,
     Child_Age = agechild, chldsex, childethn, childrace, smhabits, typehme
@@ -1017,7 +1156,18 @@ TSIC_SDOH <- TSIC_data_list[["TSIC_Epi"]] %>%
       smhabits == 3 ~ 0
     )
   ) %>%
-  select(-edu, -ethnic, -race, -income, -chldsex, -childethn, -childrace, -smhabits, -typehme)
+  mutate(Year = "2017",
+         Center = "Emory:Minnesota",
+         Location_Region = "Midwest") %>% 
+  select(-edu, -ethnic, -race, -income, -chldsex, -childethn, -childrace, -smhabits, -typehme) %>%
+  # TSIC_Epi carries two rows per participant: 822 rows for 411 children. The pairs
+  # are identical except for smhabits -> Mat_Smoking, where one row holds the value
+  # and the other is NA (no participant has two conflicting values). Left as-is this
+  # doubles TSIC on any join. Collapse to one row per child, first non-missing wins.
+  group_by(Child_PID) %>%
+  summarise(across(everything(),
+                   ~ if (all(is.na(.x))) dplyr::first(.x) else .x[!is.na(.x)][1]),
+            .groups = "drop")
 
 # USCEHC ------------------------------------------------------------------
 USCEHC_SDOH <- USCEHC_data_list[["USCEHC_Epi"]] %>%
@@ -1037,16 +1187,22 @@ USCEHC_SDOH <- USCEHC_data_list[["USCEHC_Epi"]] %>%
       Parental_Education == 5 ~ "Some_Grad_School"
     )
   ) %>%
+    mutate(Year = "2016",
+           Center = "Emory",
+           Location_Region = "West_Coast") %>% 
   select(-Sex, -Ethnicity, -Parental_Education)
 
 # VAPS (no SDOH) ----------------------------------------------------------
-VAPS_SDOH <- VAPS_data_list[["VAPS_Epi"]] %>%
+VAPS_SDOH <- VAPS_data_list[["VAPS_Epi"]] %>% 
   select(Child_PID = PID) %>%
-  mutate(Location = "United_States")
+  mutate(Location = "United_States",
+         Year = "2016",
+         Center = "Emory:Minnesota",
+         Location_Region = "United_States")
 
 # VDAART ------------------------------------------------------------------
-VDAART_SDOH <- VDAART_data_list[["VDAART_Epi"]] %>%
-  select(Child_PID = PID, cgender, crace, cethnicity, age_at_collection_days) %>%
+VDAART_SDOH <- VDAART_data_list[["VDAART_Epi"]] %>% 
+  select(Child_PID = PID, cgender, crace, cethnicity, age_at_collection_days, site) %>%
   mutate(
     Child_Age = age_at_collection_days / 365,
     Location = "United_States",
@@ -1060,7 +1216,19 @@ VDAART_SDOH <- VDAART_data_list[["VDAART_Epi"]] %>%
       crace == "Other" ~ "Other"
     )
   ) %>%
-  select(-cgender, -cethnicity, -crace)
+    mutate(Year = "2018",
+           Center = "Michigan",
+           Location_Region = "United_States") %>% 
+    mutate(
+    Site_Location = case_when(
+      site == 1 ~ "San_Diego",
+      site == 2 ~ "Boston",
+      site == 3 ~ "St_Louis",
+      is.na(site) ~ NA_character_,
+      TRUE ~ "Other / Unknown"
+    )
+  ) %>% 
+  select(-cgender, -cethnicity, -crace,-site)
 
 # VIVA --------------------------------------------------------------------
 VIVA_SDOH <- VIVA_data_list[["VIVA_Epi"]] %>%
@@ -1107,6 +1275,9 @@ VIVA_SDOH <- VIVA_data_list[["VIVA_Epi"]] %>%
     ),
     Child_Age = 0
   ) %>%
+    mutate(Year = "2017",
+           Center = "Mount_Sinai",
+           Location_Region = "East_Coast") %>% 
   select(
     -race2_mom_epi_epia_d, -education_mom_epi_epia_d, -smokpreg_final_d, -income_hh_epq_epqa_d,
     -female_d, -race_child_3y_dx
@@ -1151,6 +1322,9 @@ ZIP_SDOH <- ZIP_data_list[["ZIP_EPI_1"]] %>%
       sea_degree_spouse %in% 16:18 ~ "Some_Grad_School"
     )
   ) %>%
+    mutate(Year = "2017",
+           Center = "Mount_Sinai",
+           Location_Region = "South_America") %>% 
   select(
     -sea_mstatus, -sea_race, -sea_degree_you, -sea_degree_spouse, -tri_resid_typ, -Child_PID
   )
@@ -1173,7 +1347,10 @@ CTS_SDOH <- CTS_data_list[["CTS_EPI"]] %>%
     ),
     Mat_Age = case_when(age == 1 ~ 45, age == 2 ~ 55, age == 3 ~ 65, age == 4 ~ 75)
   ) %>%
-  select(Mat_PID, Location, Mat_Race, Mat_Age)
+  select(Mat_PID, Location, Mat_Race, Mat_Age) %>% 
+  mutate(Year = "2020",
+         Center = "Mount_Sinai",
+         Location_Region = "West_Coast") 
 
 # DCHS --------------------------------------------------------------------
 DCHS_SDOH <- DCHS_data_list[["DCHS_EPI"]] %>%
@@ -1184,17 +1361,21 @@ DCHS_SDOH <- DCHS_data_list[["DCHS_EPI"]] %>%
   mutate(
     Location = "South_Africa",
     Child_Sex = ifelse(sex == 1, "F", "M"),  # CHECK: verify coding
-    Child_Race = "South_African",
-    Mat_Race = "South_African",
+    Child_Race = ifelse(ethnicity == 1,"SouthAfrican","Mixed_SouthAfrican"),
+    Mat_Race = ifelse(ethnicity == 1,"SouthAfrican","Mixed_SouthAfrican"),
     Child_Age = 0,
     Mat_Edu = case_when(
       maternal_education == 0 ~ "Primary_Education",
       maternal_education %in% 1:2 ~ "High_School",
       maternal_education == 3 ~ "Some_College"
     ),
-    Mat_Income = "0_25k"
+    Mat_Income = maternal_income
   ) %>%
-  select(Mat_PID, Child_PID, Location, Child_Sex, Child_Race, Mat_Edu, Mat_Age, Child_Age)
+  select(Mat_PID, Child_PID, Location, Child_Sex, Child_Race, Mat_Edu, Mat_Age, Child_Age) %>% 
+  mutate(Year = "2020",
+         Center = "Mount Sinai",
+         Location_Region = "Africa")
+save(DCHS_SDOH, file = "../Input/Harmonized_Datasets/DCHS_SDOH_Clean.RData")
 
 # OBSS (adult cohort) -----------------------------------------------------
 OBSS_SDOH <- OBSS_data_list[["OBSS_EPI"]] %>%
@@ -1210,9 +1391,203 @@ OBSS_SDOH <- OBSS_data_list[["OBSS_EPI"]] %>%
       race == "Other" ~ "Other"
     )
   ) %>%
-  dplyr::filter(Adult_Sex == "F") %>% 
-  select(Mat_PID, Location, Mat_Race, Mat_Age)
+  #dplyr::filter(Adult_Sex == "F") %>% 
+  select(Mat_PID, Location, Mat_Race, Mat_Age) %>% 
+  mutate(Year = "2020",
+         Center = "Mount_Sinai:Wadsworth",
+         Location_Region = "East_Coast")
 
+
+
+```
+
+```{r}
+THS_SDOH <- THS_data_list[["THS_EPI"]] %>% 
+  dplyr::select(Mat_PID = PID,sex,Mat_Age = age,race,EDUC) %>% 
+    mutate(Year = "2020",
+           Center = "Wadsworth",
+           Location = "Tobago",
+           Location_Region = "Central_America") %>% 
+    mutate(Adult_Sex = ifelse(sex == 1,"F","M")) %>% 
+  mutate(
+    Mat_Race = case_when(
+      # African / African-mixed
+      race %in% c(1, 2, 3) ~ "Black",
+
+      # South Asian
+      race == 4 ~ "Asian",
+
+      # American Indian / Alaska Native
+      race == 5 ~ "Native_American",
+
+      # White (incl. Hispanic / Middle Eastern)
+      race %in% c(6, 7, 9) ~ "White",
+
+      # East Asian
+      race == 8 ~ "Asian",
+
+      # Missing or other
+      is.na(race) ~ NA_character_,
+      TRUE ~ "Other"
+    )
+  ) %>% 
+    mutate(
+    Mat_Edu = case_when(
+      EDUC == 1 ~ "No_Education",
+      EDUC == 2 ~ "Primary_Education",
+      EDUC == 3 ~ "Secondary_Education",
+      EDUC == 4 ~ "Secondary_Education",
+      EDUC == 5 ~ "Some_College",
+      EDUC == 6 ~ "Some_College",
+      EDUC == 7 ~ "Four_Year_College_Degree",
+      is.na(EDUC) ~ NA_character_,
+      TRUE ~ "Other / Unknown"
+    )
+  ) %>% 
+
+    dplyr::select(-sex,-race,-EDUC) 
+
+```
+
+```{r}
+NYUWHS_SDOH <- NYUWHS_data_list[["NYUWHS_EPI"]] %>%  
+  dplyr::select(Mat_PID = PID,Mat_Age = Age,Edu,race) %>% 
+  mutate(
+    Mat_Edu = case_when(
+      Edu == 1 ~ "High_School",
+      Edu == 2 ~ "High_School",
+      Edu == 3 ~ "Some_College",
+      Edu == 4 ~ "Some_College",
+      Edu == 5 ~ "Four_Year_College_Degree",
+      Edu == 6 ~ "Some_Graduate_School",
+      Edu == 7 ~ "Graduate_School",
+      Edu == 8 ~ "Other",
+      Edu == 9 ~ "Unknown",
+      is.na(Edu) ~ NA_character_,
+      TRUE ~ "Other / Unknown"
+    )
+  ) %>% 
+  mutate(Year = "2021",
+         Center = "Mount_Sinai",
+         Location = "New_York",
+         Location_Region = "East_Coast") %>% 
+  mutate(
+    Mat_Race = case_when(
+      race == 1 ~ "White",
+      race == 2 ~ "Black",
+      race == 3 ~ "Other",
+      race == 4 ~ "Asian",
+      race == 5 ~ "Hispanic",
+      race == 6 ~ "Native_American",
+      is.na(race) ~ NA_character_,
+      TRUE ~ "Other / Unknown"
+    )
+  ) 
+
+```
+
+```{r}
+PROGRESS_SDOH <- PROGRESS_data_list[["PROGRESS_EPI"]] %>% 
+  dplyr::select(Child_PID= CHILD_PID,sexo_h00,educ_3cat2T,Child_Age = childage_spiro) %>% 
+    mutate(
+    Mat_Edu = case_when(
+      educ_3cat2T == 1 ~ "Primary_Education",
+      educ_3cat2T == 2 ~ "High_School",
+      educ_3cat2T == 3 ~ "Some_College",
+      is.na(educ_3cat2T) ~ NA_character_,
+      TRUE ~ "Other / Unknown"
+    )
+  ) %>% 
+  mutate(Location = "Mexico_City",
+         Year = "2021",
+         Center = "Duke:Minnesota",
+         Location_Region = "Central_America") %>% 
+  mutate(Child_Sex = ifelse(sexo_h00 == 1,"M","F")) %>%
+  dplyr::select(-educ_3cat2T,sexo_h00)
+```
+
+
+```{r}
+# =========================================================================
+# NEW COHORTS (added 2026-08): GRAPHS, ATLAA, SWSD SDOH
+# Each produces a <COHORT>_SDOH object picked up automatically by the
+# grep("SDOH$", ...) auto-bind in the merge chunk below. Cross-country
+# education codes are mapped to the existing US-centric vocabulary
+# approximately (flagged with CHECK), mirroring how DCHS/other non-US cohorts
+# are handled above. IMHRD has no participant-level demographics and is omitted.
+# =========================================================================
+
+# GRAPHS (Ghana, maternal urine) ------------------------------------------
+GRAPHS_SDOH <- GRAPHS_data_list[["GRAPHS_Epi"]] %>%
+  transmute(
+    Mat_PID     = as.character(PID),
+    Mat_Age     = suppressWarnings(as.numeric(Maternal_Age_years)),
+    Mat_BMI     = suppressWarnings(as.numeric(Maternal_BMI)),
+    Asset_Index = suppressWarnings(as.numeric(Asset_Index)),   # continuous SES; NOT an income bracket
+    Mat_Edu = case_when(                                        # Ghana education codes
+      Maternal_Education_Level_code == 1 ~ "No_Education",       # no formal education (0 years)
+      Maternal_Education_Level_code == 2 ~ "Primary_Education",  # primary (up to 6 years)
+      Maternal_Education_Level_code == 3 ~ "Secondary_Education",# middle school / JHS (lower secondary)
+      Maternal_Education_Level_code == 4 ~ "High_School",        # secondary school / SHS (upper secondary)
+      TRUE ~ NA_character_
+    ),
+    Mat_Race = "Ghanaian"                                       # CHECK: cohort-level assumption; follows the
+                                                                # existing nationality precedent (e.g. "Ugandan")
+  ) %>%
+  # Center is the HHEAR lab/analysis hub (Emory, Minnesota, RTI, ...), NOT the
+  # cohort or city - left NA until the analysing hub for GRAPHS is confirmed.
+  mutate(Location = "Accra", Location_Region = "Africa")   # Accra, Ghana
+
+# ATLAA (Atlanta, USA, maternal PFAS; African-American cohort) -------------
+ATLAA_SDOH <- ATLAA_data_list[["ATLAA_Epi"]] %>%
+  transmute(
+    Mat_PID = as.character(Subjectid),
+    Mat_Age = suppressWarnings(as.numeric(age_enrollment)),
+    Mat_BMI = suppressWarnings(as.numeric(FirstPretalBMI)),
+    Child_Sex = case_when(Sex == 1 ~ "M", Sex == 2 ~ "F", TRUE ~ NA_character_),  # infant sex
+    Mat_Edu = case_when(                                       # Education_4.level
+      `Education_4.level` == 1 ~ "Primary_Education",          # less than high school   # CHECK
+      `Education_4.level` == 2 ~ "High_School",
+      `Education_4.level` == 3 ~ "Some_College",
+      `Education_4.level` == 4 ~ "Four_Year_College_Degree",
+      TRUE ~ NA_character_
+    ),
+    Mat_Race   = "Black",                                      # CHECK: African-American cohort (design)
+    Child_Race = "Black"                                       # CHECK
+  ) %>%
+  # Center is the HHEAR lab/analysis hub (Emory, Minnesota, RTI, ...), NOT the city.
+  # Left NA until the analysing hub for ATLAA is confirmed (Emory is likely, given
+  # Atlanta, but not asserted here without documentation).
+  # Location_Region uses the US sub-region convention set by the other US cohorts
+  # (East_Coast / West_Coast / Midwest) rather than the generic "United_States",
+  # so Atlanta groups as the South instead of falling into a catch-all.
+  mutate(Location = "Atlanta", Location_Region = "South")   # Atlanta, GA
+
+# SWSD (Thailand, maternal urine neonicotinoids) --------------------------
+SWSD_SDOH <- SWSD_data_list[["SWSD_Epi"]] %>%
+  transmute(
+    Mat_PID = as.character(subjectid),
+    Mat_Age = suppressWarnings(as.numeric(age)),
+    Mat_BMI = suppressWarnings(as.numeric(BMI_v1)),
+    Child_Sex = case_when(infant_sex == 1 ~ "M", infant_sex == 2 ~ "F", TRUE ~ NA_character_),
+    Site_Location = case_when(location == 1 ~ "Chom_Thong", location == 2 ~ "Fang", TRUE ~ NA_character_),
+    Mat_Edu = case_when(                                        # Thai education codes
+      education == 1 ~ "No_Education",          # none, never attended school
+      education == 2 ~ "Primary_Education",     # P.1-6 (primary)
+      education == 3 ~ "Secondary_Education",   # M.1-3 (junior high, lower secondary)
+      education == 4 ~ "High_School",           # M.4-6 (high school, did not graduate)
+      education == 5 ~ "Some_College",          # diploma / technical school
+      education == 6 ~ "Some_College",          # attended college, did not graduate
+      education == 7 ~ "Four_Year_College_Degree",
+      TRUE ~ NA_character_
+    ),
+    Mat_Race = "Asian"                                        # CHECK: cohort-level assumption (Thailand)
+  ) %>%
+  mutate(Location = "Thailand", Location_Region = "Asia")
+```
+
+
+```{r}
 # ---------------------------
 # Merge & Post-processing
 # ---------------------------
@@ -1224,6 +1599,12 @@ bind_list <- do.call("list", mget(Pattern1))
 
 # Row-bind, adding Study id from list names
 SDOH_Data_All <- rbindlist(bind_list, use.names = TRUE, fill = TRUE, idcol = "Study")
+
+# Participant IDs are CHARACTER across all harmonized artifacts (2026-08) -- some
+# cohorts (e.g. ATLAA) use alphanumeric IDs such as "E0604". Coerce explicitly so
+# the type is deterministic and matches Harmonized_Targeted / Harmonized_Outcomes.
+SDOH_Data_All <- SDOH_Data_All %>%
+  mutate(across(any_of(c("Child_PID","Mat_PID")), as.character))
 
 # Reorder factors and coerce numerics -------------------------------------
 # (Note: some columns might be absent for some studies; relevel will create factors when present)
@@ -1245,6 +1626,20 @@ SDOH_Data_All <- SDOH_Data_All %>%
 
 save(SDOH_Data_All,file = "../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
 
+# The per-cohort *_SDOH_Clean.RData files above are written BEFORE the character
+# PID coercion, so they would keep numeric IDs and then fail to join against the
+# (character) Harmonized_Targeted / Harmonized_SDOH -- e.g.
+#   "Can't join `x$Mat_PID` with `y$Mat_PID` due to incompatible types".
+# Re-save them here with the same coercion so every artifact agrees. (2026-08)
+for (.nm in c("ELEMENT_SDOH","nuMoM2b_SDOH","TEDDY_SDOH","ZIP_SDOH","DCHS_SDOH")) {
+  if (exists(.nm)) {
+    .obj <- get(.nm) %>% mutate(across(any_of(c("Child_PID","Mat_PID")), as.character))
+    assign(.nm, .obj)
+    save(list = .nm,
+         file = paste0("../Input/Harmonized_Datasets/", sub("_SDOH$", "", .nm), "_SDOH_Clean.RData"))
+  }
+}
+rm(.nm, .obj)
 ```
 
 ```{r}

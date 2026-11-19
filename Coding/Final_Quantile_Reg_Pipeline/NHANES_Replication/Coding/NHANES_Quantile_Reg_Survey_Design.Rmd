@@ -1,0 +1,334 @@
+---
+title: "HNAHES_Quantile_Reg"
+output: html_document
+date: "2025-08-05"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(quantreg)
+library(survey)
+library(broom)
+```
+
+```{r}
+load("../Input/NHANES_ExWAS_Data.Rdata")
+```
+
+```{r}
+
+
+NH_All <- bind_rows(NHData.test %>% 
+  rownames_to_column("PID"),
+  NHData.train %>% 
+  rownames_to_column("PID")) 
+
+rm(NHData.test,NHData.train)
+
+
+
+table(NH_All$education)
+
+length(unique((NH_All$education)))
+
+
+NH_All %>% 
+  group_by(area) %>% 
+  summarise(n = n()) %>% 
+  summarise(mean(n,na.rm = T))
+
+
+sd(NH_All$RIDAGEYR,na.rm = T)
+```
+
+
+
+
+```{r}
+dsn <- svydesign(ids=~SDMVPSU, strata=~SDMVSTRA, weights=~WTMEC2YR, nest=T, data=NH_All)
+
+```
+
+
+```{r}
+suppress_all_output <- function(expr) {
+  temp_file <- tempfile()
+  con <- file(temp_file, open = "wt")
+
+  # Redirect stdout and messages
+  sink(con)
+  sink(con, type = "message")
+
+  # Suppress warnings and messages globally
+  old_warn <- getOption("warn")
+  options(warn = -1)
+
+  # Evaluate expression quietly
+  result <- suppressWarnings(
+    suppressMessages(
+      tryCatch(
+        eval(expr),
+        error = function(e) NULL  # suppress error output
+      )
+    )
+  )
+
+  # Restore options and sinks
+  options(warn = old_warn)
+  sink(NULL)
+  sink(NULL, type = "message")
+  close(con)
+
+  invisible(result)
+}
+
+```
+
+```{r}
+format.rq.svy <- function(x, rdf) {
+  V <- attr(x, "var")
+  FLAG <- length(V) == 1
+  se <- if (FLAG) sqrt(V) else sqrt(diag(V))
+  val <- cbind(as.matrix(x), se, NA, NA)
+  if (FLAG) val <- matrix(val, nrow=1)
+  val[, 3] <- val[, 1]/val[, 2]
+  val[, 4] <- 2*(1 - pt(abs(val[, 3]), rdf))
+  colnames(val) <- c("Value", "Std_Error", "T_value", "P_Value")
+  rownames(val) <- names(x)
+  return(val)
+}
+
+```
+
+
+* https://stats.stackexchange.com/questions/650071/quantile-regression-with-sampling-weights-in-r
+```{r}
+Quantile_Reg <- function(exp_var = NULL,
+                         dataset,
+                         my_outcome,
+                         Reg_Type,
+                         my_covariates,
+                         design = dsn,
+                         quantiles = c(0.05, 0.25, 0.5, 0.75, 0.95)) {
+  
+  
+  vars <- unique(c(my_outcome, exp_var, my_covariates))
+
+  mydf_ua <- dataset %>%
+    dplyr::select(all_of(vars)) %>%
+    filter(if_all(all_of(vars), ~ !is.na(.)))
+
+
+
+  if (nrow(mydf_ua) == 0) return(NULL)
+  
+  rhs <- if (is.null(exp_var)) paste(my_covariates, collapse = "+") else exp_var
+    #rhs <-  exp_var
+
+  myform <- as.formula(paste(my_outcome, "~", rhs))
+
+    # Convert to replicate weights if not already
+    if (!inherits(design, "svrep.design")) {
+      rep_design <- as.svrepdesign(design, type = "bootstrap", replicates = 50)
+    }
+
+    # ---- Replicate-weighted quantile regression ----
+    # boot_rq <- function(w, dataset, tau) {
+    #   dataset$.__w__ <- w
+    #   fit <- rq(myform, tau = tau, data = dataset, weights = dataset$.__w__)
+    #   setNames(coef(fit), names(coef(fit)))
+    # }
+    
+    rq_results <- list()
+    for (b in seq_along(quantiles)) {
+      tau_i <- quantiles[b]
+      #print(tau_i)
+      fit <- withReplicates(rep_design, quote(coef(rq(as.formula(paste(my_outcome, "~", rhs)), 
+                                                      tau = tau_i, data = dataset, weights = dataset$.__w__))))
+      mydof <- nrow(mydf_ua) - 3
+      out <- format.rq.svy(x = fit,rdf = mydof)
+      out <- as.data.frame(out) %>% 
+        mutate(Tau = tau_i) %>% 
+        rownames_to_column("Variable")
+      rq_results[[b]] <- out
+    }
+
+    ctable_final <- bind_rows(rq_results) %>%
+      mutate(Outcome = my_outcome,
+             Exposure = ifelse(is.null(exp_var), NA, exp_var))
+    
+    # ---- Predict quantiles using point weights ----
+    main_weights <- weights(design)
+    mydf_ua$.__w__ <- main_weights[as.numeric(rownames(mydf_ua))]
+
+    rq_model_final <- rq(myform, tau = quantiles, data = mydf_ua, weights = mydf_ua$.__w__)
+    predicted_quantiles <- predict(rq_model_final, newdata = mydf_ua)
+    predicted_quantiles <- as.data.frame(predicted_quantiles)
+    colnames(predicted_quantiles) <- paste0("Tau_", quantiles)
+
+    Quantile_Results <- list(mydf_ua, predicted_quantiles)
+    Final_Results <- list(Regression_Results = ctable_final,
+                          Quantile_Results = Quantile_Results)
+    return(Final_Results)
+  
+}
+
+```
+
+
+
+```{r}
+ExWAS_Function_Metab <- function(Exposure_Data, myexposures,myoutcomes, Outcome_Data,mycovars,join_var,Reg_Type){
+  
+   all_pheno_unadjusted <- list()
+  all_pheno_adjusted <- list()
+
+  #Run Regression for all outcomes
+for(j in seq_along(myoutcomes)){
+  
+  
+   pheno <- myoutcomes[j]
+  adjusted_results <- list()
+  unadjusted_results <- list()
+          
+          if(is.null(myexposures)){
+            loop_n <- "CovOnly"
+          }else(
+            loop_n = myexposures
+          )
+  
+          for(i in seq_along(loop_n)){
+          #print(i)
+            my_covariates <- mycovars
+            
+            
+            #curr_metab <- child_list_Targeted[[i]]
+            # curr_pheno <- Child_Outcomes %>% 
+            #   dplyr::select(Child_PID,all_of(pheno))
+
+            
+            curr_exposure <- Exposure_Data %>% 
+              dplyr::select(join_var,myexposures[i],all_of(my_covariates)) %>% 
+              #dplyr::filter(Study == "CEHC") %>% 
+              distinct()
+            
+            curr_pheno <- Outcome_Data %>% 
+              dplyr::select(join_var,all_of(pheno)) %>% 
+              dplyr::filter(!is.na(!!sym(pheno)))
+            
+            curr_outcome_pheno <- left_join(curr_pheno,curr_exposure,by = c(join_var)) %>%
+              mutate(!! pheno := as.numeric(!! rlang::sym(pheno))) %>%
+              distinct(.keep_all = T)
+
+            
+            curr_exp <- myexposures[i]
+
+            
+  
+#             in_silence(
+# {
+
+          Curr_Unadjusted_Results <- try(Quantile_Reg(exp_var = curr_exp,
+                                  dataset = curr_outcome_pheno,
+                                  my_outcome = pheno,
+                                  Reg_Type = Reg_Type,
+                                  my_covariates = my_covariates,
+                                  design = dsn))
+          
+          unadjusted_results[[i]] <- Curr_Unadjusted_Results
+
+          names(unadjusted_results)[i] <- curr_exp
+
+#})
+        }
+
+  
+  all_pheno_unadjusted[[j]] <- unadjusted_results
+
+  names(all_pheno_unadjusted)[j] <- myoutcomes[j]
+
+}
+
+
+return(all_pheno_unadjusted)
+  
+  
+}
+
+```
+
+
+```{r}
+NHANES_Overlap <- c("Barium, urine (ng/mL)","Beryllium, urine (ng/mL)",
+                    "Cadmium, urine (ng/mL)","Cobalt, urine (ng/mL)","Cotinine (ng/mL)",
+                    "Cesium, urine (ng/mL)","Mono-benzyl phthalate","Mono-(3-carboxypropyl) phthalate",
+                    "Mono-(2-ethyl-5-hydroxyhexyl) phthalate","Mono-(2-ethyl)-hexyl phthalate","Mono-(2-ethyl-5-oxohexl) phthalate",
+                    	"Mono-isobutyl phthalate","Molybdenum, urine (ng/mL)",
+                    	"1-napthol (ng/L)","2-napthol (ng/L)","Lead, urine (ng/mL)","Perfluorohexane sulfonic acid",
+                    "Perfluorononanoic acid","Perfluorooctanoic acid","Perfluorooctane sulfonic acid","Perfluorooctane sulfonamide",
+                    "1-pyrene (ng/L)","Antimony, urine (ng/mL)","2,4,6-trichlorophenol (ug/L) result","Thallium, urine (ng/mL)",
+                    "Uranium, urine (ng/mL)","Mercury, urine (ng/mL)","Perfluorodecanoic acid")
+```
+
+```{r}
+Overlap_Description <- ExposureDescription %>% 
+      dplyr::filter(var_desc %in% NHANES_Overlap) 
+
+Overlap_cols <- unique(Overlap_Description$var)
+```
+
+
+```{r}
+exposure_data <- NH_All %>% 
+  dplyr::select(1:32,all_of(Overlap_cols)) %>% 
+    mutate(Sex = case_when(
+    female == 1 ~ 1,
+    male == 1 ~ 0,
+    TRUE ~ NA_real_
+  )) %>% 
+    mutate(Race = case_when(
+    black == 1 ~ "Black",
+    mexican == 1 ~ "Hispanic",
+    other_hispanic == 1 ~ "Hispanic",
+    other_eth == 1 ~ "Other",
+    white == 1 ~ "White",
+    TRUE ~ NA
+  ))
+
+
+outcome_data <- NH_All %>% 
+  dplyr::select(-c(2:32))
+
+#myoutcomes <- ExposureList
+myoutcomes <- names(exposure_data)[c(33:60)]
+#myexposures <- c("RIDAGEYR","Race","Sex","SES_LEVEL" ,"education","income")
+myexposures <- c("RIDAGEYR","Sex")
+
+```
+
+
+
+```{r}
+NHANES_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = exposure_data,
+                                                   Outcome_Data = outcome_data,
+                                                 myexposures = myexposures,
+                                                myoutcomes = myoutcomes,mycovars = NULL,join_var = "PID",
+                                                Reg_Type = "Quantile")))
+
+save(NHANES_Results, file = "../Output/NHANES_QuantReg_Results_updated.RData")
+```
+
+
+```{r}
+NHANES_Results <- ExWAS_Function_Metab(Exposure_Data = exposure_data,
+                                                   Outcome_Data = outcome_data,
+                                                 myexposures = myexposures,
+                                                myoutcomes = myoutcomes,mycovars = NULL,join_var = "PID",
+                                                Reg_Type = "Quantile")
+
+```
+

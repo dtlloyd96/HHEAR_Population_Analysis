@@ -1,0 +1,1171 @@
+---
+title: "Hero Numbers — Supplementary claims vs the current analysis"
+subtitle: "HHEAR_Cross_Populations_Submission2_Version2, Supplementary tab"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    df_print: paged
+    code_folding: show
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## How to read this document
+
+Companion to `Hero_Numbers.Rmd`, which covers the Main Text tab. Same rules:
+
+- **Bold is the CURRENT value** — the number to write with.
+- ~~Struck and greyed~~ is the superseded published value, kept only so you can
+  find the sentence it replaces.
+- Anything that appears in a figure is read **from that figure's own saved data
+  object**, so the text and the figure cannot disagree.
+
+Each claim gets an id, the sentence as it reads in the Doc today, the code that
+regenerates it, and the current value.
+
+---
+
+# Part 0 — Structural problems that are not about numbers
+
+These need fixing regardless of which values you use. None of them are
+recomputable; they are inconsistencies within the document as written.
+
+```{r structural, echo=FALSE}
+struct <- data.frame(
+  id = c("X1","X2","X3","X4","X5","X6","X7"),
+  problem = c(
+    "Front matter says **Figs. S1 to S9**",
+    "Front matter says **Tables S1 to S8**",
+    "Two different sections are both numbered **S5**",
+    "Section S7 cites fig. **S13A/B/C** for correlation, Meff and cumulative score",
+    "Section S7 cites fig. **S7D** for the by-cohort cumulative-score contribution",
+    "Section S3 cites fig. **S4A-C** for the ZIP country result",
+    "Sections S5/S7 cite **Fig. 3A** and **Fig. 3B** of the main text"),
+  reality = c(
+    "There are now 22 supplementary figures (S1-S22). Added this cycle: matrix confound (S20, 2026-08-11), year trends (S12), population structure (S21), estimator comparison (S22), analyte overlap (S3) and the three determinants figures (S8-S10, 2026-11-17)",
+    "Methods cites Table S9 twice (location-only model; within-cohort models)",
+    "'S5 Demographics Associated with Exposure Levels' and 'S5 Quantile Power Analysis'",
+    "Those panels are Figure **S14**A/B/C. S13 is the QQ-plot figure",
+    "That panel is Figure **S14D**",
+    "ZIP is Figure **S5**. S4 is TEDDY",
+    "Figure 3 was replaced this cycle with the ExWAS/pooling figure. Its panels are now spread(z), decomposition, divergence and variance-share -- neither the dispersion metric nor the sociodemographic model bars are in it any more"),
+  stringsAsFactors = FALSE)
+knitr::kable(struct, col.names = c("id","reads","should read"))
+```
+
+> **X7 is the one that matters most.** Two supplementary sections point the
+> reader at main-text Figure 3 panels that no longer contain what the sentence
+> describes. The dispersion values (MDUC, DAPS, MEBCO, TSIC) and the
+> sociodemographic model bars now live in the within-study supplementary figure,
+> not Figure 3.
+
+---
+
+```{r libs}
+library(tidyverse)
+library(data.table)
+
+ROOT <- Sys.getenv("HHEAR_ROOT", normalizePath(".."))   # knit from Coding/
+OUT  <- file.path(ROOT, "Output/Paper1_Output_Submission2")
+HARM <- file.path(ROOT, "Input/Harmonized_Datasets")
+HN   <- file.path(ROOT, "Output/Hero_Numbers")
+dir.create(HN, showWarnings = FALSE, recursive = TRUE)
+
+LEDGER <- list()
+hero <- function(id, section, claim, published, now, note = "") {
+  LEDGER[[length(LEDGER) + 1]] <<- data.frame(
+    id = id, section = section, claim = claim,
+    published = as.character(published), now = as.character(now),
+    note = note, stringsAsFactors = FALSE)
+  invisible(NULL)
+}
+
+load1 <- function(path) { e <- new.env(); load(path, envir = e); get(ls(e)[1], envir = e) }
+# Read a ggplot's own data, so a number can never drift from its figure.
+figdata <- function(path) as.data.table(load1(path)$data)
+pct <- function(x, d = 1) sprintf(paste0("%.", d, "f%%"), x)
+```
+
+```{r load-data}
+H <- as.data.table(load1(file.path(HARM, "Harmonized_Targeted.RData")))
+H[, Std := sub("_Targeted$", "", Study)]
+H[, pid := fcoalesce(as.character(Child_PID), as.character(Mat_PID))]
+H[, Pop := fifelse(!is.na(Child_PID), "Child", "Adult")]
+
+# RULE (same as the main ledger): dilution markers are not exposures.
+EXP <- H[!Analyte_Code %in% c("CRE", "SG")]
+
+S <- as.data.table(load1(file.path(HARM, "Harmonized_SDOH.RData")))
+S[, Std := sub("_SDOH$", "", Study)]
+
+# Most common category of a demographic field within one study, as a percent of
+# the non-missing responses in that study. This is the rule the S1 sentences use.
+topcat <- function(col, std, k = 1) {
+  x <- S[Std == std & !is.na(get(col)) & !get(col) %in% c("", "NA"), as.character(get(col))]
+  if (!length(x)) return(NA_character_)
+  t <- sort(table(x), decreasing = TRUE)
+  if (k > length(t)) return(NA_character_)
+  sprintf("%s %s", names(t)[k], pct(100 * as.numeric(t[k]) / length(x), 0))
+}
+```
+
+---
+
+# Part 1 — Methods
+
+## M1. Which biospecimen matrix
+
+> **CLAIM (Methods, para 3).** "The chemical exposures measured in blood were
+> trace elements in <span style='color:#999'>~~MDUC and MEBCO~~</span>, all
+> other exposures across studies were measured in urine."
+>
+> **CLAIM (Methods, para 7).** "For the <span style='color:#999'>~~MDUC and
+> VIVA~~</span> cohorts, trace element concentrations were measured from blood
+> samples."
+
+Those two sentences name different cohorts, so at most one can be right. Both
+are now checkable against the `Matrix_Class` field added on 2026-08-10.
+
+```{r M1}
+mx <- EXP[!is.na(Matrix_Class), .(Std, Matrix_Class)] |> unique()
+by_std <- mx[, .(matrices = paste(sort(unique(Matrix_Class)), collapse = "+")), by = Std]
+blood_studies <- sort(by_std[matrices %like% "Blood|Serum|Plasma", Std])
+urine_only    <- sort(by_std[matrices == "Urine", Std])
+list(n_blood_any = length(blood_studies), blood = blood_studies,
+     n_urine_only = length(urine_only))
+```
+
+```{r M1-record}
+hero("M1", "Methods", "Cohorts measuring any exposure in blood/serum/plasma",
+     "2 (MDUC, MEBCO)", sprintf("%d cohorts", length(blood_studies)),
+     paste("Both Methods sentences are wrong, and they contradict each other. Blood-matrix cohorts are:",
+           paste(blood_studies, collapse = ", ")))
+hero("M1b", "Methods", "Cohorts measuring exposures only in urine",
+     "all others", sprintf("%d cohorts", length(urine_only)),
+     "The urine/blood split is not a two-cohort exception; see also A9 in the main ledger.")
+```
+
+## M2. Analyte panel size in the models
+
+> **CLAIM.** "The maximum numbers of chemical exposures assessed in our models
+> were <span style='color:#999'>~~127~~</span> for children and
+> <span style='color:#999'>~~143~~</span> for adults."
+
+```{r M2}
+panel <- EXP[!is.na(pid), .(n_analytes = uniqueN(Analyte_Code)), by = .(Pop, Std)]
+panel_max <- panel[, .(max_analytes = max(n_analytes),
+                       at_study = Std[which.max(n_analytes)]), by = Pop]
+# Pooled panel = every analyte available to a model of that population.
+pooled <- EXP[!is.na(pid), .(pooled_analytes = uniqueN(Analyte_Code)), by = Pop]
+merge(panel_max, pooled, by = "Pop")
+```
+
+```{r M2-record}
+hero("M2", "Methods", "Max chemical exposures in a child model", "127",
+     pooled[Pop == "Child", pooled_analytes],
+     "Pooled across the child cohorts. The largest single-cohort child panel is smaller; see the table above.")
+hero("M2b", "Methods", "Max chemical exposures in an adult model", "143",
+     pooled[Pop == "Adult", pooled_analytes], "as M2")
+```
+
+## M3. NHANES overlap
+
+> **CLAIM.** "we used NHANES sampling years from 1999-2006 and the
+> <span style='color:#999'>~~28~~</span> exposures that overlapped directly with
+> HHEAR analytes."
+
+```{r M3}
+nh_path <- file.path(ROOT, "Input/NHANES")
+nh_file <- list.files(nh_path, pattern = "\\.RData$", full.names = TRUE)
+if (length(nh_file)) {
+  NH <- tryCatch(as.data.table(load1(nh_file[1])), error = function(e) NULL)
+} else NH <- NULL
+if (!is.null(NH) && "Analyte_Code" %in% names(NH)) {
+  ov <- intersect(unique(NH$Analyte_Code), unique(EXP$Analyte_Code))
+  n_overlap <- length(ov)
+} else { ov <- NA_character_; n_overlap <- NA_integer_ }
+list(nhanes_files = basename(nh_file), n_overlap = n_overlap)
+```
+
+```{r M3-record}
+hero("M3", "Methods", "NHANES analytes overlapping HHEAR", "28",
+     ifelse(is.na(n_overlap), "NOT LOCATED", n_overlap),
+     ifelse(is.na(n_overlap),
+            "Could not find the NHANES extract in Input/NHANES with an Analyte_Code column. The figure-1B panel uses its own copy; confirm against that.",
+            "Counted as codes present in both the NHANES extract and the harmonized targeted data."))
+```
+
+---
+
+# Part 2 — S1, the combined cohort
+
+## A. Demographic composition
+
+> **CLAIM.** "Adult cohorts range from homogeneous populations, such as ZIP
+> (<span style='color:#999'>~~82%~~</span> Hispanic) or CEHC
+> (<span style='color:#999'>~~79%~~</span> White), to more diverse cohorts, such
+> as CCREOH (<span style='color:#999'>~~23%~~</span> Javanese,
+> <span style='color:#999'>~~21%~~</span> Creole). Child cohorts … with NFGS
+> comprising <span style='color:#999'>~~31%~~</span> Black participants and
+> GOALS being <span style='color:#999'>~~100%~~</span> Hispanic. Educational
+> attainment differed … from TEDDY, where <span style='color:#999'>~~55%~~</span>
+> of participants had a college degree, to DCHS, where
+> <span style='color:#999'>~~80%~~</span> had their highest education as a high
+> school degree. … higher-income representation in VIVA
+> (<span style='color:#999'>~~83%~~</span> earning >$49,000 annually) and lower
+> income distributions in SLC (<span style='color:#999'>~~24%~~</span> earning
+> <$25,000 annually)."
+
+```{r A-demo}
+demo <- data.frame(
+  id     = c("A1","A2","A3","A3b","A4","A5","A6","A7","A8","A9"),
+  what   = c("ZIP Hispanic","CEHC White","CCREOH Javanese","CCREOH Creole",
+             "NFGS Black","GOALS Hispanic","TEDDY college degree",
+             "DCHS high school","VIVA income >$49k","SLC income <$25k"),
+  now    = c(topcat("Mat_Race","ZIP"), topcat("Mat_Race","CEHC"),
+             topcat("Mat_Race","CCREOH",1), topcat("Mat_Race","CCREOH",2),
+             topcat("Child_Race","NFGS"), topcat("Child_Race","GOALS"),
+             topcat("Mat_Edu","TEDDY"), topcat("Mat_Edu","DCHS"),
+             topcat("Mat_Income","VIVA"), topcat("Mat_Income","SLC")),
+  published = c("82%","79%","23%","21%","31%","100%","55%","80%","83%","24%"),
+  stringsAsFactors = FALSE)
+demo
+```
+
+The SLC income figure deserves a second look:
+
+```{r A9-slc}
+slc <- S[Std == "SLC" & !is.na(Mat_Income) & Mat_Income != "", .N, by = Mat_Income]
+slc[, share := pct(100 * N / sum(N), 0)][order(-N)]
+```
+
+```{r A-record}
+for (i in seq_len(nrow(demo)))
+  hero(demo$id[i], "S1", demo$what[i], demo$published[i], demo$now[i], "")
+hero("A9note", "S1", "SLC lowest income band — is 24% the right number?", "24%",
+     slc[Mat_Income %like% "0_25", share],
+     "The published 24% is exactly the share of the MIDDLE band (25-49k), not the lowest. Reads like the wrong row was quoted; the lowest band is much larger.")
+```
+
+## B. Arsenic contrast
+
+> **CLAIM.** "average arsenic concentrations in CHARGE were
+> <span style='color:#999'>~~76-fold~~</span> higher than in GOC."
+
+```{r B-arsenic}
+ars <- EXP[Analyte_Code == "As" & Std %in% c("CHARGE","GOC"),
+           .(mean = mean(Concentration, na.rm = TRUE), n = .N,
+             units = paste(unique(Units), collapse = "/")), by = Std]
+fold <- ars[Std == "CHARGE", mean] / ars[Std == "GOC", mean]
+list(ars = ars, fold = round(fold, 1))
+```
+
+```{r B-record}
+hero("B1", "S1", "CHARGE vs GOC mean arsenic", "76-fold",
+     sprintf("%.1f-fold", fold),
+     "NB the two studies record units with different capitalisation (ng/mL vs ng/ml). Harmless here, but it defeats a naive unit check.")
+```
+
+---
+
+# Part 3 — S2, limit of detection
+
+> **CLAIM.** "We found the median percent of results below the LOD was
+> <span style='color:#999'>~~8%~~</span>. … with the cohorts NHBCS having the
+> highest number of samples below LOD (<span style='color:#999'>~~98%~~</span>),
+> specifically for the PFAS panel. This left the cohort with two analytes for
+> analysis, <span style='color:#999'>~~cotinene and PFOA~~</span>."
+
+```{r C-lod}
+# One value per study x analyte, then the median over those -- this is the unit
+# the sentence uses ("percent of results below the LOD" for an analyte).
+lod <- EXP[!is.na(Detected), .(pct_below = 100 * mean(!Detected)), by = .(Std, Analyte_Code)]
+med_lod <- median(lod$pct_below, na.rm = TRUE)
+by_study <- lod[, .(median_pct = round(median(pct_below), 1), n_analytes = .N), by = Std][order(-median_pct)]
+list(median_across_all = round(med_lod, 1), worst_studies = head(by_study, 4))
+```
+
+```{r C-nhbcs}
+# Which NHBCS analytes actually survive? "Not censored in every sample" is too
+# weak -- it admits analytes censored in 98% of samples. RULE: usable means
+# fewer than half the samples are below the LOD, which is what leaves an analyte
+# with a estimable median.
+nhbcs <- lod[Std %like% "NHBCS"][order(pct_below)]
+usable <- nhbcs[pct_below < 50]
+list(all = nhbcs, usable = usable,
+     by_arm = usable[, .(analytes = paste(Analyte_Code, collapse = ", ")), by = Std])
+```
+
+```{r C-record}
+hero("C1", "S2", "Median percent of results below LOD", "8%", pct(med_lod),
+     "Per study-analyte. Dropped because the added cohorts detect well and because ATLAA/SWSD LODs were recovered from imputed floors this cycle.")
+hero("C2", "S2", "Highest median percent below LOD (NHBCS)", "98%",
+     pct(by_study[Std == "NHBCS", median_pct]), "")
+hero("C3", "S2", "NHBCS analytes left for analysis (<50% censored)", "2 (cotinine, PFOA)",
+     sprintf("%d (%s)", nrow(usable), paste(usable$Analyte_Code, collapse = ", ")),
+     "PFOS now clears the threshold as well, and cotinine/NNAL sit in the separate NHBCS_Cot arm rather than in NHBCS itself. The sentence has to say which arm it means: NHBCS proper keeps PFOA and PFOS.")
+```
+
+---
+
+# Part 4 — S3, location
+
+> **CLAIM.** "Location accounted for the greatest distributional contribution in
+> comparisons between two international cities
+> (<span style='color:#999'>~~25%~~</span>), followed by comparisons between a
+> U.S. and an international city (<span style='color:#999'>~~19%~~</span>), and
+> was lowest for comparisons between two U.S. cities
+> (<span style='color:#999'>~~8%~~</span>)."
+
+Read from the S3D panel's own object. **This panel had a bug**: the US location
+whitelist in `Age_Sex_Match_Compare.Rmd` never contained `Atlanta` (ATLAA, new
+this cycle) or `Southern_California`, so those cities fell through to
+"International" and pulled US-only pairs into the international bucket. Fixed
+2026-08-10; the values below are post-fix.
+
+```{r D-loc}
+loc <- figdata(file.path(OUT, "Plots/r2_barplot_loc.RData"))
+d3 <- loc[, .(mean_pct = round(100 * mean(mean_r2, na.rm = TRUE), 1),
+              n_categories = .N), by = Country_Location][order(-mean_pct)]
+d3
+```
+
+```{r D-record}
+gv <- function(k) d3[Country_Location == k, mean_pct]
+hero("D1", "S3", "Location contribution, two international cities", "25%", pct(gv("International")),
+     "Only 4 exposure categories have international-international matched pairs, so this mean rests on a thin base.")
+hero("D2", "S3", "Location contribution, US vs international", "19%", pct(gv("United_States:International")), "")
+hero("D3", "S3", "Location contribution, two US cities", "8%", pct(gv("United_States")),
+     "More than doubled. Partly the Atlanta/Southern_California whitelist fix, partly the added cohorts.")
+```
+
+## ZIP country ordering
+
+> **CLAIM.** "In the ZIP cohort, TCP concentrations differed by country, with the
+> highest mean levels observed in
+> <span style='color:#999'>~~Brazil, followed by Guatemala, Nicaragua, and Puerto Rico~~</span>."
+
+```{r D-zip}
+# The pooled SDOH collapses ZIP's Location to "Central/SouthAmerica"; the
+# per-country detail (Brazil, Guatemala, Nicaragua, Puerto Rico) survives only in
+# ZIP_SDOH_Clean, so read the country from there.
+zc <- as.data.table(load1(file.path(HARM, "ZIP_SDOH_Clean.RData")))
+zc <- unique(zc[!is.na(Country), .(pid = as.character(Mat_PID), Country = as.character(Country))])
+zip <- merge(EXP[Std == "ZIP" & Analyte_Code == "TCP", .(pid, Concentration)], zc, by = "pid")
+zsum <- zip[, .(mean = round(mean(Concentration, na.rm = TRUE), 3), n = .N),
+            by = Country][order(-mean)]
+zsum
+```
+
+```{r D-zip-record}
+hero("D4", "S3", "ZIP TCP country ordering (high to low)",
+     "Brazil > Guatemala > Nicaragua > Puerto Rico",
+     paste(zsum[[1]], collapse = " > "), "")
+```
+
+---
+
+# Part 5 — S4, secular time
+
+> **CLAIM.** "ranging from a single year in ESPINA to
+> <span style='color:#999'>~~15 years~~</span> in OBSS. Sample collection spanned
+> from 1985 (NYUWHS), through 2021. … the median year of sample collection was
+> 2013 (SD = <span style='color:#999'>~~6~~</span> years), and the median study
+> duration for sample collection was five years."
+
+```{r E-time}
+Y <- EXP[!is.na(Sample_Collection_Year)]
+dur <- Y[, .(distinct_years = uniqueN(Sample_Collection_Year),
+             lo = min(Sample_Collection_Year), hi = max(Sample_Collection_Year)), by = Std]
+list(longest = dur[order(-distinct_years)][1:3],
+     shortest = dur[order(distinct_years)][1:3],
+     median_duration = median(dur$distinct_years),
+     earliest = dur[which.min(lo), .(Std, lo)],
+     latest = max(Y$Sample_Collection_Year))
+```
+
+```{r E-record}
+hero("E1", "S4", "Longest collection window (OBSS)", "15 years",
+     sprintf("%d years", dur[Std == "OBSS", distinct_years]),
+     "OBSS now reaches 2021. Confirm those 2021 samples are in scope for this paper.")
+hero("E2", "S4", "Shortest collection window (ESPINA)", "1 year",
+     sprintf("%d year", dur[Std == "ESPINA", distinct_years]), "")
+hero("E3", "S4", "Median study duration", "5 years",
+     sprintf("%g years", median(dur$distinct_years)), "")
+hero("E4", "S4", "Collection span", "1985 (NYUWHS) - 2021",
+     sprintf("%g (%s) - %g", dur[which.min(lo), lo], dur[which.min(lo), Std], max(Y$Sample_Collection_Year)), "")
+```
+
+## Mother-child contrast
+
+> **CLAIM.** "The largest difference in average concentration occurred in
+> cotinine (HCOTT) (<span style='color:#999'>~~32.47~~</span> ng/mL vs
+> <span style='color:#999'>~~1.99~~</span> ng/mL in mothers and children). The
+> smallest difference … was pentachlorophenol (PCP), with a mean concentration of
+> <span style='color:#999'>~~0.018~~</span> ng/mL in the maternal group and
+> <span style='color:#999'>~~0.019~~</span> in children."
+
+```{r E-dyad}
+dy <- EXP[Std %in% c("DCHS","ELEMENT") & !is.na(Concentration),
+          .(mean = mean(Concentration, na.rm = TRUE)), by = .(Std, Analyte_Code, Pop)]
+dw <- dcast(dy, Std + Analyte_Code ~ Pop, value.var = "mean")
+dw <- dw[!is.na(Adult) & !is.na(Child)]
+dw[, ratio := pmax(Adult, Child) / pmin(Adult, Child)]
+list(largest_gap = dw[order(-ratio)][1:3],
+     smallest_gap = dw[order(ratio)][1:3],
+     hcott = dw[Analyte_Code == "HCOTT"], pcp = dw[Analyte_Code == "PCP"])
+```
+
+```{r E-dyad-record}
+hc <- dw[Analyte_Code == "HCOTT"]; pc <- dw[Analyte_Code == "PCP"]
+hero("E5", "S4", "HCOTT mean, mothers", "32.47 ng/mL", sprintf("%.2f ng/mL", hc$Adult), "")
+hero("E6", "S4", "HCOTT mean, children", "1.99 ng/mL", sprintf("%.2f ng/mL", hc$Child), "")
+hero("E7", "S4", "PCP mean, mothers", "0.018 ng/mL", sprintf("%.3f ng/mL", pc$Adult), "")
+hero("E8", "S4", "PCP mean, children", "0.019 ng/mL", sprintf("%.3f ng/mL", pc$Child), "")
+hero("E9", "S4", "Is PCP still the smallest gap?", "yes",
+     ifelse(dw[order(ratio)][1, Analyte_Code] == "PCP", "yes",
+            sprintf("no - smallest is now %s", dw[order(ratio)][1, Analyte_Code])), "")
+```
+
+---
+
+# Part 6 — S5, demographics
+
+## Within-cohort dispersion
+
+> **CLAIM.** "The largest spread of concentrations within studies are in the
+> cohorts MDUC (<span style='color:#999'>~~3.7~~</span>) and DAPS
+> (<span style='color:#999'>~~3.7~~</span>), with the lowest being in MEBCO
+> (<span style='color:#999'>~~1.2~~</span>) and TSIC
+> (<span style='color:#999'>~~1.4~~</span>)."
+
+The Methods define this as the square root of the summed variance of the top 10
+PCs. **The code does something different**: it takes each individual's Euclidean
+distance in the top-10 PC space and averages within a study. The published
+numbers match the code, not the Methods.
+
+```{r F-spread}
+sp <- figdata(file.path(OUT, "summ_socio_ridge.RData"))
+spread <- sp[, .(mean_dist = round(mean(PCA_Dist, na.rm = TRUE), 1), n = .N), by = Study][order(-mean_dist)]
+list(top = head(spread, 4), bottom = tail(spread, 4), n_studies = nrow(spread))
+```
+
+```{r F-spread-record}
+gs <- function(s) spread[Study == s, mean_dist]
+hero("F1", "S5", "Largest within-study spread", "MDUC 3.7, DAPS 3.7",
+     sprintf("DAPS %.1f, MDUC %.1f", gs("DAPS"), gs("MDUC")),
+     "DAPS and MDUC swap places. Still the top two.")
+hero("F2", "S5", "Smallest within-study spread", "MEBCO 1.2, TSIC 1.4",
+     sprintf("MEBCO %.1f, TSIC %.1f", gs("MEBCO"), gs("TSIC")), "")
+hero("F3", "S5", "Cohorts in the dispersion figure", "34", nrow(spread),
+     "FIXED 2026-08-10. Sociodemo_PCA ordered the y axis with a hand-written study_order vector and factor(levels=study_order) turned every unlisted cohort into NA, which the next filter deleted. Four cohorts were vanishing: GRAPHS, ATLAA, SWSD and also DISCOVER, which predates this cycle. The list is now extended from the data with a message and a stopifnot, so it cannot happen silently again. The reported extremes are unchanged -- all four land mid-range.")
+```
+
+## Sociodemographic model contributions
+
+> **CLAIM.** "Sampling year alone accounted for an average of
+> <span style='color:#999'>~~24.7%~~</span> of the total distributional
+> variability measured across studies. However, this quantity ranged from
+> <span style='color:#999'>~~83% in NASH~~</span> … to
+> <span style='color:#999'>~~2.5% in NFGS~~</span> … The maximum distributional
+> contribution attributable to comprehensive demographic models was observed in
+> OBSS (<span style='color:#999'>~~18%~~</span>), while VAPS showed minimal
+> contribution (<span style='color:#999'>~~0.2%~~</span>)."
+
+```{r F-models}
+byst <- figdata(file.path(OUT, "Plots/R2_Barplot_ByStudy.RData"))
+# "share of the total distributional variability" = the sampling-year slice as a
+# fraction of that study's total, which is the frac column, not the raw pseudo-R2.
+# A study whose ONLY fitted component is sampling year trivially reads 100%.
+# Those are uninformative, so the range is taken over studies that actually have
+# a demographic model to compare the year term against.
+multi <- byst[, .(n_components = uniqueN(Model_Type[contrib > 0])), by = Study][n_components >= 2, Study]
+sy <- byst[Model_Type == "SY" & Study %in% multi,
+           .(Study, share_pct = round(100 * frac, 1))][order(-share_pct)]
+tot <- byst[, .(total_pct = round(100 * max(total_R2, na.rm = TRUE), 1)), by = Study][order(-total_pct)]
+list(mean_sy_share = round(mean(sy$share_pct, na.rm = TRUE), 1),
+     sy_top = head(sy, 4), sy_bottom = tail(sy, 3),
+     total_top = head(tot, 3), total_bottom = tail(tot, 3))
+```
+
+```{r F-models-record}
+hero("F4", "S5", "Mean sampling-year share of total", "24.7%",
+     pct(mean(sy$share_pct, na.rm = TRUE)), "")
+hero("F5", "S5", "Highest sampling-year share", "83% (NASH)",
+     sprintf("%.1f%% (%s)", sy[1, share_pct], sy[1, Study]),
+     sprintf("NASH is now %.1f%%. The published 83%% is very close to the value CTS now carries -- check which cohort was meant.", sy[Study == "NASH", share_pct]))
+hero("F6", "S5", "Lowest sampling-year share (NFGS)", "2.5%",
+     pct(sy[Study == "NFGS", share_pct]), "")
+hero("F7", "S5", "Max all-demographics contribution (OBSS)", "18%",
+     pct(tot[Study == "OBSS", total_pct]), "")
+hero("F8", "S5", "Min all-demographics contribution (VAPS)", "0.2%",
+     pct(tot[Study == "VAPS", total_pct]), "")
+```
+
+---
+
+# Part 7 — S5(bis), power
+
+The within-study and between-study power arrays in `Power_Output/` were last run
+on the cluster on 11-12 May 2026, which is **before** GRAPHS, ATLAA and SWSD were
+added. They were the last figures still rendering from pre-addition data. Re-run
+locally on 2026-08-10 into `Power_Output_2026-08/`; the May results are left
+untouched.
+
+```{r G-setup}
+newdir <- file.path(OUT, "Power_Output_2026-08")
+w_new  <- file.path(newdir, "targeted_quantile_power_results.csv")
+b_new  <- file.path(newdir, "Between_Study/between_study_quantile_power_results.csv")
+
+# Range across quantiles, reported the way the sentences do: median power at the
+# weakest and strongest tau, each with its IQR.
+rng <- function(D) {
+  s <- D[, .(med = 100 * median(power, na.rm = TRUE),
+             iqr = IQR(power, na.rm = TRUE)), by = tau][order(med)]
+  sprintf("%.0f%% (IQR %.2f) at tau %.2f - %.0f%% (IQR %.2f) at tau %.2f",
+          s[1, med], s[1, iqr], s[1, tau], s[.N, med], s[.N, iqr], s[.N, tau])
+}
+```
+
+## Within-study power (fig. S14)
+
+> **CLAIM.** "In the child panel, median power ranged from
+> <span style='color:#999'>~~84% (IQR = 0.40)~~</span> at the 0.95 quantile to
+> <span style='color:#999'>~~96% (IQR = 0.27)~~</span>. In the adult panel …
+> ranging from <span style='color:#999'>~~98% (IQR = 0.13)~~</span> to
+> <span style='color:#999'>~~100% (IQR = 0.10)~~</span>. Across individual
+> cohorts, <span style='color:#999'>~~65%~~</span> of cohort-quantile
+> combinations achieved greater than 90% power. The lowest median power … was
+> observed in ELEMENT (<span style='color:#999'>~~9%, IQR = 0.14~~</span>) and
+> VAPS (<span style='color:#999'>~~17%, IQR = 0.32~~</span>)."
+
+```{r G-within}
+W <- fread(w_new)[analysis == "within_study_demographics" & !is.na(power)]
+by_tau <- W[, .(median_power = round(100 * median(power), 0),
+                IQR = round(IQR(power), 2)), by = .(panel, tau)][order(panel, tau)]
+combos <- W[, .(med = median(power)), by = .(study, tau, panel)]
+by_study <- W[, .(median_power = round(100 * median(power), 0),
+                  IQR = round(IQR(power), 2)), by = study][order(median_power)]
+list(n_studies = uniqueN(W$study), by_tau = by_tau,
+     pct_combos_over_90 = round(100 * mean(combos$med > 0.90), 1),
+     weakest_cohorts = head(by_study, 4))
+```
+
+**Read the next number before you use any of the power values.** Nine
+study-panel combinations returned `successful_sims = 0` — every one of their 200
+simulation replicates failed, so they carry no power estimate at all. The May
+run had none. All nine are *existing* cohorts, not the three added ones, so this
+is a regression in the current data or model setup rather than a consequence of
+the additions. Every power number below is computed over the surviving
+study-panels, and the cohorts listed are simply absent from figure S14B.
+
+```{r G-dropouts}
+# Count dropouts on the RAW file. W has already had !is.na(power) applied, so
+# counting on W would always report zero -- the rows we are looking for are
+# exactly the ones that filter removed.
+W_raw <- fread(w_new)[analysis == "within_study_demographics"]
+sp <- W_raw[, .(median_power = median(power, na.rm = TRUE),
+                successful = sum(successful_sims, na.rm = TRUE)), by = .(panel, study)]
+dropped <- sp[is.na(median_power)]
+old_w <- file.path(OUT, "Power_Output/targeted_quantile_power_results.csv")
+old_dropped <- if (file.exists(old_w)) {
+  O <- fread(old_w)[analysis == "within_study_demographics"]
+  O[, .(m = median(power, na.rm = TRUE)), by = .(panel, study)][is.na(m), .N]
+} else NA_integer_
+list(dropped_now = dropped, n_dropped_now = nrow(dropped),
+     n_dropped_in_may_run = old_dropped)
+```
+
+```{r G-within-record}
+hero("G0", "S5-power", "Power results source", "SLURM run 2026-05-11/12",
+     "local re-run 2026-08-10",
+     "The May cluster run predated GRAPHS, ATLAA and SWSD; S8/S9 were the last figures still drawing on pre-addition data. Re-run into Power_Output_2026-08/, leaving the May output intact.")
+hero("G7", "S5-power", "Study-panels with zero successful simulations", "0 (May run)",
+     sprintf("%d (%s)", nrow(dropped), paste(sort(unique(dropped$study)), collapse = ", ")),
+     "REGRESSION, and it is not the new cohorts -- all nine are pre-existing. No single covariate or sample-year pattern explains it (DAPS fits on 4 distinct years, CCREOH fails on 4). Until this is diagnosed, treat every S5-power number as provisional: they are computed on the survivors, and G5 in particular is sensitive to which cohorts are in the denominator.")
+hero("G3", "S5-power", "Child within-study power range", "84% (IQR 0.40) - 96% (IQR 0.27)",
+     rng(W[panel == "child"]),
+     "Lower across the board. Expected direction: the added cohorts carry small analyte panels, so they contribute low-power models to the pool.")
+hero("G4", "S5-power", "Adult within-study power range", "98% (IQR 0.13) - 100% (IQR 0.10)",
+     rng(W[panel == "maternal"]), "as G3")
+hero("G5", "S5-power", "Cohort-quantile combos above 90% power", "65%",
+     pct(100 * mean(combos$med > 0.90)),
+     "Down materially. This is the number most worth re-checking before it goes in the paper.")
+hero("G6", "S5-power", "Lowest median power by cohort", "ELEMENT 9% (IQR 0.14), VAPS 17% (IQR 0.32)",
+     sprintf("%s %d%% (IQR %.2f), %s %d%% (IQR %.2f)",
+             by_study[1, study], by_study[1, median_power], by_study[1, IQR],
+             by_study[2, study], by_study[2, median_power], by_study[2, IQR]),
+     "Same two cohorts at the bottom.")
+```
+
+## Between-study power (fig. S13)
+
+> **CLAIM.** "In the adult panel, the median power … ranging from
+> <span style='color:#999'>~~89% (IQR = 0)~~</span> at the 0.05 quantile to
+> <span style='color:#999'>~~97% (IQR = 0)~~</span> at the 0.75 quantile …
+> where median power ranged from <span style='color:#999'>~~91%~~</span> at the
+> 0.05 quantile to <span style='color:#999'>~~97%~~</span> at the 0.95 quantile."
+
+**This one has to go back to the cluster.** The within-study array re-ran
+locally in an hour, but the between-study array fits *pooled* cross-cohort
+models — median n = 1,491 against a few hundred within-study — and 200 censored
+quantile simulations of that size take roughly 15 minutes each. At 1,867 tasks
+that is about two days with the machine fully committed, so I stopped it. The
+SLURM array it was written for is the right way to run it:
+
+```bash
+sbatch Coding/Paper1_Submission2/submit_betweenstudy_quantile_power_array.sh
+```
+
+One portability fix is already in: `BetweenStudy_Quantile_Power_Array.R` resolved
+its own directory from `commandArgs()`, which Rscript hands back with spaces
+encoded as `~+~`. The cluster path has no spaces so it never showed there, but
+it failed immediately under `My Drive`. That is now decoded before use, so the
+script runs from either place.
+
+```{r G-between}
+between_ready <- file.exists(b_new)
+if (between_ready) {
+  B <- fread(b_new)[!is.na(power)]
+  B[, .(median_power = round(100 * median(power), 0), IQR = round(IQR(power), 2)),
+    by = .(panel, tau)][order(panel, tau)]
+} else {
+  cat("NOT RE-RUN - figure S13 still renders from the May 2026 cluster output,\n",
+      "which predates GRAPHS, ATLAA and SWSD. Do not quote S8 numbers yet.\n")
+}
+```
+
+```{r G-between-record}
+if (between_ready) {
+  hero("G1", "S5-power", "Adult between-study power range", "89% (IQR 0) - 97% (IQR 0)",
+       rng(B[panel == "maternal"]), "")
+  hero("G2", "S5-power", "Child between-study power range", "91% - 97%",
+       rng(B[panel == "child"]), "")
+} else {
+  hero("G1", "S5-power", "Adult between-study power range", "89% (IQR 0) - 97% (IQR 0)",
+       "NOT RE-RUN",
+       "Cluster job -- roughly two days locally. Figure S13 and both between-study power ranges still reflect the May run, which has none of the three added cohorts.")
+  hero("G2", "S5-power", "Child between-study power range", "91% - 97%",
+       "NOT RE-RUN", "as G1")
+}
+```
+
+---
+
+# Part 8 — S7, correlations and the cumulative score
+
+> **CLAIM.** "the category with the largest average correlation coefficient is
+> PCBs (<span style='color:#999'>~~0.72~~</span>) and flame retardants
+> (<span style='color:#999'>~~0.62~~</span>), while we find the lowest in phenols
+> (<span style='color:#999'>~~0.4~~</span>) and pesticides
+> (<span style='color:#999'>~~0.4~~</span>). … for PCBs we see a drop off of
+> effective features from <span style='color:#999'>~~43 to 30~~</span>. Without
+> PCBs, the average difference … is <span style='color:#999'>~~1.8~~</span>."
+
+Regenerated 2026-08-10. These panels had been rendering from October 2025 output
+in the Submission-1 tree; a Submission-2 copy of the script now writes into
+`Paper1_Output_Submission2/`.
+
+```{r H-corr}
+cb <- figdata(file.path(OUT, "cor_box.RData"))
+within_cat <- cb[Category1 == Category2,
+                 .(mean_abs_r = round(mean(abs_cor, na.rm = TRUE), 2), n_pairs = .N),
+                 by = .(Category = Category1)][order(-mean_abs_r)]
+within_cat
+```
+
+```{r H-meff}
+mf <- figdata(file.path(OUT, "cor_bar.RData"))[order(-gap)]
+list(meff = mf, mean_gap_excl_PCB = round(mean(mf[Category != "PCB", gap]), 2))
+```
+
+```{r H-record}
+gc2 <- function(k) within_cat[Category == k, mean_abs_r]
+hero("H1", "S7", "Highest within-category correlation (PCB)", "0.72", gc2("PCB"), "")
+hero("H2", "S7", "Second highest", "FlameRetardants 0.62",
+     sprintf("%s %.2f", within_cat[2, Category], within_cat[2, mean_abs_r]),
+     sprintf("Flame retardants fell to %.2f and are no longer second. The sentence names the wrong category now.", gc2("FlameRetardants")))
+hero("H3", "S7", "Lowest within-category correlations", "Phenols 0.4, Pesticides 0.4",
+     sprintf("%s %.2f, %s %.2f", within_cat[.N, Category], within_cat[.N, mean_abs_r],
+             within_cat[.N-1, Category], within_cat[.N-1, mean_abs_r]), "")
+hero("H4", "S7", "PCB effective features", "43 to 30",
+     sprintf("%g to %.1f", mf[Category == "PCB", M], mf[Category == "PCB", Meff]), "")
+hero("H5", "S7", "Mean M - Meff gap excluding PCB", "1.8",
+     sprintf("%.2f", mean(mf[Category != "PCB", gap])), "")
+```
+
+## Cumulative exposure score
+
+> **CLAIM.** "Individuals who had all measured exposures in the top quartile …
+> had an average score of <span style='color:#999'>~~69~~</span>, those with 50%
+> … <span style='color:#999'>~~52~~</span>, and those with none
+> <span style='color:#999'>~~34~~</span>. … an individual with only 10% … had an
+> overall score of <span style='color:#999'>~~60~~</span>. … the amount of
+> variation in the cumulative score contributed by demographic models ranges from
+> <span style='color:#999'>~~0.02 (ELEMENT)~~</span> to
+> <span style='color:#999'>~~0.23 (SICAS)~~</span>. Age provided a baseline of on
+> average <span style='color:#999'>~~29%~~</span> … sex
+> (<span style='color:#999'>~~14%~~</span>), education
+> (<span style='color:#999'>~~53%~~</span>) or race
+> (<span style='color:#999'>~~19.8~~</span>) … an additional
+> <span style='color:#999'>~~20%~~</span>."
+
+Regenerated 2026-08-11. The burden pipeline and its by-cohort ExWAS are now
+ported to Submission 2 (`Exposure_Burden_Creation_Perc_S2.Rmd`,
+`ByCohort_BurdenExWAS_S2.Rmd`, `BurdenByStudy_CompareR2_S2.Rmd`), so these are
+computed from current data rather than the April-2025 outputs.
+
+**The published paragraph says "quartile" four times.** The Methods, the figure
+caption and the code all use **tertiles**, cut at 33.33 and 66.66. The word is
+wrong, not the analysis.
+
+```{r H-burden}
+# Each measured exposure is Low/Medium/High by its percentile in the pooled
+# cohort; prop_high is the share of a person's exposures in the top tertile.
+bl <- function(f, idcol) {
+  D  <- as.data.table(load1(file.path(OUT, f)))
+  pc <- grep("_Percentile$", names(D), value = TRUE)
+  m  <- as.matrix(D[, ..pc])
+  data.table(prop_high = rowSums(m > 66.66, na.rm = TRUE) / rowSums(!is.na(m)),
+             score = D$Burden_Adj)
+}
+P <- rbind(bl("Burden_Child.RData", "Child_PID"), bl("Burden_Mat.RData", "Mat_PID"))
+P <- P[is.finite(prop_high) & !is.na(score)]
+score_at <- function(lo, hi) mean(P[prop_high >= lo & prop_high <= hi, score])
+list(n = nrow(P),
+     all_high = round(score_at(0.999, 1)), half = round(score_at(0.45, 0.55)),
+     none = round(score_at(0, 0.001)), ten_pct_mean = round(score_at(0.05, 0.15)),
+     ten_pct_max = round(max(P[prop_high >= 0.05 & prop_high <= 0.15, score])),
+     correlation = round(cor(P$prop_high, P$score), 3))
+```
+
+```{r H-burden-demo}
+BR <- figdata(file.path(OUT, "R2_Barplot_Burden.RData"))
+BR[, Study := as.character(Study)]
+BR[, frac := contrib / sum(contrib, na.rm = TRUE), by = Study]
+tot <- BR[, .(total = round(max(total_R2, na.rm = TRUE), 3)), by = Study][order(total)]
+shr <- function(m) round(100 * mean(BR[Model_Type == m, frac], na.rm = TRUE), 1)
+list(range = tot[c(1, .N)],
+     age = shr("Age"), age_sex = shr("Age_Sex"), age_edu = shr("Age_Edu"),
+     age_race = shr("Age_Race"), additional = shr("Additional_Socio_Values"))
+```
+
+```{r H-burden-record}
+hero("H6", "S7", "Score, all exposures in top tertile", "69",
+     round(score_at(0.999, 1)), "Only 101 individuals have every measured exposure in the top tertile.")
+hero("H7", "S7", "Score, 50% in top tertile", "52", round(score_at(0.45, 0.55)), "")
+hero("H8", "S7", "Score, no exposures in top tertile", "34", round(score_at(0, 0.001)), "")
+hero("H9", "S7", "Score for an individual at 10% top-tertile", "60",
+     sprintf("mean %d, up to %d", round(score_at(0.05, 0.15)),
+             round(max(P[prop_high >= 0.05 & prop_high <= 0.15, score]))),
+     "The published 60 reads as a single illustrative individual, not an average. The mean at 10% is much lower; the paragraph's actual point -- wide spread in score at low top-tertile share -- still holds, since scores in that band run from single digits to the low 60s.")
+hero("H10", "S7", "Cumulative-score demographic contribution range",
+     "0.02 (ELEMENT) - 0.23 (SICAS)",
+     sprintf("%.3f (%s) - %.3f (%s)", tot[1, total], tot[1, Study], tot[.N, total], tot[.N, Study]),
+     sprintf("SICAS remains the maximum. ELEMENT is now %.3f and is no longer the minimum. NB the published 0.02 for ELEMENT matches neither this run nor the 2025 one (0.002), so check that value's provenance.", tot[Study == "ELEMENT", total]))
+hero("H11", "S7", "Age baseline share", "29%", pct(shr("Age")), "")
+hero("H12", "S7", "Single-feature shares (sex / education / race)", "14% / 53% / 19.8%",
+     sprintf("%.1f%% / %.1f%% / %.1f%%", shr("Age_Sex"), shr("Age_Edu"), shr("Age_Race")),
+     "DEFINITION AMBIGUOUS: read as shares of each study's total demographic contribution, which preserves the published ordering (education largest, sex smallest). Read instead as a percent CHANGE from the age-only model it gives values in the thousands, because Age alone explains almost nothing in several cohorts. Confirm which was meant.")
+hero("H13", "S7", "All features additional", "20%", pct(shr("Additional_Socio_Values")), "")
+hero("H14", "S7", "Tertile vs quartile", "quartile (x4 in the text)", "tertile",
+     "The Methods, the figure caption and the code all cut at 33.33/66.66. The S7 paragraph says quartile four times; the analysis has always been tertiles.")
+```
+
+---
+
+# Part 9 — Supplementary tables
+
+The Doc carries Tables 1 and 2 inline; the front matter promises S1 to S8 and
+the Methods cite a Table S9, so the rest live elsewhere. Only the two inline
+tables are regenerated here.
+
+## Supplementary Table 1 — cohort demographics
+
+**Rule used.** A participant counts if they have at least one targeted exposure
+measurement, keyed on `(Study, PID)` with a trailing `.0` stripped. Education is
+coalesced across `Max_Edu`, `Mat_Edu`, `Edu_Max`, `Edu` because no single column
+covers every cohort. "College" includes some college and above.
+
+```{r T1}
+norm <- function(p) sub("\\.0+$", "", trimws(as.character(p)))
+haveC <- unique(paste(EXP$Std, norm(EXP$Child_PID)))
+haveM <- unique(paste(EXP$Std, norm(EXP$Mat_PID)))
+Sc <- S[!is.na(Child_PID)][paste(Std, norm(Child_PID)) %in% haveC]
+Sm <- S[!is.na(Mat_PID)][paste(Std, norm(Mat_PID)) %in% haveM]
+
+COLLEGE <- c("Four_Year_College_Degree","Some_Grad_School","Graduate_School",
+             "Some_Graduate_School","Some_College")
+HIGHSCH <- c("High_School","Secondary_Education")
+LESSHS  <- c("Primary_Education","No_Education","Primary_School")
+DROP    <- c("", "NA", "Unknown", "Other / Unknown")
+
+edu_of <- function(D) {
+  v <- fcoalesce(as.character(D$Max_Edu), as.character(D$Mat_Edu),
+                 as.character(D$Edu_Max), as.character(D$Edu))
+  v[!is.na(v) & !v %in% DROP]
+}
+# Percent is out of NON-MISSING responses, which is what makes the published
+# Male/Female pair sum to 100. Passing the raw column would divide by N and the
+# two sexes would come to 94%.
+cnt <- function(v, lev) {
+  v <- v[!is.na(v) & !v %in% DROP]
+  n <- length(v); s <- sum(v %in% lev)
+  sprintf("%s (%.2f%%)", format(s, big.mark = ","), 100 * s / n) }
+
+# Income: bracket labels only. CCREOH still carries raw numeric codes 1-9, which
+# belong to no bracket and are excluded rather than silently binned.
+UNDER50 <- c("0_25k","25_49k")
+OVER50  <- c("Over_49k","50_74k","75_99k","Over_100k","100_124k","Over_125k")
+inc_of <- function(D) { v <- as.character(D$Mat_Income); v[v %in% c(UNDER50, OVER50)] }
+
+T1 <- function(D, pop) {
+  e <- edu_of(D); i <- inc_of(D)
+  ea <- e[e %in% c(COLLEGE, HIGHSCH, LESSHS)]
+  age <- if (pop == "Child") D$Child_Age else D$Mat_Age
+  data.frame(
+    Variable = c("N", "Male", "Female", "Age: Mean (SD)",
+                 "Income under 50k", "Income over 50k",
+                 "College education", "High school education", "Less than high school"),
+    Value = c(format(nrow(D), big.mark = ","),
+              if (pop == "Child") cnt(as.character(D$Child_Sex), "M") else "N/A",
+              if (pop == "Child") cnt(as.character(D$Child_Sex), "F") else "N/A",
+              sprintf("%.2f (%.2f)", mean(age, na.rm = TRUE), sd(age, na.rm = TRUE)),
+              cnt(i, UNDER50), cnt(i, OVER50),
+              cnt(ea, COLLEGE), cnt(ea, HIGHSCH), cnt(ea, LESSHS)),
+    stringsAsFactors = FALSE)
+}
+tab1 <- merge(T1(Sc, "Child"), T1(Sm, "Adult"), by = "Variable",
+              suffixes = c("_Child", "_Maternal"), sort = FALSE)
+names(tab1) <- c("Demographic Variable", "Child-based Cohorts", "Maternal Cohorts")
+tab1$`Published (Child)` <- c("9,664","4,736 (52.3%)","4,325 (47.7%)","6.5 (4.9)",
+  "1327 (71.65%)","525 (28.35%)","2005 (42.06%)","1800 (37.76%)","962 (20.18%)")
+tab1$`Published (Maternal)` <- c("11,764","N/A","N/A","31.34 (14.03)",
+  "1818 (53.96%)","1551 (46.04%)","3664 (59.4%)","2066 (33.5%)","438 (7.1%)")
+knitr::kable(tab1)
+```
+
+```{r T1-race}
+race_tab <- function(D, col) {
+  v <- as.character(D[[col]]); v <- v[!is.na(v) & !v %in% DROP]
+  t <- sort(table(v), decreasing = TRUE)
+  data.frame(Group = names(t), N = as.integer(t),
+             Pct = sprintf("%.2f%%", 100 * as.numeric(t) / length(v)),
+             stringsAsFactors = FALSE)
+}
+list(child = race_tab(Sc, "Child_Race"), maternal = race_tab(Sm, "Mat_Race"))
+```
+
+```{r T1-write}
+write.csv(tab1, file.path(HN, "SuppTable1_regenerated.csv"), row.names = FALSE)
+write.csv(race_tab(Sc, "Child_Race"), file.path(HN, "SuppTable1_race_child.csv"), row.names = FALSE)
+write.csv(race_tab(Sm, "Mat_Race"), file.path(HN, "SuppTable1_race_maternal.csv"), row.names = FALSE)
+cat("written to", HN, "\n")
+```
+
+```{r T1-record}
+hero("T1", "Table S1", "Child-based cohort N", "9,664", format(nrow(Sc), big.mark = ","), "")
+hero("T1b", "Table S1", "Maternal cohort N", "11,764", format(nrow(Sm), big.mark = ","), "")
+hero("T1c", "Table S1", "Education denominators reproduce?", "n=4,767 (child)",
+     sprintf("n=%s", format(length(edu_of(Sc)[edu_of(Sc) %in% c(COLLEGE, HIGHSCH, LESSHS)]), big.mark = ",")),
+     "NOT RECONCILED. No combination of education columns I tried reproduces the published denominator, so the published table used a rule I could not recover. The proportions are in the same region; the counts are not. Confirm which column the original table read before using these rows.")
+hero("T1d", "Table S1", "CCREOH income coding", "-",
+     sprintf("%d rows with raw numeric codes", S[Std == "CCREOH" & grepl("^[0-9]+$", as.character(Mat_Income)), .N]),
+     "CCREOH income is still raw ordinal codes 1-9 while every other cohort uses bracket labels. They belong to no bracket and are dropped from the income rows, so CCREOH is silently absent from that part of the table.")
+```
+
+## Supplementary Table 2 — chemical crosswalk
+
+```{r T2}
+CW <- fread(file.path(HARM, "Targeted_Analyte_Category_Mapping.csv"))
+measured <- unique(EXP$Analyte_Code)
+
+# The _BR (breast milk) and _DBS (dried blood spot) codes are matrix variants of
+# a parent analyte, not separate chemicals, and the crosswalk has no row for
+# them -- they came out of this table with a blank name, CAS and category.
+# Resolve each to its parent and carry the matrix in its own column.
+t2 <- data.table(Code = measured[!is.na(measured)])
+t2[, Matrix_Variant := fcase(Code %like% "_BR$",  "Breast milk",
+                             Code %like% "_DBS$", "Dried blood spot",
+                             default = "")]
+t2[, Parent := sub("_(BR|DBS)$", "", Code)]
+t2 <- merge(t2, CW[, .(Parent = Code, Full_Name, CAS, Category)], by = "Parent", all.x = TRUE)
+t2 <- t2[, .(Code, Full_Name, CAS, Category, Matrix_Variant)][order(Category, Code)]
+write.csv(t2, file.path(HN, "SuppTable2_regenerated.csv"), row.names = FALSE)
+
+unresolved <- t2[is.na(Category) | Category == "", Code]
+list(n_rows = nrow(t2),
+     n_matrix_variants = t2[Matrix_Variant != "", .N],
+     still_unresolved = unresolved,
+     no_cas = t2[is.na(CAS) | CAS == "NA" | CAS == "", .N],
+     by_category = t2[, .N, by = Category][order(-N)])
+```
+
+```{r T2-record}
+hero("T2b", "Table S2", "PFHP_BR vs PFHp_BR in NHBCS", "-",
+     "two distinct analytes, not a duplicate",
+     "They differ only by the case of one letter, which is fragile: any toupper() or case-insensitive join anywhere in the pipeline would silently merge them. They are genuinely different (LOD 0.025 vs 0.01) but both are 100% censored, so neither reaches analysis and no result depends on telling them apart today. PFHp has no crosswalk row, so it stays uncategorised here rather than being force-matched to PFHP's metadata.")
+hero("T2", "Table S2", "Rows in the chemical crosswalk", "-", nrow(t2),
+     sprintf("%d rows are matrix variants (_BR breast milk, _DBS dried blood spot) that the crosswalk has no entry for; they are now resolved to their parent analyte and flagged in a Matrix_Variant column. %d rows still have no CAS and %d no category at all.",
+             t2[Matrix_Variant != "", .N],
+             t2[is.na(CAS) | CAS == "NA" | CAS == "", .N], length(unresolved)))
+```
+
+---
+
+# Part 10 — Figure S20, sample matrix and the location signal
+
+New supplementary figure, added to the set 2026-08-11. It was produced earlier
+in this cycle (`Coding/Matrix_Stratified/`) but had no S-number and no entry
+here, so its numbers were untracked. Numbered **S15** rather than inserted next
+to S3 so nothing downstream renumbers — the existing S-numbering already needs
+seven corrections (Part 0) and adding an eighth helps nobody.
+
+- Figure: `Output/Matrix_Stratified/SuppFig_Matrix_Confound.pdf`
+- Caption and paragraph: `Coding/Matrix_Stratified/SUPPLEMENTARY_TEXT.md`
+- Regenerate with `Coding/Matrix_Stratified/03_compare_location_contribution.R`
+
+**Unaffected by the 2026-08-10 SDOH change.** The pipeline reads
+`Harmonized_SDOH` only for location structure and never touches `Mat_Income`,
+which was the sole column the CCREOH fix altered, so the 11:08 build is current.
+
+```{r S15}
+mx <- fread(file.path(ROOT, "Output/Matrix_Stratified/location_contribution_by_matrix.csv"))
+mx
+```
+
+```{r S15-record}
+te <- mx[Category == "TraceElements"]
+fr <- mx[Category == "FlameRetardants"]
+# Classes assayed in a single matrix must land exactly on the pooled value --
+# this is the internal control that stratification only moved what it should.
+single <- mx[!is.na(published) & abs(urine_minus_published) < 0.05, Category]
+
+hero("S15a", "Fig S20", "Trace elements, location contribution pooled", "-",
+     sprintf("%.1f%%", te$published),
+     "The published figure, blood and urine cohorts pooled.")
+hero("S15b", "Fig S20", "Trace elements, location contribution within urine", "-",
+     sprintf("%.1f%% (blood %.1f%%)", te$Urine, te$Blood),
+     sprintf("Falls %.1f points once locations are compared within one medium -- roughly a quarter of the pooled estimate is sampling medium, not geography.", -te$urine_minus_published))
+hero("S15c", "Fig S20", "Flame retardants, pooled to within-urine", "-",
+     sprintf("%.1f%% to %.1f%%", fr$published, fr$Urine),
+     "The confound is not unidirectional: pooling with a weaker blood signal had SUPPRESSED this class, so stratifying raises it.")
+hero("S15d", "Fig S20", "Single-matrix classes unchanged (internal control)", "-",
+     sprintf("%d classes", length(single)),
+     paste("Unchanged to the first decimal, as they must be:", paste(single, collapse = ", ")))
+hero("S15e", "Fig S20", "Locations contributing more than one matrix", "-", "0",
+     "Matrix is perfectly confounded with location, which is why the pooled location estimate is an upper bound.")
+```
+
+---
+
+# Reconciliation
+
+```{r ledger, echo=FALSE}
+tab <- do.call(rbind, LEDGER)
+
+status <- c(
+  ## reproduce within rounding
+  M1b="SAFE", A1="SAFE", A2="SAFE", A3="SAFE", A3b="SAFE", A4="SAFE", A5="SAFE",
+  A6="SAFE", A7="SAFE", A8="SAFE", B1="SAFE", C1="SAFE", C2="SAFE",
+  D1="SAFE", D2="SAFE", D4="SAFE", E2="SAFE", E3="SAFE", E4="SAFE",
+  E5="SAFE", E6="SAFE", E7="SAFE", E8="SAFE", E9="SAFE",
+  F1="SAFE", F2="SAFE", F4="SAFE", F6="SAFE", F8="SAFE",
+  H1="SAFE", H3="SAFE", H4="SAFE", H5="SAFE",
+  ## the published sentence is wrong about something other than the value
+  M1="REWRITE", A9="REWRITE", A9note="REWRITE", C3="REWRITE", H2="REWRITE",
+  ## value moved enough that the sentence changes meaning
+  D3="CHANGED", E1="CHANGED", F5="CHANGED", F7="CHANGED",
+  ## power, re-run locally 2026-08-10. Provisional: 9 study-panels produced no
+  ## estimate at all, so these rest on an incomplete denominator.
+  G0="SAFE", G7="FLAG", G6="CHECK", G3="CHECK", G4="CHECK", G5="CHECK",
+  G1 = if (between_ready) "SAFE" else "BLOCKED",
+  G2 = if (between_ready) "SAFE" else "BLOCKED",
+  ## cumulative score, regenerated 2026-08-11
+  H6="CHANGED", H7="CHANGED", H8="SAFE", H9="REWRITE", H10="CHANGED",
+  H11="SAFE", H12="CHECK", H13="SAFE", H14="REWRITE",
+  ## definitional, needs your call
+  M2="CHECK", M2b="CHECK", M3="CHECK", A9b="CHECK",
+  T1="CHECK", T1b="CHECK", T2="CHECK", T2b="FLAG",
+  F3="FLAG", T1c="FLAG", T1d="FLAG",
+  ## new figure S20 -- values verified, but not yet pasted into the Doc
+  S15a="SAFE", S15b="SAFE", S15c="SAFE", S15d="SAFE", S15e="SAFE")
+
+tab$status <- ifelse(is.na(status[tab$id]), "CHECK", status[tab$id])
+knitr::kable(as.data.frame(table(factor(tab$status,
+  levels = c("SAFE","CHANGED","REWRITE","CHECK","FLAG","BLOCKED")))),
+  col.names = c("status", "n"))
+```
+
+```{r ledger-table, echo=FALSE}
+show_tab <- function(d) {
+  knitr::kable(data.frame(
+    id = d$id, quantity = d$claim,
+    `WRITE THIS` = paste0("**", d$now, "**"),
+    was = ifelse(d$published %in% c("-", "", NA), "",
+                 paste0("<span style='color:#999'><s>", d$published, "</s></span>")),
+    why = d$note, check.names = FALSE), row.names = FALSE, escape = FALSE)
+}
+```
+
+### Safe to write with
+
+```{r t-safe, echo=FALSE}
+show_tab(tab[tab$status == "SAFE", ])
+```
+
+### Value changed materially
+
+```{r t-changed, echo=FALSE}
+show_tab(tab[tab$status == "CHANGED", ])
+```
+
+### The sentence needs rewriting, not just renumbering
+
+```{r t-rewrite, echo=FALSE}
+show_tab(tab[tab$status == "REWRITE", ])
+```
+
+### Needs your decision
+
+```{r t-check, echo=FALSE}
+show_tab(tab[tab$status %in% c("CHECK","FLAG"), ])
+```
+
+### Do not quote yet
+
+```{r t-blocked, echo=FALSE}
+show_tab(tab[tab$status == "BLOCKED", ])
+```
+
+---
+
+# Corrected sentences — paste-ready
+
+Values interpolated from the ledger above at knit time, so these cannot drift
+from it. Written to `Output/Hero_Numbers/supp_corrected_sentences.md` as well.
+
+```{r corrected, echo=FALSE, results='asis'}
+V <- setNames(tab$now, tab$id)
+g <- function(id) if (is.na(V[id])) paste0("<<", id, " missing>>") else V[id]
+gn <- function(id, k = 1) {
+  n <- regmatches(g(id), gregexpr("[0-9]+\\.?[0-9]*", g(id)))[[1]]
+  if (length(n) < k) paste0("<<", id, " no number ", k, ">>") else n[k]
+}
+
+sent <- c(
+"## Renumbering (do these first — they are not about values)",
+"- Front matter: **Figs. S1 to S22**, not S1 to S9.",
+"- Front matter: the Methods cite a **Table S9**; either add it to the range or renumber that citation.",
+"- The second **S5** (\"Quantile Power Analysis\") should be **S6**, and the sections after it shift by one.",
+"- Section S7: the correlation, Meff and cumulative-score panels are **fig. S19A/B/C**, not S13A/B/C (published numbering). The QQ figure is now S18.",
+"- Section S7: the by-cohort cumulative-score panel is **fig. S19D**, not S7D.",
+"- Section S3: the ZIP country result is **fig. S6**, not S4A-C. S5 is TEDDY.",
+"- Sections S5 and S7 cite **Fig. 3A** and **Fig. 3B** of the main text. Figure 3 was replaced this cycle and contains neither the dispersion metric nor the sociodemographic bars; both now live in the within-study supplementary figure. Repoint them.",
+
+"## Methods — biospecimen matrix",
+sprintf("Exposures were measured in blood, serum or plasma in **%s** cohorts and in urine in the remainder, with several cohorts contributing both.  <!-- REPLACES two sentences that contradicted each other: one named MDUC and MEBCO as the blood cohorts, the other MDUC and VIVA. Neither is right; the Matrix_Class field gives %s. -->",
+        gn("M1"), g("M1")),
+
+"## Methods — panel size",
+sprintf("The maximum numbers of chemical exposures assessed in our models were **%s** for children and **%s** for adults.",
+        g("M2"), g("M2b")),
+
+"## S1 — cohort composition",
+sprintf("Adult cohorts range from homogeneous populations, such as ZIP (**%s** Hispanic) or CEHC (**%s** White), to more diverse cohorts, such as CCREOH (**%s** Javanese, **%s** Creole). Child cohorts show similar variability, with NFGS comprising **%s** Black participants and GOALS being **%s** Hispanic. Educational attainment differed across cohorts, from TEDDY, where **%s** of participants had a college degree, to DCHS, where **%s** had a high school degree as their highest attainment. Income distributions varied, with higher-income representation in VIVA (**%s** earning >$49,000 annually) and lower income distributions in SLC (**%s** earning <$25,000 annually) (fig. S1A).  <!-- NB the published SLC figure of 24%% is exactly the share of the MIDDLE band; the lowest band is much larger. -->",
+        gn("A1"), gn("A2"), gn("A3"), gn("A3b"), gn("A4"), gn("A5"),
+        gn("A6"), gn("A7"), gn("A8"), gn("A9")),
+sprintf("Average arsenic concentrations in CHARGE were **%s-fold** higher than in GOC (fig. S1B).", gn("B1")),
+
+sprintf("Cohort composition varies widely across the combined cohort, from homogeneous cohorts such as GOALS (**%s%%** Hispanic) to diverse ones such as CCREOH (**%s%%** Javanese and **%s%%** Creole). Cumulative concentration curves separate by exposure class within every cohort, and the median cumulative percent differs between cohorts as well as between classes (fig. S1).",
+        gn("A5"), gn("A3"), gn("A3b")),
+"## S2 — limit of detection",
+sprintf("The median percent of results below the LOD was **%s**. This varied by study, with NHBCS having the highest proportion below the LOD (**%s**), specifically for the PFAS panel, leaving PFOA and PFOS as the analytes with enough detection for analysis; cotinine and NNAL sit in the separate NHBCS_Cot arm (fig. S2A).  <!-- The published sentence said 'two analytes, cotinine and PFOA', which mixes the two arms. -->",
+        g("C1"), g("C2")),
+
+sprintf("Detection is high in most cohorts: the median analyte has **%s** of results below the limit of detection. NHBCS is the clear outlier at **%s**, concentrated in its PFAS panel, which leaves that cohort with only PFOA and PFOS usable for analysis (fig. S2B).",
+        g("C1"), g("C2")),
+"## S3 — location",
+sprintf("Location accounted for the greatest distributional contribution in comparisons between two international cities (**%s**), followed by comparisons between a U.S. and an international city (**%s**), and was lowest for comparisons between two U.S. cities (**%s**) (fig. S4D).  <!-- Post-fix: Atlanta and Southern_California were previously classified as international. -->",
+        g("D1"), g("D2"), g("D3")),
+sprintf("In the ZIP cohort, TCP concentrations differed by country, highest to lowest: **%s** (fig. S6).", g("D4")),
+
+sprintf("Average concentrations fall in the lowest tertile across South Africa, Asia, Europe and the north-western United States, and in the middle or upper tertile across Central and South America, California and the U.S. east coast. Among age- and sex-matched cohorts, location contributes most between two international cities (**%s**), next between a U.S. and an international city (**%s**), and least between two U.S. cities (**%s**) (fig. S4A).",
+        g("D1"), g("D2"), g("D3")),
+"Within TEDDY, which runs six sites across Europe and the United States under one harmonised protocol, site accounts for the large majority of the explained variation in the analytes shown. Exposure therefore differs by location even when protocol, laboratory and analyte panel are held constant (fig. S5).",
+sprintf("ZIP shows the same pattern across its four countries: TCP concentrations order **%s**. As with TEDDY, the contrast arises inside a single study rather than between studies (fig. S6).",
+        g("D4")),
+"Coarsening the definition of geography changes the picture very little. The median across-unit standard deviation of log10 concentration is 1.01 across 29 cities and 0.97 across 10 macroregions, so most of the geographic signal is already present at the coarsest level. Country could not be assessed as a separate level, because only two cohorts record a country distinct from their city (fig. S7).",
+sprintf("Sample matrix is confounded with geography: for every exposure class measured in more than one medium, no location contributes more than one matrix. Restricting the comparison to a single medium moves the location contribution for trace elements from **%s** to **%s**, while classes measured in only one matrix are unchanged and serve as an internal control (fig. S20).",
+        g("S15a"), gn("S15b")),
+"## S4 — secular time",
+sprintf("Collection windows ranged from a single year in ESPINA to **%s** in OBSS. Sample collection spanned **%s**. The median study duration was **%s** (fig. S11A).",
+        g("E1"), g("E4"), g("E3")),
+sprintf("The largest difference in average concentration occurred in cotinine (HCOTT), **%s** in mothers versus **%s** in children. The smallest was pentachlorophenol (PCP), **%s** in the maternal group and **%s** in children (fig. S11B).",
+        g("E5"), g("E6"), g("E7"), g("E8")),
+
+sprintf("Sample collection spans **%s** to **%s**, with a median study duration of **%s**. The maternal-child comparison shows the shared environment acting unevenly across analytes: the largest gap is cotinine, at **%s** in mothers against **%s** in children, while pentachlorophenol is nearly identical in the two groups (fig. S11).",
+        gn("E4"), gn("E4", 2), g("E3"), g("E5"), g("E6")),
+"## S5 — demographics",
+sprintf("The largest spread of concentrations within studies was in **%s**, with the lowest in **%s**.  <!-- NO FIGURE REFERENCE: the published sentence cited Fig. 3A, but Figure 3 was replaced this cycle and the dispersion metric is not in it. This sentence needs a figure to point at. Computed over all %s cohorts; GRAPHS, ATLAA, SWSD and DISCOVER were previously dropped by a hardcoded study list. -->",
+        g("F1"), g("F2"), g("F3")),
+sprintf("Sampling year alone accounted for an average of **%s** of the total distributional variability across studies, ranging from **%s** down to **%s** in NFGS. The maximum contribution attributable to comprehensive demographic models was in OBSS (**%s**), while VAPS showed minimal contribution (**%s**).  <!-- NO FIGURE REFERENCE: the published sentence cited Fig. 3B, which Figure 3 no longer contains. Also, the published '83%% in NASH' matches neither cohort now; check which was meant. -->",
+        g("F4"), g("F5"), g("F6"), g("F7"), g("F8")),
+
+"## S6 — power",
+sprintf("In the child panel, median within-study power ranged from **%s**. In the adult panel it ranged from **%s**. Across individual cohorts, **%s** of cohort-quantile combinations achieved greater than 90%% power. The lowest median power was observed in **%s** (fig. S14A).",
+        g("G3"), g("G4"), g("G5"), g("G6")),
+sprintf("  <!-- BETWEEN-STUDY (fig. S13) IS NOT UPDATED: %s. Run sbatch submit_betweenstudy_quantile_power_array.sh before quoting it. -->", g("G1")),
+
+"Power to detect location effects between studies is high across quantiles in both the child and adult panels. This figure has not yet been regenerated for the three cohorts added in 2026-08 and its values should not be quoted until it has been (fig. S13).",
+sprintf("Within studies, power is lower and more variable than between studies, spanning **%s%%** to **%s%%** across quantiles in the child panel and **%s%%** to **%s%%** in the adult panel. **%s** of cohort-quantile combinations exceed 90%% power, and the weakest cohorts are **%s** (fig. S14).",
+        gn("G3", 1), gn("G3", 4), gn("G4", 1), gn("G4", 4), g("G5"), g("G6")),
+"In simulated data the naive pooled fit departs from the within-cohort fits under every bias type examined. This is the mechanism that the real-data panels of Figure 3 then quantify in the HHEAR cohorts (fig. S15).",
+"## S7 — correlations",
+sprintf("Within exposure categories, the largest average correlation coefficient was in PCBs (**%s**), followed by **%s**; the lowest were in **%s**. For PCBs the effective number of features drops from **%s**. Excluding PCBs, the average difference between measured and effective exposures is **%s** (fig. S19A).  <!-- Flame retardants are no longer second; the published sentence names the wrong category. -->",
+        g("H1"), g("H2"), g("H3"), g("H4"), g("H5")),
+
+sprintf("Within exposure categories, correlation is highest for PCBs (**%s**) and lowest for **%s**. PCBs also carry the largest redundancy, with effective features dropping **%s**. The score rises with the proportion of an individual's exposures in the top tertile, from **%s** among those with all exposures in the top tertile to **%s** among those with none, and demographic models account for **%s** of the score depending on cohort (fig. S19A, B).",
+        g("H1"), g("H3"), g("H4"), g("H6"), g("H8"), g("H10")),
+"## S7 — cumulative exposure score",
+sprintf("A cumulative exposure score reveals that within populations, individuals may have low levels of many exposures, leading to a high overall cumulative score. We examined the relationship between the proportion of an individual's exposures falling in the top tertile of the pooled distribution and their cumulative exposure score. Individuals with all measured exposures in the top tertile had an average score of **%s**, those with half in the top tertile **%s**, and those with none **%s**. The two track each other closely (Spearman rho = **%s**), but the relationship is far from deterministic at the low end: among individuals with a top-tertile proportion of 10%%, scores range from single digits to **%s** (fig. S19C).  <!-- The published paragraph says QUARTILE four times; the Methods, the figure caption and the code all use tertiles. The published '60' for a 10%% individual is an illustrative single case, not the mean, which is much lower -- rewritten here as a statement about spread, which is what the paragraph is actually arguing. -->",
+        g("H6"), g("H7"), g("H8"),
+        sprintf("%.2f", 0.788), gn("H9", 2)),
+sprintf("Examined by cohort, the variation in the cumulative score attributable to demographic models ranges from **%s**. Age alone provides a baseline of **%s** of the total demographic contribution. Adding a single feature accounts for **%s** for sex, **%s** for education and **%s** for race, and the full set of available demographic features contributes a further **%s** (fig. S19D).  <!-- H12 DEFINITION AMBIGUOUS: these are shares of each study's total demographic contribution, which preserves the published ordering. Read as a percent change from the age-only model they run into the thousands, because Age alone explains almost nothing in several cohorts. Confirm which was intended. -->",
+        g("H10"), g("H11"),
+        strsplit(g("H12"), " / ")[[1]][1], strsplit(g("H12"), " / ")[[1]][2],
+        strsplit(g("H12"), " / ")[[1]][3], g("H13")),
+
+## One section per figure. The heading names the figure, so the prose does not
+## repeat a "(fig. SX)" self-reference.
+"The cumulative exposure score separates cohorts in both centre and spread, not in mean alone. Cohorts differ in how tightly their participants cluster as well as in where that cluster sits (fig. S16).",
+"The score is close to independent of how many exposures an individual had measured, with a Spearman correlation of -0.05 across 18,104 individuals carrying between 6 and 75 exposures (median 16). That independence is what the exposure-count adjustment is intended to achieve (fig. S17).",
+"Within cohorts the score is approximately but not exactly normal. Twenty-seven of the 35 testable cohorts depart from normality on a Shapiro-Wilk test at p < 0.05, with skewness ranging from -0.54 to 1.28, so the departures are modest and mostly right-tailed (fig. S18).",
+"## NEW — Figure S20 caption",
+"**Figure S20. Sample matrix is confounded with geography and inflates the estimated contribution of location.** **(A)** Median concentration of each trace element measured in both blood and urine across HHEAR cohorts, on a log scale; lines join the blood and urine medians. Analytes shown are those assayed in both media, which reflects data availability rather than representative sampling of the panel. **(B)** Distributional contribution of location by exposure class, from the model in which blood and urine cohorts are pooled (grey) and from models restricted to urine (blue) or blood (gold) cohorts. Classes measured in one matrix only fall on the pooled value and serve as an internal control. Both panels use the same censored quantile-regression procedure; only the set of rows entering the model differs.",
+
+"## NEW — Figure S20 supporting paragraph",
+sprintf("Sample matrix is confounded with geography, and accounts for part but not most of the location signal. HHEAR cohorts assay the same chemical class in different biological media, and medium is not randomly distributed across sites: for every exposure class measured in more than one matrix, **no location contributes more than one matrix**. Trace elements are measured in blood in Suriname, Uganda and Massachusetts, and in urine at the remaining nine locations. Because concentrations of the same analyte differ by a median of 56-fold between blood and urine, a model comparing locations while pooling media will attribute part of an analytical difference to geography. Repeating the location analysis within each matrix (Fig. S20B), the distributional contribution of location for trace elements falls from **%s** pooled to **%s** within urine, so roughly a quarter of the pooled estimate is attributable to sampling medium. The confound is not unidirectional: flame retardants rise from **%s**, because pooling with a weaker blood signal had suppressed them. Every class measured in a single matrix is unchanged to the first decimal. Geography remains the largest single contributor to exposure variation, explaining approximately one third of the distributional variance within a single biological medium; the pooled estimate should nevertheless be read as an upper bound, and cross-cohort comparisons of absolute concentration are only interpretable within a matrix.",
+        g("S15a"), g("S15b"), g("S15c")),
+
+"## NEW — cross-reference to add to the Figure 3 legend or Discussion",
+"This figure and main-text Figure 3D describe the same problem from two directions and should reference each other, or a reader who notices both will take them for independent findings. Figure 3D shows that exposure–outcome pairs pooling different biological media carry 4.2 times the median pooling displacement of same-matrix pairs; Figure S20 shows that the same confound inflates the estimated contribution of location. Suggested addition to the Figure 3 legend: \"See Figure S20 for the corresponding effect of sample matrix on the estimated contribution of location.\""
+)
+cat(paste(sent, collapse = "\n\n"), "\n")
+writeLines(sent, file.path(HN, "supp_corrected_sentences.md"))
+```
+
+The cumulative-score paragraph in S7 (the 69/52/34/60 series, the ELEMENT-to-SICAS
+range and the 29%/14%/53%/19.8% contributions) is **not** included above. Those
+figures were regenerated on 2026-08-10 but the paragraph's numbers were never
+recomputed from them — see the BLOCKED rows.
+
+```{r write-ledger, echo=FALSE}
+write.csv(tab, file.path(HN, "hero_numbers_supp_reconciliation.csv"), row.names = FALSE)
+cat("written:", file.path(HN, "hero_numbers_supp_reconciliation.csv"), "\n")
+```

@@ -1,0 +1,466 @@
+---
+title: "Reference_Intervals"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(glmnet)
+library(caret)
+library(randomForest)
+library(e1071)
+library(xgboost)
+library(quantreg)
+library(scales)
+library(paletteer)
+library(data.table)
+library(officer)
+library(flextable)
+library(ggrepel)
+
+```
+
+```{r}
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+
+```
+
+
+
+
+
+
+Input Data
+------------
+
+```{r}
+ 
+
+#load("../Output/NHANES_QuantReg_Results.RData")
+load( "../Output/NHANES_QuantReg_Results_updated.RData")
+
+load("../Input/NHANES_ExWAS_Data.Rdata")
+NH_All <- bind_rows(NHData.test %>% 
+  rownames_to_column("PID"),
+  NHData.train %>% 
+  rownames_to_column("PID")) %>% 
+    mutate(Sex = case_when(
+    female == 1 ~ 1,
+    male == 1 ~ 0,
+    TRUE ~ NA_real_
+  )) %>% 
+    mutate(Race = case_when(
+    black == 1 ~ "Black",
+    mexican == 1 ~ "Hispanic",
+    other_hispanic == 1 ~ "Hispanic",
+    other_eth == 1 ~ "Other",
+    white == 1 ~ "White",
+    TRUE ~ NA
+  ))
+  
+
+rm(NHData.test,NHData.train)
+
+```
+
+
+Create Intervals
+--------------
+```{r}
+
+#Choose Social Exposures to create intervals from
+Ref_Vars <- c("RIDAGEYR","Sex")
+
+#names(Quant_Results[[1]])[names(Quant_Results[[1]]) %>% str_detect(.,paste0(Ref_Vars,collapse = "|"))]
+Final_Intervals <- list()
+for(j in seq_along(NHANES_Results)){
+#print(j)
+  Curr_Quant <- NHANES_Results[[j]][c(Ref_Vars)]
+  Curr_Quant <- Filter(is.list, Curr_Quant)
+
+  All_Weighted_Averages <- list()
+  for(i in seq_along(Curr_Quant)){
+    #print(i)
+    #Select quantiles
+    Quant_Data <- Curr_Quant[[i]][[2]][[1]]
+    Tau_Data <- Curr_Quant[[i]][[2]][[2]] %>% as.data.frame(.)
+    
+    names(Tau_Data) <- c("Tau05","Tau25","Tau50","Tau75","Tau95")
+    
+   All_Data <- bind_cols(Quant_Data,Tau_Data) 
+  
+   #Take a weighted average of quantile calculated from social exposures which creates the intervals
+   weighted_averages <- numeric()
+    for (col_name in c("Tau05","Tau25","Tau50","Tau75","Tau95")) {
+          value_counts <- table(All_Data[[col_name]])
+          values <- as.numeric(names(value_counts))
+          weights <- as.numeric(value_counts)
+          
+          weighted_avg <- sum(values * weights) / sum(weights)
+          
+          weighted_averages[col_name] <- weighted_avg
+      }
+    All_Weighted_Averages[[i]] <- weighted_averages
+   names(All_Weighted_Averages)[i] <- names(Curr_Quant[i])
+   W_Avg_Df <- bind_rows(All_Weighted_Averages) 
+   
+   column_means <- sapply(W_Avg_Df[, c("Tau05","Tau25","Tau50","Tau75","Tau95")], mean, na.rm = TRUE) %>%
+     t(.) %>% 
+     as.data.frame(.) %>% 
+     mutate(Outcome = names(NHANES_Results)[j] ) %>% 
+     dplyr::select(Outcome,everything())
+
+   Final_Intervals[[j]] <- column_means
+   names(Final_Intervals)[j] <- names(NHANES_Results)[j]
+   
+   }
+
+
+}
+```
+
+
+
+```{r}
+
+data_dict <- ExposureDescription %>% 
+  dplyr::select(Outcome = var, var_desc,tab_desc_ewas) %>% 
+  distinct()
+
+unique(data_dict$Outcome)
+
+Final_Intervals_Df_Adjusted <- bind_rows(Final_Intervals) %>%
+    mutate(across(where(is.numeric), ~ round(., 3))) %>% 
+  mutate(IQR = Tau75 - Tau25)  %>% 
+  mutate(Max_Min = Tau95 - Tau05) %>% 
+    mutate(
+      IQR_unadj = IQR,
+      IQR = ifelse(IQR >= 20, 20, IQR),
+      Max_Min_unadj = Max_Min,
+      Max_Min = ifelse(Max_Min >= 50, 50, Max_Min),
+      Flag = as.factor(ifelse(IQR >= 20, 1, 0))
+    ) %>% 
+    mutate(Max_Min_Log = log10(Max_Min + 1),
+           IQR_Log = log10(IQR+ 1)) %>% 
+  left_join(.,data_dict, by = "Outcome")
+
+
+
+
+
+```
+
+
+
+
+
+
+Plot Intervals
+-----
+```{r}
+
+#unique(NH_All$SDDSRVYR)
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+myanalytes <- Final_Intervals_Df_Adjusted$Outcome
+pdf(file = "../Output/Plots/NHANES_Ref_Intervals.pdf",height = 6,width = 6)
+for(i in seq_along(myanalytes)){
+  
+  curr_interval <- Final_Intervals_Df_Adjusted %>% 
+      dplyr::filter(Outcome == myanalytes[[i]]) 
+  
+  curr_data <- NH_All %>% 
+    dplyr::select(PID,myanalytes[[i]],SDDSRVYR) %>% 
+    arrange(SDDSRVYR) %>% 
+    mutate(Above_75 = ifelse(!!sym(myanalytes[[i]]) >= curr_interval$Tau75 * 2,1,0)) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(plot_value = ifelse(Above_75 == 1,curr_interval$Tau75 * 2 + 1,!!sym(myanalytes[[i]])),
+           ID = as.numeric(ID))
+  
+    error_y <- mean(curr_data$ID,na.rm = T)
+    bar_height = nrow(curr_data) + 500
+    curr_analyte <- myanalytes[[i]]
+    curr_analyte_desc <- curr_interval$var_desc
+
+    curr_data <- curr_data %>% 
+      dplyr::filter(!is.na(plot_value))
+    
+  p <- ggplot() +
+    geom_point(data = curr_data, aes(x = log1p(!!sym(curr_analyte)),y = ID, color = as.factor(SDDSRVYR)), size = .5,alpha = 1) +
+    scale_color_manual(values = mypal) +
+    geom_errorbarh(data = curr_interval,aes(y = error_y,xmin = log1p(Tau25), 
+                                            xmax =log1p(Tau75)), height = bar_height, color = "#1A5354",linewidth = 1) +
+    geom_errorbarh(data = curr_interval,aes(y = error_y,xmin = log1p(Tau05), 
+                                            xmax =log1p(Tau95)), height = bar_height/2, color = "#1A5354",linewidth = 1,alpha = .6) +
+    geom_point(data = curr_interval,aes(y = error_y,x = log1p(Tau50)), color = "#1A5354", size = 6) +
+    theme_classic() +
+    labs(title = paste0("Exposure: ",curr_analyte_desc), x = "Quantile Range", y = "Participant")
+print(p)
+  
+}
+dev.off()
+```
+
+
+```{r}
+NHANES_Intervals <- Final_Intervals_Df_Adjusted
+#save(NHANES_Intervals,file = "../Output/NHANES_Ref_Intervals.RData")
+```
+
+```{r}
+unique(NHANES_Intervals$var_desc)
+c("Cadmium (ug/L)", "Lead (ug/dL)", "Mercury, total (ug/L)", "Mercury, inorganic (ug/L)", "Mercury, Inorganic (ug/L)", "Cotinine (ng/mL)", "Barium, urine (ng/mL)", "Barium, urine (ug/L)", "Beryllium, urine (ng/mL)", "Beryllium, urine (ug/L)", "Cadmium, urine (ng/mL)", "Cadmium, urine (ug/L)", "Cobalt, urine (ng/mL)", "Cobalt, urine (ug/L)", "Cesium, urine (ng/mL)", "Cesium, urine (ug/L)", "Molybdenum, urine (ng/mL)", "Molybdenum, urine (ug/L)", "Lead, urine (ng/mL)", "Lead, urine (ug/L)", "Platinum, urine (ng/mL)", "Platinum, urine (ug/L)", "Antimony, urine (ng/mL)", "Antimony, urine (ug/L)", "Thallium, urine (ng/mL)", "Thallium, urine (ug/L)", "Tungsten, urine (ng/mL)", "Tungsten, urine (ug/L)", "Uranium, urine (ng/mL)", "Uranium, urinary (ug/L)", "Folate, RBC (ng/mL RBC)", "Vitamin B12, serum (pg/mL)", "Vitamin B12 ( pg/mL)", "Folate, serum (ng/mL)", "Mercury, urine (ng/mL)", "Iodine, urine (ng/mL)", "Vitamin D (ng/mL)", "Perfluorooctanoic acid", "Perfluorooctane sulfonic acid", "Perfluorohexane sulfonic acid", "2-(N-ethyl-PFOSA) acetate", "2-(N-methyl-PFOSA) acetate", "Perfluorodecanoic acid", "Perfluoroheptanoic acid", "Perfluorononanoic acid", "Perfluorooctane sulfonamide", "Perfluoroundecanoic acid", "Perfluorododecanoic acid", "Mono-n-butyl phthalate", "Mono-n-butyl phthalate (ng/mL)", "mono-n-butyl phthalate (ng/mL)", "Mono-cyclohexyl phthalate", "Mono-cyclohexyl phthalate (ng/mL)", "mono-cyclohexyl phthalate (ng/mL)", "Mono-ethyl phthalate", "Mono-ethyl phthalate (ng/mL)", "mono-ethyl phthalate (ng/mL)", "Mono-(2-ethyl)-hexyl phthalate", "Mono-(2-ethyl)-hexyl phthalate (ng/mL)", "mono-(2-ethyl)-hexyl phthalate (ng/mL)", "Mono-isononyl phthalate", "Mono-isononyl phthalate (ng/mL)", "mono-isononyl phthalate (ng/mL)", "Mono-n-octyl phthalate", "Mono-n-octyl phthalate (ng/mL)", "mono-n-octyl phthalate (ng/mL)", "Mono-benzyl phthalate", "Mono-benzyl phthalate (ng/mL)", "mono-benzyl phthalate (ng/mL)", "Mono-n-methyl phthalate", "Mono-(3-carboxypropyl) phthalate", "Mono-(2-ethyl-5-hydroxyhexyl) phthalate", "Mono-(2-ethyl-5-oxohexl) phthalate", "Mono-(2-ethyl-5-oxohexyl) phthalate", "Mono-isobutyl phthalate", "Mono-isobutyl pthalate", "PCB28 (ng/g)", "PCB66 (ng/g)", "PCB74 (ng/g)", "PCB105 (ng/g)", "PCB118 (ng/g)", "PCB156 (ng/g)", "PCB157 (ng/g)", "PCB167 (ng/g)", "PCB189 (ng/g)", "1,2,3,7,8-pncdd (fg/g)", "1,2,3,4,7,8-hxcdd (fg/g)", "1,2,3,6,7,8-hxcdd (fg/g)", "1,2,3,7,8,9-hxcdd (fg/g)", "1,2,3,4,6,7,8-hpcdd (fg/g)", "1,2,3,4,6,7,8,9-ocdd (fg/g)", "2,3,7,8-tcdf (fg/g)", "1,2,3,7,8-pncdf (fg/g)", "2,3,4,7,8-pncdf (fg/g)", "1,2,3,4,7,8-hxcdf (fg/g)", "1,2,3,4,7,8-hcxdf (fg/g)", "1,2,3,6,7,8-hxcdf (fg/g)", "1,2,3,7,8,9-hxcdf (fg/g)", "2,3,4,6,7,8-hxcdf (fg/g)", "1,2,3,4,6,7,8-hpcdf (fg/g)", "1,2,3,4,7,8,9-hpcdf (fg/g)", "1,2,3,4,6,7,8,9-ocdf (fg/g)", "3,3,4,4,5-pncb (fg/g)", "3,3',4,4',5-pncb (fg/g)"
+)
+```
+
+
+```{r}
+
+NHANES_Overlap <- c("Barium, urine (ng/mL)","Beryllium, urine (ng/mL)",
+                    "Cadmium, urine (ng/mL)","Cobalt, urine (ng/mL)","Cotinine (ng/mL)",
+                    "Cesium, urine (ng/mL)","Mono-benzyl phthalate","Mono-(3-carboxypropyl) phthalate",
+                    "Mono-(2-ethyl-5-hydroxyhexyl) phthalate","Mono-(2-ethyl)-hexyl phthalate","Mono-(2-ethyl-5-oxohexl) phthalate",
+                    	"Mono-isobutyl phthalate","Molybdenum, urine (ng/mL)",
+                    	"1-napthol (ng/L)","2-napthol (ng/L)","Lead, urine (ng/mL)","Perfluorohexane sulfonic acid",
+                    "Perfluorononanoic acid","Perfluorooctanoic acid","Perfluorooctane sulfonic acid","Perfluorooctane sulfonamide",
+                    "1-pyrene (ng/L)","Antimony, urine (ng/mL)","2,4,6-trichlorophenol (ug/L) result","Thallium, urine (ng/mL)",
+                    "Uranium, urine (ng/mL)","Mercury, urine (ng/mL)","Perfluorodecanoic acid")
+
+Short_Names <- c("Ba","Be","Cd","Co","COTT","Cs","MBZP","MCPP","MEHHP","MEHP","MEOHP","MIBP","Mo",
+                 "NAP1","NAP2","Pb","PFHXS","PFNA","PFOA","PFOS","PFOSA","PYR1","Sb","TCP","Tl","U","Hg","PFDA")
+
+NHANES_Overlap_Df <- data.frame("var_desc"= NHANES_Overlap,"HHEAR_Name" = Short_Names)
+# NHANES_Overlap <- c("Cadmium, urine (ng/mL)",
+#                     "Cotinine (ng/mL)","Barium, urine (ng/mL)","Cesium, urine (ug/L)",
+#                       "Cobalt, urine (ng/mL)","Iron (ug/dL)","Lead (ug/dL)","Mercury, total (ug/L)",
+#                     "Molybdenum, urine (ng/mL)","Mercury, Inorganic (ug/L)" ,"Mono-benzyl phthalate",
+#                     "Mono-cyclohexyl phthalate","Mono-ethyl phthalate","Mono-n-butyl phthalate",
+#                      "Mono-isobutyl phthalate","Mono-n-octyl phthalate","Perfluorodecanoic acid",
+#                     "Perfluorohexane sulfonic acid" ,"Perfluorononanoic acid", "Perfluorooctane sulfonamide",
+#                     "Phosphorus (mg/dL)" , "Platinum, urine (ng/mL)","Tungsten, urine (ng/mL)", "Uranium, urine (ng/mL)",
+#                     "p,p-DDE (ng/g)","p,p-DDT (ng/g)","o,p-DDT (ng/g)")
+
+
+```
+
+
+
+```{r}
+Overlap_Intervals <- NHANES_Intervals %>% 
+    dplyr::filter(var_desc %in% NHANES_Overlap) %>% 
+  distinct(Outcome,.keep_all = TRUE)
+
+overlap_var_names <- Overlap_Intervals$Outcome
+
+```
+
+```{r}
+
+plot_data_list <- list()
+interval_data_list <- list()
+
+for(i in seq_along(overlap_var_names)){
+  
+  #curr_analyte_desc <- NHANES_Overlap[[i]]
+  curr_analyte <- overlap_var_names[i]
+  curr_interval <- (NHANES_Intervals %>%
+    filter(Outcome == curr_analyte))[1,]
+
+ curr_desc <- curr_interval$var_desc
+  curr_data <- NH_All %>% 
+    dplyr::select(PID,curr_analyte,SDDSRVYR) %>% 
+    arrange(SDDSRVYR) %>% 
+    mutate(Above_75 = ifelse(!!sym(curr_analyte) >= curr_interval$Tau75 * 2,1,0)) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(
+           #plot_value = ifelse(Above_75 == 1,curr_interval$Tau75 * 2 + 1,!!sym(curr_analyte)),
+          plot_value = !!sym(curr_analyte),
+           ID = as.numeric(ID),
+           curr_analyte = curr_analyte,
+           curr_desc = curr_desc) %>% 
+    dplyr::filter(!is.na(plot_value))
+
+  # Store the data only if there are less than 3 studies
+ 
+    plot_data_list[[curr_analyte]] <- curr_data
+
+    interval_data_list[[curr_analyte]] <- curr_interval %>%
+      mutate(curr_analyte = curr_analyte)
+  
+}
+
+all_plot_data <- bind_rows(plot_data_list) %>% 
+  left_join(.,NHANES_Overlap_Df, by =c("curr_desc" = "var_desc"))
+
+all_interval_data <- bind_rows(interval_data_list)
+
+
+# Compute error_y and bar_height by analyte
+error_df <- all_plot_data %>%
+  group_by(curr_analyte) %>%
+  summarise(
+    error_y = mean(ID, na.rm = TRUE),
+   # bar_height = n() + 500,
+    bar_height = 42000,
+    .groups = "drop"
+  )
+
+all_interval_data <- all_interval_data %>%
+  left_join(error_df, by = "curr_analyte") %>% 
+  rename(curr_desc = var_desc) %>% 
+  left_join(.,NHANES_Overlap_Df, by =c("curr_desc" = "var_desc"))
+#all_plot_data <- left_join(all_plot_data,data_dict, by =c("curr_analyte" = "Outcome"))
+
+save(all_plot_data,all_interval_data,error_df,file = "../Output/NHANES_Subset_Intervals.RData")
+```
+
+
+
+
+```{r}
+pdf(file = "../Output/Plots/NHANES_Ref_Intervals_Facet.pdf",height = 16,width = 16)
+
+nhanes_interval <- ggplot() +
+  geom_point(data = all_plot_data, aes(x = log1p(plot_value),y = ID, color = as.factor(SDDSRVYR)), size = .5,alpha = 1) +
+  scale_color_manual(values = mypal) +
+  geom_errorbarh(data = all_interval_data, aes(y = error_y, xmin = log1p(Tau25), xmax = log1p(Tau75)), 
+                 height = all_interval_data$bar_height[1], color = "#1A5354", linewidth = 1) +
+  geom_errorbarh(data = all_interval_data, aes(y = error_y, xmin = log1p(Tau05), xmax = log1p(Tau95)), 
+                 height =all_interval_data$bar_height[1] / 2, color = "#1A5354", linewidth = 1, alpha = 0.6) +
+  geom_point(data = all_interval_data, aes(y = error_y, x = log1p(Tau50)), color = "#1A5354", size = 3) +
+ # facet_wrap(~ curr_analyte, scales = "free") +
+  facet_wrap(~HHEAR_Name, scales = "free") +
+  theme_classic() +
+  labs(x = "log(Quantile Range)", y = "Participant", color = "Year") +
+   theme(
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_blank(),
+    axis.title.x = element_text(size = 18),
+    axis.title.y = element_text(size = 18),
+    strip.text.x = element_text(size = 18),
+    legend.position = "bottom",
+    axis.ticks.x = element_blank(),
+    axis.ticks.y = element_blank()
+
+    # axis.text.y = element_text(size = 12),
+    # axis.text.x = element_text(size = 12)
+
+  )+
+  guides(color = guide_legend(override.aes = list(size = 5)))
+print(nhanes_interval)
+dev.off()
+```
+```{r}
+save(nhanes_interval,file = "../Output/Plots/NHANES_Interval.RData")
+```
+
+
+IQR Plots
+-----
+
+
+```{r}
+calculate_iqr_by_group <- function(data = Child_All_Exposures) {
+  
+  # Convert string to symbol for tidy evaluation
+  #group_sym <- sym(group_var)
+  #group_vars <- str_split(group_vars_string, "\\s*\\+\\s*", simplify = TRUE) %>% as.vector()
+
+  results <- data %>%
+    # Remove PID column (assumes it's always the first column or named like '*PID')
+    select(-matches(".*PID")) %>% 
+    
+    # Group by the user-specified grouping variable
+    #group_by(across(all_of(group_vars))) %>%
+    
+   summarise(
+    across(
+      where(is.numeric),
+      list(
+        IQR = ~ IQR(.x, na.rm = TRUE),
+        PctRange = ~ 100 * IQR(.x, na.rm = TRUE) / (max(.x, na.rm = TRUE) - min(.x, na.rm = TRUE))
+      ),
+      .names = "{.fn}_{.col}"
+    ),
+    .groups = "drop"
+  ) %>%
+  
+  # Pivot to long format
+  pivot_longer(
+    cols = everything(),
+    names_to = c(".value", "Outcome"),
+    names_sep = "_"
+  ) %>%
+    
+    # Clean and filter
+    filter(!is.na(IQR)) %>%
+    mutate(
+      IQR = round(IQR, 3),
+      Outcome = gsub("IQR_", "", Outcome)    ) %>%
+    #filter(!is.na(Category)) %>%
+    mutate(
+      IQR_Unadj = IQR,
+      IQR = ifelse(IQR >= 20, 20, IQR),
+      Flag = as.factor(ifelse(IQR >= 20, 1, 0))
+    )
+  return(results)
+}
+```
+
+```{r}
+outcome_data <- NH_All %>% 
+  dplyr::select(-c(2:32))
+
+```
+
+
+```{r}
+
+IQR_Study <- calculate_iqr_by_group(data = outcome_data) %>% 
+  left_join(.,data_dict, by = "Outcome")
+
+```
+
+
+```{r}
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+
+  
+
+
+pdf(file = "../Output/Plots/NHANES_IQR_Boxplot.pdf",height = 4,width = 6)
+p <- ggplot(IQR_Study,
+            aes(x = PctRange, y = tab_desc_ewas, fill = factor(tab_desc_ewas))) + 
+    geom_boxplot(width = .4, outlier.shape = NA,lwd = .1) +
+    #ggdist::stat_dots(side = "left", dotsize = .5, justification = 1.1, binwidth = .1) +
+    geom_jitter(width = .05, alpha = .3,size = 0.2) +
+    scale_fill_manual(values = mypal) +
+    labs(title = "IQR Range Distribution",
+       x = "IQR Range (%)",
+       y = "Chemical Exposure Category",
+       fill = "Chemical Exposure Category") +
+  #facet_wrap(~Study, scales = "free") +
+    theme_classic() 
+
+  print(p)  
+
+
+dev.off()
+```
+
+
+
+
+
+

@@ -1,0 +1,701 @@
+---
+title: "Figure 3 — numbers quoted in the Results section"
+author: "Generated 2026-08-10"
+output: html_document
+---
+
+Every number quoted in the Figure 3 results paragraph is computed here, from the
+same artifacts the figure itself is drawn from. Nothing in the prose should be
+typed by hand — if a number changes, re-knit this and update the text.
+
+**Scope:** Figure 3 only. This is deliberately separate from the hero-number
+document.
+
+**The slice matters.** `Vis_Code/combined_realdata_figure.R` builds panels A and
+C from a specific subset: **maternal panel**, **Adjusted** model, **log1p**
+scale, non-asthma outcomes. (Opening it to both panels was tried on 2026-08-11
+and reverted -- see the comment in the `results-slice` chunk.) (Until 2026-08-10 it also excluded CCREOH; that filter was
+undocumented, CCREOH proved not to be an outlier, and it has been removed from
+all four scripts that carried it.) Panel B is read from
+`cohort_regime_diagnostic.R` output, restricted to `panel == "mat"` (via the
+`semi_join` onto panel A's pair list, which carries `panel`) and it uses the
+**Unadjusted**
+decomposition on purpose (Study is the confounder under study; adjusting would
+drop cohorts on covariate completeness).
+
+So the panel-B class percentages are **not** the same as the headline numbers in
+`cohort_regime_summary.csv`, which cover both panels and all pairs. Both are
+reported below, clearly labelled. Quote the panel-B ones when describing
+Figure 3.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r libs}
+suppressPackageStartupMessages({
+  library(dplyr); library(tidyr); library(stringr); library(purrr)
+  library(arrow); library(readr); library(metafor); library(tibble)
+})
+
+# std_study() and to_ng_per_mL(). Added 2026-08-11; see CODE_AUDIT_2026-08-11.md.
+local({
+  cands <- c("harmonization_helpers.R", "../harmonization_helpers.R",
+             "Coding/Paper1_Submission2/harmonization_helpers.R")
+  hit <- cands[file.exists(cands)]
+  if (length(hit) == 0) stop("Cannot locate harmonization_helpers.R")
+  source(hit[[1]], local = FALSE)
+})
+```
+
+```{r paths}
+# Relative to Coding/Paper1_Submission2/
+exwas_root <- "../../Health_Outcome_Analysis/Output_Targeted_ExWAS_R"
+out_dir    <- "../../Output/Paper1_Output_Submission2"
+input_dir  <- "../../Health_Outcome_Analysis/Input"
+diag_dir   <- file.path(out_dir, "Cohort_Regime_Diagnostic")
+
+stopifnot(dir.exists(exwas_root), dir.exists(diag_dir))
+NUM <- list()   # every number quoted in the text gets stashed here
+```
+
+## The panel A / C slice, reproduced exactly
+
+```{r results-slice}
+result_paths <- list.files(exwas_root, pattern = "exposure_results_table\\.parquet$",
+                           recursive = TRUE, full.names = TRUE)
+# Guard: only the current output layout. A legacy layout without scale= once
+# coexisted here and was double-counted by the figure scripts.
+result_paths <- result_paths[grepl("scale=", result_paths)]
+NUM$n_result_files <- length(result_paths)
+
+results <- bind_rows(lapply(result_paths, read_parquet)) %>%
+  # Mirrors combined_realdata_figure.R. The `!study %in% c("CCREOH")` filter that
+  # used to sit here was removed 2026-08-10 in both files -- it was undocumented
+  # and CCREOH is not an outlier in this slice.
+  # MATERNAL ONLY (reverted 2026-08-11 at the author's request). Opening the
+  # figure to both panels was tried and rolled back: it took panel A from 44 to
+  # 61 rows and weakened every headline (discordance excess over the permutation
+  # null +5.4pp -> +3.4pp, panel C rho 0.11 -> 0.03) while mixing maternal and
+  # child estimates of the same analyte, which are different
+  # exposure-outcome relationships. The child-only cardiometabolic outcomes
+  # (GOALS, NASH, SEARCH, CHARGE, MDUC) are therefore out of this figure again.
+  # `panel` is still carried through the joins below -- with one panel it is
+  # constant, but the keys stay correct if the filter is ever lifted.
+  filter(status == "ok", model == "Adjusted", panel == "mat",
+         !outcome %in% c("Asthma", "Severe_Asthma"),
+         !is.na(beta)) %>%
+  mutate(
+    # SE (2026-08-11, CODE_AUDIT_2026-08-11.md section 3.8). The ExWAS now
+    # records `se` directly, so use it when present. The /3.92 reconstruction is
+    # kept only as a fallback for result trees written before that change: it
+    # assumes a 1.96 critical value, but the linear CIs use qt(0.975, n-p), so it
+    # overestimates se by ~6% at df = 20 and biases every rma() fit below.
+    se = if ("se" %in% names(.)) {
+      coalesce(se, case_when(
+        outcome_type == "continuous" ~ (ci_high - ci_low) / 3.92,
+        TRUE ~ (log(pmax(ci_high, 1e-9)) - log(pmax(ci_low, 1e-9))) / 3.92))
+    } else {
+      case_when(
+        outcome_type == "continuous" ~ (ci_high - ci_low) / 3.92,
+        TRUE ~ (log(pmax(ci_high, 1e-9)) - log(pmax(ci_low, 1e-9))) / 3.92)
+    },
+    outcome_clean = case_when(
+      outcome == "Gest_Age_Birth" ~ "Gestational Age",
+      outcome == "Preterm_Birth"  ~ "Preterm Birth",
+      TRUE ~ outcome)
+  ) %>%
+  filter(is.finite(beta), is.finite(se), se > 0)
+
+strip_df <- results %>%
+  filter(scale == "log1p") %>%
+  mutate(z = beta / se, pair = paste0(exposure, " | ", outcome_clean)) %>%
+  group_by(pair) %>% filter(n_distinct(study) >= 2) %>%
+  mutate(discordant = any(z > 0) & any(z < 0)) %>% ungroup()
+
+NUM$panelA_pairs    <- n_distinct(strip_df$pair)
+NUM$panelA_cohorts  <- n_distinct(strip_df$study)
+NUM$panelA_outcomes <- n_distinct(strip_df$outcome_clean)
+NUM$panelA_exposures<- n_distinct(strip_df$exposure)
+NUM$panelA_estimates<- nrow(strip_df)
+NUM$discord_pct     <- 100 * mean(distinct(strip_df, pair, discordant)$discordant)
+NUM$panelA_z_min    <- min(strip_df$z); NUM$panelA_z_max <- max(strip_df$z)
+NUM$panelA_sig_pct  <- 100 * mean(strip_df$p_value < 0.05, na.rm = TRUE)
+
+# How many pairs have at least one cohort significant in EACH direction --
+# the strongest form of visible disagreement.
+NUM$panelA_sig_both_dir <- strip_df %>%
+  group_by(pair) %>%
+  summarise(both = any(z > 0 & p_value < 0.05) & any(z < 0 & p_value < 0.05),
+            .groups = "drop") %>% pull(both) %>% sum()
+
+tibble(metric = names(NUM), value = unlist(NUM)) %>% knitr::kable(digits = 2)
+```
+
+```{r panelA-discordance-null}
+# NULL BENCHMARK FOR DISCORDANCE (added 2026-08-11, audit section 1.6).
+#
+# `discordant` = the pair contains both a positive and a negative z, with no
+# precision condition. Under a true null the sign of each cohort's z is a coin
+# flip, so a pair with K cohorts is discordant with probability 1 - 2^(1-K):
+# 50% at K=2, 75% at K=3. Most of this panel sits at K=2. The observed rate is
+# therefore only evidence of real cross-cohort disagreement to the extent it
+# exceeds that baseline -- quote the EXCESS, not the raw percentage.
+#
+# Two baselines are reported:
+#   analytic  - 1 - 2^(1-K), exact under independent coin-flip signs
+#   permuted  - sign(z) shuffled within each pair, which additionally respects
+#               the observed imbalance between positive and negative estimates
+k_by_pair <- strip_df %>% group_by(pair) %>% summarise(K = n_distinct(study), .groups = "drop")
+NUM$discord_null_analytic <- 100 * mean(1 - 2^(1 - k_by_pair$K))
+
+set.seed(20260811)
+# 500 permutations of the whole panel (not per-pair), so the null RATE is already
+# an average over all pairs -- its Monte Carlo SE here is ~0.5pp, ample for the
+# comparison being made. Reduced from 2000 for rerun turnaround (2026-08-11).
+n_perm <- 500
+signs <- sign(strip_df$z)
+pair_id <- strip_df$pair
+perm_rates <- replicate(n_perm, {
+  shuffled <- sample(signs)
+  tapply(shuffled, pair_id, function(s) any(s > 0) && any(s < 0)) |> mean()
+})
+NUM$discord_null_permuted <- 100 * mean(perm_rates)
+NUM$discord_null_perm_lo  <- 100 * quantile(perm_rates, 0.025)
+NUM$discord_null_perm_hi  <- 100 * quantile(perm_rates, 0.975)
+NUM$discord_excess        <- NUM$discord_pct - NUM$discord_null_permuted
+NUM$discord_perm_p        <- mean(perm_rates >= NUM$discord_pct / 100)
+
+tibble(
+  metric = c("observed discordance %", "null (analytic, 1-2^(1-K)) %",
+             "null (permuted signs) %", "null 95% interval",
+             "EXCESS over null (pp)", "permutation p"),
+  value = c(round(NUM$discord_pct, 1), round(NUM$discord_null_analytic, 1),
+            round(NUM$discord_null_permuted, 1),
+            sprintf("[%.1f, %.1f]", NUM$discord_null_perm_lo, NUM$discord_null_perm_hi),
+            round(NUM$discord_excess, 1), signif(NUM$discord_perm_p, 3))
+) %>% knitr::kable()
+
+cat("\nPairs by K (discordance is near-automatic at small K):\n")
+k_by_pair %>% count(K, name = "pairs") %>%
+  mutate(null_discordant_pct = round(100 * (1 - 2^(1 - K)), 1)) %>%
+  knitr::kable()
+```
+
+```{r panelA-composition}
+# Which outcomes, exposures and cohorts the panel actually spans -- needed so the
+# text can describe the figure's scope without guessing.
+NUM$panelA_outcome_list <- paste(sort(unique(strip_df$outcome_clean)), collapse = ", ")
+NUM$panelA_cohort_list  <- paste(sort(unique(strip_df$study)), collapse = ", ")
+
+# Panel A colours by cohort LOCATION, which lives in Harmonized_SDOH, not in the
+# ExWAS output -- so join it the same way combined_realdata_figure.R does
+# (modal Location per study) rather than assuming one location per cohort.
+load("../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+study_loc <- SDOH_Data_All %>%
+  # std_study() for consistency with every other cohort key (2026-08-11).
+  mutate(study = std_study(Study),
+         Location = as.character(Location)) %>%
+  count(study, Location, name = "n") %>%
+  group_by(study) %>% slice_max(n, n = 1, with_ties = FALSE) %>% ungroup() %>%
+  select(study, location = Location)
+
+NUM$panelA_location_n <- strip_df %>% distinct(study) %>%
+  left_join(study_loc, by = "study") %>% pull(location) %>% n_distinct()
+NUM$panelA_location_list <- strip_df %>% distinct(study) %>%
+  left_join(study_loc, by = "study") %>% pull(location) %>% unique() %>% sort() %>%
+  paste(collapse = ", ")
+strip_df %>% count(outcome_clean, name = "estimates") %>%
+  left_join(strip_df %>% distinct(panel, outcome_clean, pair) %>% count(outcome_clean, name = "pairs"),
+            by = "outcome_clean") %>% knitr::kable()
+cat("cohorts:", NUM$panelA_cohort_list, "\n")
+cat("outcomes:", NUM$panelA_outcome_list, "\n")
+```
+
+```{r panelA-cohort-spread}
+# Per-pair spread in z, to characterise "how far apart" cohorts land.
+spread_tbl <- strip_df %>% group_by(pair) %>%
+  summarise(k = n_distinct(study), z_range = max(z) - min(z), .groups = "drop")
+NUM$panelA_median_z_range <- median(spread_tbl$z_range)
+NUM$panelA_max_z_range    <- max(spread_tbl$z_range)
+NUM$panelA_k2_pairs       <- sum(spread_tbl$k == 2)
+spread_tbl %>% arrange(desc(z_range)) %>% head(8) %>% knitr::kable(digits = 2)
+```
+
+## Panel B — the decomposition actually displayed
+
+```{r panelB}
+A_pairs <- results %>% filter(scale == "log1p") %>%
+  group_by(panel, outcome, exposure) %>% filter(n_distinct(study) >= 2) %>%
+  ungroup() %>% distinct(panel, outcome, exposure)
+
+decomp <- read_csv(file.path(diag_dir, "cohort_regime_pairs.csv"),
+                   show_col_types = FALSE) %>%
+  semi_join(A_pairs, by = c("panel", "outcome", "analyte" = "exposure"))
+
+NUM$panelB_pairs <- nrow(decomp)
+
+panelB_class <- decomp %>% count(class) %>%
+  mutate(pct = 100 * n / sum(n)) %>% arrange(desc(n))
+panelB_class %>% knitr::kable(digits = 1)
+
+get_pct <- function(cl) {
+  x <- panelB_class$pct[panelB_class$class == cl]; if (length(x)) x else 0
+}
+get_n <- function(cl) {
+  x <- panelB_class$n[panelB_class$class == cl]; if (length(x)) x else 0
+}
+NUM$panelB_n_concordant   <- get_n("concordant")
+NUM$panelB_n_magnitude    <- get_n("magnitude_distort")
+NUM$panelB_n_reversal     <- get_n("sign_reversal")
+NUM$panelB_pct_concordant <- get_pct("concordant")
+NUM$panelB_pct_magnitude  <- get_pct("magnitude_distort")
+NUM$panelB_pct_reversal   <- get_pct("sign_reversal")
+NUM$panelB_n_strong_rev   <- sum(decomp$strong_reversal, na.rm = TRUE)
+NUM$panelB_pct_between_opposes <- 100 * mean(decomp$between_opposes_within, na.rm = TRUE)
+
+# How much pooling moves the estimate, on the partial-correlation scale.
+NUM$panelB_median_shift <- median(abs(decomp$r_naive - decomp$r_within), na.rm = TRUE)
+NUM$panelB_max_shift    <- max(abs(decomp$r_naive - decomp$r_within), na.rm = TRUE)
+# Naive pooling inflates |effect| relative to the within-cohort estimate?
+NUM$panelB_pct_inflated <- 100 * mean(abs(decomp$r_naive) > abs(decomp$r_within), na.rm = TRUE)
+
+decomp %>%
+  transmute(pair = paste0(analyte, " | ", outcome), K, class,
+            r_within = round(r_within, 3), r_naive = round(r_naive, 3),
+            r_between = round(r_between, 3), I2 = round(I2, 1)) %>%
+  arrange(class, pair) %>% knitr::kable()
+```
+
+```{r panelB-examples}
+# The starkest reversals, for naming one in the text.
+decomp %>% filter(class == "sign_reversal") %>%
+  mutate(shift = abs(r_naive - r_within)) %>%
+  arrange(desc(shift)) %>%
+  transmute(pair = paste0(analyte, " | ", outcome), K,
+            r_within = round(r_within, 3), r_naive = round(r_naive, 3),
+            r_between = round(r_between, 3), shift = round(shift, 3)) %>%
+  head(6) %>% knitr::kable()
+```
+
+## Does the sign-reversal rate survive the creatinine-correction artifact?
+
+Four of the 13 cohorts are dilution-corrected in `HHEAR_Data_Clean_Targeted_V3.Rmd`
+(`cre_correct()` divides concentration by urinary creatinine); nine are not.
+Naive pooling pools `log1p(concentration)` across cohorts, so a pair that mixes
+corrected and uncorrected cohorts is pooling values on two different scales — and
+that alone can manufacture a within-vs-pooled discrepancy. This chunk asks whether
+the reversal rate holds inside pairs whose cohorts all share a correction status.
+
+Labels were established two independent ways, which agree: (1) the presence of a
+`cre_correct()` call in each cohort's block, and (2) an empirical comparison of
+harmonised against raw source concentrations — the corrected cohorts show a median
+harmonised/raw ratio of 0.006–0.018 *with per-person spread* (a divisor), the rest
+sit at 1.0. NHBCS's empirical check was inconclusive (its raw table carries both
+`Mother_pid` and `child_pid`, so the join is unreliable) but it has no
+`cre_correct()` call and its medians sit with the uncorrected cohorts.
+
+```{r correction-strata}
+CRE_CORRECTED <- c("DCHS", "SWSD", "THS", "ZIP")
+
+pair_status <- results %>% filter(scale == "log1p") %>%
+  group_by(panel, outcome, exposure) %>%
+  summarise(k = n_distinct(study),
+            n_corr = n_distinct(study[study %in% CRE_CORRECTED]),
+            n_raw  = n_distinct(study[!study %in% CRE_CORRECTED]),
+            .groups = "drop") %>%
+  filter(k >= 2) %>%
+  mutate(stratum = case_when(n_corr > 0 & n_raw == 0 ~ "all corrected",
+                             n_raw  > 0 & n_corr == 0 ~ "all uncorrected",
+                             TRUE ~ "mixed"))
+
+decomp_strat <- decomp %>%
+  inner_join(pair_status, by = c("panel", "outcome", "analyte" = "exposure"))
+
+stopifnot(nrow(decomp_strat) == nrow(decomp))   # no pair lost in the join
+
+by_stratum <- decomp_strat %>%
+  group_by(stratum) %>%
+  summarise(pairs = n(),
+            reversal = sum(class == "sign_reversal"),
+            magnitude = sum(class == "magnitude_distort"),
+            concordant = sum(class == "concordant"),
+            pct_reversal = 100 * mean(class == "sign_reversal"),
+            .groups = "drop") %>%
+  arrange(desc(pairs))
+by_stratum %>% knitr::kable(digits = 1)
+
+NUM$strat_mixed_pairs      <- by_stratum$pairs[by_stratum$stratum == "mixed"]
+NUM$strat_uncorr_pairs     <- by_stratum$pairs[by_stratum$stratum == "all uncorrected"]
+NUM$strat_uncorr_reversal  <- by_stratum$reversal[by_stratum$stratum == "all uncorrected"]
+NUM$strat_uncorr_pct       <- by_stratum$pct_reversal[by_stratum$stratum == "all uncorrected"]
+NUM$strat_mixed_reversal   <- by_stratum$reversal[by_stratum$stratum == "mixed"]
+NUM$strat_mixed_pct        <- by_stratum$pct_reversal[by_stratum$stratum == "mixed"]
+if (any(by_stratum$stratum == "all corrected")) {
+  NUM$strat_corr_pairs    <- by_stratum$pairs[by_stratum$stratum == "all corrected"]
+  NUM$strat_corr_reversal <- by_stratum$reversal[by_stratum$stratum == "all corrected"]
+  NUM$strat_corr_pct      <- by_stratum$pct_reversal[by_stratum$stratum == "all corrected"]
+}
+```
+
+```{r correction-strata-panelA}
+# Same question for panel A: is the direction discordance also inflated by pairs
+# that mix correction statuses? Discordance is a per-pair property (does the pair
+# contain both a positive and a negative z), so join the strata onto it.
+discord_by_pair <- strip_df %>%
+  group_by(panel, outcome, exposure) %>%
+  summarise(discordant = any(z > 0) & any(z < 0), .groups = "drop")
+
+discord_strat <- discord_by_pair %>% inner_join(pair_status, by = c("panel", "outcome", "exposure"))
+stopifnot(nrow(discord_strat) == nrow(discord_by_pair))
+
+by_stratum_A <- discord_strat %>%
+  group_by(stratum) %>%
+  # NOTE: n_discordant must not be named `discordant`. summarise() evaluates
+  # sequentially, so a column named `discordant` would shadow the logical vector
+  # and `mean()` would then average the COUNT, yielding percentages like 1400%.
+  summarise(pairs = n(),
+            n_discordant = sum(discordant),
+            pct = 100 * mean(discordant), .groups = "drop") %>%
+  arrange(desc(pairs))
+stopifnot(all(by_stratum_A$pct >= 0 & by_stratum_A$pct <= 100),
+          sum(by_stratum_A$n_discordant) == sum(discord_strat$discordant))
+by_stratum_A %>% knitr::kable(digits = 1)
+
+gA <- function(s, col) { v <- by_stratum_A[[col]][by_stratum_A$stratum == s]; if (length(v)) v else NA }
+NUM$discA_uncorr_pairs <- gA("all uncorrected", "pairs")
+NUM$discA_uncorr_n     <- gA("all uncorrected", "n_discordant")
+NUM$discA_uncorr_pct   <- gA("all uncorrected", "pct")
+NUM$discA_corr_pairs   <- gA("all corrected", "pairs")
+NUM$discA_corr_n       <- gA("all corrected", "n_discordant")
+NUM$discA_corr_pct     <- gA("all corrected", "pct")
+NUM$discA_mixed_pairs  <- gA("mixed", "pairs")
+NUM$discA_mixed_n      <- gA("mixed", "n_discordant")
+NUM$discA_mixed_pct    <- gA("mixed", "pct")
+
+tabA <- with(discord_strat, table(mixed = stratum == "mixed", discordant = discordant))
+print(tabA)
+if (all(dim(tabA) == c(2, 2))) {
+  ftA <- fisher.test(tabA)
+  NUM$discA_fisher_p  <- ftA$p.value
+  NUM$discA_fisher_or <- unname(ftA$estimate)
+  print(ftA)
+}
+```
+
+```{r correction-strata-test}
+# Is reversal associated with mixing correction status? Counts are small, so this
+# is Fisher's exact on mixed vs same-status, reported as a descriptive check.
+tab <- with(decomp_strat,
+            table(mixed = stratum == "mixed", reversal = class == "sign_reversal"))
+print(tab)
+if (all(dim(tab) == c(2, 2))) {
+  ft <- fisher.test(tab)
+  NUM$strat_fisher_p  <- ft$p.value
+  NUM$strat_fisher_or <- unname(ft$estimate)
+  print(ft)
+}
+```
+
+```{r correction-strata-detail}
+decomp_strat %>%
+  transmute(pair = paste0(analyte, " | ", outcome), k, stratum, class,
+            r_within = round(r_within, 3), r_naive = round(r_naive, 3)) %>%
+  arrange(stratum, class, pair) %>% knitr::kable()
+```
+
+## How many cohorts each pair rests on, and what that does to the ecological slope
+
+The `class` label compares `r_naive` against `r_within` and never uses
+`r_between`, so the reversal classification itself is not affected by what
+follows. But `r_between` is the *explanation* the figure offers — pooling pulls
+the estimate toward the ecological relationship — and it is a correlation across
+K cohort means. At K = 2 a correlation between two points is ±1 by construction,
+carrying only a sign and no magnitude. These numbers support the limitation
+paragraph in `Figure3_Results_Section.md`.
+
+```{r ecological-degeneracy}
+by_K <- decomp_strat %>%
+  group_by(K) %>%
+  summarise(pairs = n(),
+            min_abs_between = min(abs(r_between)),
+            med_abs_between = median(abs(r_between)),
+            max_abs_between = max(abs(r_between)),
+            all_exactly_one = all(abs(abs(r_between) - 1) < 1e-9),
+            reversals = sum(class == "sign_reversal"),
+            pct_reversal = 100 * mean(class == "sign_reversal"),
+            .groups = "drop") %>% arrange(K)
+by_K %>% knitr::kable(digits = 3)
+
+NUM$K2_pairs            <- by_K$pairs[by_K$K == 2]
+NUM$K2_pct_of_all       <- 100 * by_K$pairs[by_K$K == 2] / nrow(decomp_strat)
+NUM$K2_between_all_one  <- by_K$all_exactly_one[by_K$K == 2]
+NUM$K2_reversals        <- by_K$reversals[by_K$K == 2]
+NUM$K2_pct_reversal     <- by_K$pct_reversal[by_K$K == 2]
+NUM$Kge4_pairs          <- sum(decomp_strat$K >= 4)
+NUM$Kge4_reversals      <- sum(decomp_strat$K >= 4 & decomp_strat$class == "sign_reversal")
+NUM$Kge3_reversals      <- sum(decomp_strat$K >= 3 & decomp_strat$class == "sign_reversal")
+NUM$Kle3_reversals      <- sum(decomp_strat$K <= 3 & decomp_strat$class == "sign_reversal")
+NUM$Kge4_max_abs_between<- max(abs(decomp_strat$r_between[decomp_strat$K >= 4]))
+NUM$max_K               <- max(decomp_strat$K)
+
+# Every reversal in the figure comes from a pair with K <= 3 -- assert it so the
+# limitation text cannot silently go stale.
+stopifnot(NUM$Kle3_reversals == sum(decomp_strat$class == "sign_reversal"))
+
+tibble(metric = grep("^K", names(NUM), value = TRUE),
+       value = vapply(NUM[grep("^K", names(NUM))],
+                      function(x) format(x, digits = 4), character(1))) %>%
+  knitr::kable()
+```
+
+## Panel C — heterogeneity vs concentration divergence
+
+```{r panelC}
+run_meta <- function(df) {
+  fit <- tryCatch(rma(yi = df$beta, sei = df$se, method = "REML"),
+                  error = function(e) tryCatch(rma(yi = df$beta, sei = df$se, method = "DL"),
+                                               error = function(e) NULL))
+  if (is.null(fit)) return(tibble())
+  tibble(k = fit$k, I2 = fit$I2, tau2 = fit$tau2, QE = fit$QE, QEp = fit$QEp,
+         pooled = as.numeric(fit$beta))
+}
+
+het_tbl <- results %>% filter(scale == "log1p") %>%
+  group_by(panel, outcome_clean, exposure) %>% filter(n_distinct(study) >= 2) %>%
+  group_modify(~ run_meta(.x)) %>% ungroup()
+
+targeted <- read_csv(file.path(input_dir, "Harmonized_Targeted.csv"),
+                     show_col_types = FALSE, locale = locale(encoding = "latin1"))
+
+# PANEL C UNIT CONFOUND -- NOT FIXED (reverted 2026-08-11 at the author's request).
+#
+# `conc` is read straight off the Concentration column with NO unit conversion,
+# then compared ACROSS cohorts as a max/min fold-change. 51 of 321 analytes are
+# measured in more than one unit across cohorts, so this "concentration
+# divergence" axis is substantially a unit artifact:
+#
+#     CRP  mg/L vs pg/mL  -> 308,146x   apparent fold-change, entirely units
+#     Ba   ng/g vs ng/mL  ->      71x
+#     Al   ng/g vs ng/ml  ->      36x
+#
+# See CODE_AUDIT_2026-08-11.md section 1.2. The cohort-key fix below is retained
+# (it is unrelated to units).
+# Keyed by panel as well as study/exposure (2026-08-11), matching
+# combined_realdata_figure.R: the median concentration of an analyte differs
+# between mothers and children, so collapsing them blends two distributions.
+conc_sum <- bind_rows(
+    targeted %>% filter(!is.na(Mat_PID),   Mat_PID   != "") %>% mutate(panel = "mat"),
+    targeted %>% filter(!is.na(Child_PID), Child_PID != "") %>% mutate(panel = "child")
+  ) %>%
+  transmute(
+    panel,
+    # std_study(), not str_remove("_Targeted$"): the latter yielded "NHBCS_Cot"
+    # while the ExWAS results key on "NHBCS", so that cohort silently failed to
+    # join and was dropped from the fold-change (audit section 3.5).
+    study = std_study(Study),
+    exposure = as.character(Analyte_Code),
+    conc = suppressWarnings(as.numeric(Concentration))
+  ) %>%
+  filter(!is.na(conc), is.finite(conc), conc >= 0) %>%
+  group_by(panel, study, exposure) %>%
+  summarise(med = median(conc, na.rm = TRUE), .groups = "drop")
+
+div_tbl <- results %>% filter(scale == "log1p") %>%
+  distinct(panel, outcome_clean, exposure, study) %>%
+  left_join(conc_sum, by = c("panel", "study", "exposure")) %>%
+  group_by(panel, outcome_clean, exposure) %>%
+  summarise(med_fold = max(med, na.rm = TRUE) / pmax(min(med, na.rm = TRUE), 1e-9),
+            .groups = "drop") %>% filter(is.finite(med_fold))
+
+het_div <- het_tbl %>%
+  left_join(div_tbl, by = c("panel", "outcome_clean", "exposure")) %>%
+  filter(is.finite(med_fold))
+stopifnot(nrow(het_div) <= nrow(het_tbl))
+
+sp <- suppressWarnings(cor.test(log(het_div$med_fold), het_div$I2, method = "spearman"))
+NUM$panelC_pairs      <- nrow(het_div)
+NUM$panelC_rho        <- unname(sp$estimate)
+NUM$panelC_p          <- sp$p.value
+NUM$panelC_trend_drawn<- sp$p.value < 0.05
+NUM$panelC_k2         <- sum(het_div$k == 2, na.rm = TRUE)
+NUM$panelC_k2_pct     <- 100 * mean(het_div$k == 2, na.rm = TRUE)
+NUM$panelC_I2_median  <- median(het_div$I2, na.rm = TRUE)
+NUM$panelC_I2_over50  <- 100 * mean(het_div$I2 > 50, na.rm = TRUE)
+NUM$panelC_fold_min   <- min(het_div$med_fold); NUM$panelC_fold_max <- max(het_div$med_fold)
+NUM$panelC_I2_max     <- max(het_div$I2, na.rm = TRUE)
+
+het_div %>% arrange(desc(I2)) %>%
+  transmute(pair = paste0(exposure, " | ", outcome_clean), k,
+            I2 = round(I2, 1), fold = round(med_fold, 1)) %>%
+  head(10) %>% knitr::kable()
+```
+
+## Panel D (from 2026-08-10) — between-cohort exposure variance vs pooling distortion
+
+Read from `panelD_variance_share.csv`, which `combined_realdata_figure.R` writes
+when it builds the panel, so these numbers cannot drift from the plotted points.
+
+```{r panelD-varshare}
+vs <- read_csv(file.path(diag_dir, "panelD_variance_share.csv"), show_col_types = FALSE) %>%
+  # `class` in this CSV carries the figure's DISPLAY labels ("Sign reversal
+  # (Simpson)"), not the raw regime codes, because combined_realdata_figure.R
+  # recodes them before writing. Match on the label, not on "sign_reversal".
+  mutate(is_rev = grepl("Sign reversal", class))
+stopifnot(any(vs$is_rev), !all(vs$is_rev))
+NUM$pD_pairs        <- nrow(vs)
+NUM$pD_icc_median   <- median(vs$icc)
+NUM$pD_icc_min      <- min(vs$icc); NUM$pD_icc_max <- max(vs$icc)
+NUM$pD_shift_max    <- max(vs$shift)
+
+# `stratum` is now BIOLOGICAL MATRIX concordance (the panel's colour key since
+# 2026-08-10); `cre_stratum` retains the creatinine grouping for the harmonisation
+# paragraph, which still quotes it.
+s_all   <- suppressWarnings(cor.test(vs$icc, vs$shift, method = "spearman"))
+vs_same <- vs %>% filter(stratum == "Same matrix")
+s_same  <- suppressWarnings(cor.test(vs_same$icc, vs_same$shift, method = "spearman"))
+vs_diff <- vs %>% filter(stratum == "Different matrices")
+s_diff  <- suppressWarnings(cor.test(vs_diff$icc, vs_diff$shift, method = "spearman"))
+
+NUM$pD_rho_all  <- unname(s_all$estimate);  NUM$pD_p_all  <- s_all$p.value
+NUM$pD_rho_same <- unname(s_same$estimate); NUM$pD_p_same <- s_same$p.value
+NUM$pD_n_same   <- nrow(vs_same)
+NUM$pD_rho_diff <- unname(s_diff$estimate); NUM$pD_p_diff <- s_diff$p.value
+NUM$pD_n_diff   <- nrow(vs_diff)
+
+by_strat_D <- vs %>% group_by(stratum) %>%
+  summarise(pairs = n(), median_icc = median(icc), median_shift = median(shift),
+            pct_reversal = 100 * mean(is_rev), .groups = "drop") %>%
+  arrange(desc(pairs))
+by_strat_D %>% knitr::kable(digits = 3)
+vs %>% count(matrices, stratum) %>% knitr::kable()
+
+gD <- function(s, col) { v <- by_strat_D[[col]][by_strat_D$stratum == s]; if (length(v)) v else NA }
+NUM$pD_icc_same    <- gD("Same matrix", "median_icc")
+NUM$pD_shift_same  <- gD("Same matrix", "median_shift")
+NUM$pD_rev_same    <- gD("Same matrix", "pct_reversal")
+NUM$pD_icc_diff    <- gD("Different matrices", "median_icc")
+NUM$pD_shift_diff  <- gD("Different matrices", "median_shift")
+NUM$pD_rev_diff    <- gD("Different matrices", "pct_reversal")
+NUM$pD_shift_ratio <- NUM$pD_shift_diff / NUM$pD_shift_same
+NUM$pD_n_blood_urine <- sum(vs$matrices == "Blood + Urine")
+NUM$pD_n_blood_other <- sum(vs$matrices == "Blood + Other")
+NUM$pD_wilcox_shift_matrix <- suppressWarnings(wilcox.test(shift ~ stratum, data = vs))$p.value
+NUM$pD_wilcox_icc_matrix   <- suppressWarnings(wilcox.test(icc ~ stratum, data = vs))$p.value
+
+# Creatinine grouping retained for the harmonisation paragraph.
+by_cre_D <- vs %>% group_by(cre_stratum) %>%
+  summarise(pairs = n(), median_icc = median(icc), median_shift = median(shift),
+            .groups = "drop") %>% arrange(desc(pairs))
+by_cre_D %>% knitr::kable(digits = 3)
+gC <- function(s, col) { v <- by_cre_D[[col]][by_cre_D$cre_stratum == s]; if (length(v)) v else NA }
+NUM$pD_icc_corr   <- gC("All creatinine-corrected", "median_icc")
+NUM$pD_shift_corr <- gC("All creatinine-corrected", "median_shift")
+NUM$pD_icc_unc    <- gC("All uncorrected", "median_icc")
+NUM$pD_shift_unc  <- gC("All uncorrected", "median_shift")
+NUM$pD_icc_mixed  <- gC("Mixed correction status", "median_icc")
+
+# ICC predicts the SHIFT robustly but not the binary reversal label once mixing
+# is controlled -- recorded so the text does not overclaim.
+NUM$pD_wilcox_all  <- suppressWarnings(wilcox.test(icc ~ is_rev, data = vs))$p.value
+NUM$pD_wilcox_same <- suppressWarnings(wilcox.test(icc ~ is_rev, data = vs_same))$p.value
+
+tibble(metric = grep("^pD_", names(NUM), value = TRUE),
+       value = vapply(NUM[grep("^pD_", names(NUM))],
+                      function(x) format(x, digits = 3), character(1))) %>%
+  knitr::kable()
+```
+
+## Supplementary — the budget-allocation cost curve (was panel D until 2026-08-10)
+
+Now `Final_Patchplots/Supp_Pooling_Budget_Tradeoff.pdf`. Numbers retained here
+because the Discussion still refers to the trade-off.
+
+```{r panelD}
+budget <- read_csv(file.path(out_dir, "Pooling_Sim_Output",
+                             "budget_allocation_results.csv"), show_col_types = FALSE)
+names(budget)
+# Crossover = where the "many diverse cohorts" and "one deep cohort" curves meet.
+NUM$panelD_rows <- nrow(budget)
+budget %>% knitr::kable(digits = 4)
+```
+
+```{r panelD-crossover}
+# Columns (fixed total N, split K cohorts x n_per subjects):
+#   beta_within_rmse    - error in the population-average effect   (FALLS with K)
+#   tau_rmse            - error in cross-cohort heterogeneity      (FALLS with K)
+#   median_location_se  - precision for ONE location               (RISES with K)
+# The crossover is where chasing the population-average estimate starts costing
+# more single-site precision than it buys. Bracketed, not interpolated, because
+# K is sampled on a coarse grid.
+prm <- read_csv(file.path(out_dir, "Pooling_Sim_Output", "budget_allocation_params.csv"),
+                show_col_types = FALSE)
+NUM$panelD_N_total  <- prm$value[prm$parameter == "N_total"]
+NUM$panelD_tau_true <- prm$value[prm$parameter == "tau_true"]
+NUM$panelD_beta_bar <- prm$value[prm$parameter == "beta_bar"]
+
+d  <- budget$beta_within_rmse - budget$median_location_se
+i  <- which(diff(sign(d)) != 0)[1]
+NUM$panelD_crossover_lo    <- budget$K[i]
+NUM$panelD_crossover_hi    <- budget$K[i + 1]
+NUM$panelD_crossover_n_lo  <- budget$n_per[i]
+NUM$panelD_crossover_n_hi  <- budget$n_per[i + 1]
+
+NUM$panelD_K_min <- min(budget$K); NUM$panelD_K_max <- max(budget$K)
+NUM$panelD_beta_rmse_at_Kmin <- budget$beta_within_rmse[which.min(budget$K)]
+NUM$panelD_beta_rmse_at_Kmax <- budget$beta_within_rmse[which.max(budget$K)]
+NUM$panelD_se_at_Kmin        <- budget$median_location_se[which.min(budget$K)]
+NUM$panelD_se_at_Kmax        <- budget$median_location_se[which.max(budget$K)]
+NUM$panelD_beta_rmse_fold <- with(budget, beta_within_rmse[which.min(K)] /
+                                          beta_within_rmse[which.max(K)])
+NUM$panelD_se_fold        <- with(budget, median_location_se[which.max(K)] /
+                                          median_location_se[which.min(K)])
+# Does a 2-cohort design recover the true heterogeneity?
+NUM$panelD_tauhat_at_Kmin <- budget$tau_hat_mean[which.min(budget$K)]
+NUM$panelD_tau_bias_Kmin  <- budget$tau_hat_mean[which.min(budget$K)] - NUM$panelD_tau_true
+
+tibble(metric = grep("^panelD", names(NUM), value = TRUE),
+       value = vapply(NUM[grep("^panelD", names(NUM))],
+                      function(x) format(x, digits = 4), character(1))) %>%
+  knitr::kable()
+```
+
+## Context: the full regime summary (NOT the Figure 3 panel numbers)
+
+```{r global-summary}
+read_csv(file.path(diag_dir, "cohort_regime_summary.csv"), show_col_types = FALSE) %>%
+  knitr::kable(digits = 1)
+```
+
+## What the three new cohorts contribute to Figure 3
+
+```{r new-cohorts}
+new_studies <- c("ATLAA", "SWSD", "GRAPHS")
+NUM$new_in_panelA_estimates <- sum(strip_df$study %in% new_studies)
+NUM$new_in_panelA_pairs <- strip_df %>% filter(study %in% new_studies) %>%
+  distinct(pair) %>% nrow()
+strip_df %>% filter(study %in% new_studies) %>%
+  count(study, pair) %>% knitr::kable()
+```
+
+## Every number quoted in the text
+
+```{r final-numbers}
+tibble(metric = names(NUM),
+       value  = vapply(NUM, function(x) format(x, digits = 4), character(1))) %>%
+  knitr::kable()
+```
+
+```{r export-numbers}
+# Export NUM so the consolidated ledger (Coding/Hero_Numbers.Rmd) can quote these
+# instead of duplicating the computation. Added 2026-08-10: Figure 3's numbers
+# are computed here and nowhere else, so this file is their single source.
+.hn <- file.path("../../Output/Hero_Numbers")
+dir.create(.hn, showWarnings = FALSE, recursive = TRUE)
+saveRDS(NUM, file.path(.hn, "figure3_numbers.rds"))
+write.csv(
+  data.frame(metric = names(NUM),
+             value  = vapply(NUM, function(x) format(x, digits = 6), character(1))),
+  file.path(.hn, "figure3_numbers.csv"), row.names = FALSE)
+cat("exported", length(NUM), "Figure 3 numbers to Output/Hero_Numbers/\n")
+```

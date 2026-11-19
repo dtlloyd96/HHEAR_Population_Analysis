@@ -1,0 +1,1338 @@
+---
+title: "HHEAR_Data_Clean_Targeted_V3"
+author: "Dillon Lloyd"
+date: "2026-05-04"
+output: html_document
+---
+```{r}
+## =========================================================
+## Harmonize Targeted Metabolomics (All Cohorts) - Clean .R
+## =========================================================
+
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(data.table)
+})
+
+## ---------- Helpers ----------
+# Use a single reporting threshold across studies:
+# prefer LOQ when available, otherwise fall back to LOD.
+pick_reporting_limit <- function(lod = NA, loq = NA) {
+  lod <- suppressWarnings(as.numeric(lod))
+  loq <- suppressWarnings(as.numeric(loq))
+  dplyr::coalesce(loq, lod)
+}
+
+collect_lod_summary <- function(data, study_name) {
+  child_id <- if ("Child_PID" %in% names(data)) as.character(data$Child_PID) else rep(NA_character_, nrow(data))
+  mat_id <- if ("Mat_PID" %in% names(data)) as.character(data$Mat_PID) else rep(NA_character_, nrow(data))
+  person_id <- dplyr::coalesce(child_id, mat_id)
+  analyte_code <- if ("Analyte_Code" %in% names(data)) as.character(data$Analyte_Code) else rep(NA_character_, nrow(data))
+  chemical_group <- if ("Chemical_Group" %in% names(data)) as.character(data$Chemical_Group) else rep(NA_character_, nrow(data))
+  units <- if ("Units" %in% names(data)) as.character(data$Units) else rep(NA_character_, nrow(data))
+  conc <- suppressWarnings(as.numeric(data$Concentration))
+  lod <- if ("LOD" %in% names(data)) suppressWarnings(as.numeric(data$LOD)) else rep(NA_real_, nrow(data))
+  
+  tibble(
+    Study = study_name,
+    Person_ID = person_id,
+    Chemical_Group = chemical_group,
+    Analyte_Code = analyte_code,
+    Units = units,
+    Concentration = conc,
+    LOD = lod
+  ) %>%
+    filter(!Analyte_Code %in% c("CRE", "SG"), !is.na(Concentration)) %>%
+    mutate(
+      Has_Limit = !is.na(LOD) & LOD > 0,
+      Below_LOD = Has_Limit & Concentration <= LOD
+    ) %>%
+    group_by(Study, Chemical_Group, Analyte_Code, Units) %>%
+    summarise(
+      N_People_Total = n_distinct(Person_ID[!is.na(Person_ID)]),
+      N_People_With_Limit = n_distinct(Person_ID[Has_Limit & !is.na(Person_ID)]),
+      N_People_Below_LOD = n_distinct(Person_ID[Below_LOD & !is.na(Person_ID)]),
+      Pct_People_Below_LOD = ifelse(N_People_With_Limit > 0, 100 * N_People_Below_LOD / N_People_With_Limit, NA_real_),
+      N_Results_Total = n(),
+      N_Results_With_Limit = sum(Has_Limit),
+      N_Results_Below_LOD = sum(Below_LOD),
+      Pct_Results_Below_LOD = ifelse(N_Results_With_Limit > 0, 100 * N_Results_Below_LOD / N_Results_With_Limit, NA_real_),
+      .groups = "drop"
+    )
+}
+
+collect_lod_any_summary <- function(data, study_name) {
+  child_id <- if ("Child_PID" %in% names(data)) as.character(data$Child_PID) else rep(NA_character_, nrow(data))
+  mat_id <- if ("Mat_PID" %in% names(data)) as.character(data$Mat_PID) else rep(NA_character_, nrow(data))
+  person_id <- dplyr::coalesce(child_id, mat_id)
+  analyte_code <- if ("Analyte_Code" %in% names(data)) as.character(data$Analyte_Code) else rep(NA_character_, nrow(data))
+  conc <- suppressWarnings(as.numeric(data$Concentration))
+  lod <- if ("LOD" %in% names(data)) suppressWarnings(as.numeric(data$LOD)) else rep(NA_real_, nrow(data))
+  is_adjustment_marker <- analyte_code %in% c("CRE", "SG")
+  has_result <- !is_adjustment_marker & !is.na(conc)
+  has_limit <- has_result & !is.na(lod) & lod > 0
+  below_lod <- has_limit & conc <= lod
+  people_with_ids <- !is.na(person_id)
+
+  tibble(
+    Study = study_name,
+    N_People_Total = dplyr::n_distinct(person_id[has_result & people_with_ids]),
+    N_People_With_Any_Limit = dplyr::n_distinct(person_id[has_limit & people_with_ids]),
+    N_People_Below_Any_LOD = dplyr::n_distinct(person_id[below_lod & people_with_ids]),
+    Pct_People_Below_Any_LOD = ifelse(dplyr::n_distinct(person_id[has_limit & people_with_ids]) > 0,
+                                      100 * dplyr::n_distinct(person_id[below_lod & people_with_ids]) / dplyr::n_distinct(person_id[has_limit & people_with_ids]),
+                                      NA_real_),
+    N_Results_Total = sum(has_result),
+    N_Results_With_Limit = sum(has_limit),
+    N_Results_Below_LOD = sum(below_lod),
+    Pct_Results_Below_LOD = ifelse(sum(has_limit) > 0, 100 * sum(below_lod) / sum(has_limit), NA_real_)
+  )
+}
+
+censor_to_limit <- function(conc, lim) {
+  lim <- suppressWarnings(as.numeric(lim))
+  ifelse(!is.na(lim) & lim > 0 & (is.na(conc) | conc < lim), lim, conc)
+}
+
+detected_flag <- function(conc, lim) {
+  lim <- suppressWarnings(as.numeric(lim))
+  ifelse(!is.na(lim) & lim > 0, !is.na(conc) & conc >= lim, NA)
+}
+
+## DILUTION ADJUSTMENT SWITCH (2026-11-03).
+## cre_correct() divides by creatinine in mg/dL with no x100, so CRE-corrected
+## cohorts land ~50-200x below SG-corrected and unadjusted cohorts while still
+## labelled ng/mL. That is fine within a cohort but distorts every between-cohort
+## comparison. Set HHEAR_DILUTION_ADJUST=FALSE to build an UNADJUSTED copy for
+## between-cohort analyses, and HHEAR_HARMONIZED_OUT to write it somewhere other
+## than Input/Harmonized_Datasets.
+## HHEAR_DILUTION_ADJUST=UGG is a sensitivity variant: creatinine-corrected values
+## are multiplied by 100, i.e. (ng/mL)/(mg/dL) -> ug/g creatinine, which puts
+## them on the same order of magnitude as SG-normalized and raw ng/mL. Every
+## cohort's creatinine is mg/dL (checked 2026-11-03), so x100 is uniform.
+## DEFAULT CHANGED 2026-11-03 to UGG (author's decision): ug/g creatinine is the
+## canonical build. TRUE reproduces the pre-2026-11-03 mg/dL-divided data
+## (backed up in Input/Harmonized_Datasets/_backup_2026-11-03_pre_ugg/).
+## Rebuild via Coding/rebuild_harmonized_targeted.sh, which also adds the
+## Dilution_Adjustment column.
+DILUTION_MODE   <- toupper(Sys.getenv("HHEAR_DILUTION_ADJUST", "UGG"))
+stopifnot(DILUTION_MODE %in% c("TRUE", "FALSE", "UGG"))
+DILUTION_ADJUST <- DILUTION_MODE != "FALSE"
+CRE_SCALE       <- if (DILUTION_MODE == "UGG") 100 else 1
+HARMONIZED_OUT  <- Sys.getenv("HHEAR_HARMONIZED_OUT", "../Input/Harmonized_Datasets")
+message("Dilution adjustment: ", DILUTION_MODE, "  -> writing to ", HARMONIZED_OUT)
+
+sg_correct <- function(conc, sg, target = 1.020) {
+  if (!DILUTION_ADJUST) return(conc)
+  ifelse(is.na(sg) | sg <= 1, conc, conc * ((target - 1)/(sg - 1)))
+}
+
+cre_correct <- function(conc, cre) {
+  if (!DILUTION_ADJUST) return(conc)
+  ifelse(!is.na(cre) & cre > 0, CRE_SCALE * conc/cre, conc)
+}
+
+to_ng_per_mL <- function(value, units) {
+  case_when(
+    is.na(units)            ~ value,
+    units %in% c("ng/mL")   ~ value,
+    units %in% c("ug/dL")   ~ value * 10,
+    units %in% c("ng/L")    ~ value / 1000,
+    units %in% c("pg/mL","pg/ml") ~ value / 1000,
+    units %in% c("mg/L")    ~ value * 1000,
+    TRUE ~ value
+  )
+}
+
+## ---------- Load All Datasets ----------
+data_files <- list.files(
+  path = "../Input/",
+  pattern = "All\\.RData$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+invisible(lapply(data_files, load, .GlobalEnv))
+lod_summary_list <- list()
+lod_any_summary_list <- list()
+
+## =========================================================
+## Cohort-by-cohort targeted tables (always produce *_Targeted)
+## =========================================================
+
+## CCREOH ---------------------------------------------------
+CCREOH_Targeted_raw <- CCREOH_data_list[["CCREOH_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["CCREOH_Targeted"]] <- collect_lod_summary(CCREOH_Targeted_raw, "CCREOH_Targeted")
+CCREOH_Targeted <- CCREOH_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## CEHC -----------------------------------------------------
+CEHC_Targeted_raw <- CEHC_data_list[["CEHC_Targeted"]] %>% 
+  transmute(
+    Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = Sample_collection_year
+  )
+lod_summary_list[["CEHC_Targeted"]] <- collect_lod_summary(CEHC_Targeted_raw, "CEHC_Targeted")
+CEHC_Targeted <- CEHC_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## CHARGE ---------------------------------------------------
+CHARGE_Targeted_raw <- CHARGE_data_list[["CHARGE_Targeted"]] %>%
+  transmute(
+    Child_PID      = CHILD_PID,
+    Chemical_Group = Chemical_Group,
+    Analyte_Code   = analyte_code,
+    Concentration  = concentration,
+    Units          = units,
+    LOD,
+    Sample_Collection_Year =sample_collection_year
+  )
+lod_summary_list[["CHARGE_Targeted"]] <- collect_lod_summary(CHARGE_Targeted_raw, "CHARGE_Targeted")
+CHARGE_Targeted <- CHARGE_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## DAPS (CRE correction) -----------------------------------
+DAPS_Targeted_raw <- DAPS_data_list[["DAPS_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = chemical_group, Analyte_Code = Analyte_code,
+    Concentration, Units = units, LOD, sample_collection_timepoint,Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["DAPS_Targeted"]] <- collect_lod_summary(DAPS_Targeted_raw, "DAPS_Targeted")
+
+DAPS_Targeted <- DAPS_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+
+DAPS_CRE <- DAPS_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, sample_collection_timepoint, Concentration_CRE = Concentration)
+
+DAPS_Targeted <- DAPS_Targeted %>%
+  left_join(DAPS_CRE, by = c("Child_PID","sample_collection_timepoint")) %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE, -sample_collection_timepoint)
+
+## DEPART (CRE correction) ---------------------------------
+DEPART_Targeted_raw <- DEPART_data_list[["DEPART_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = Sample_Collection_Year
+  )
+lod_summary_list[["DEPART_Targeted"]] <- collect_lod_summary(DEPART_Targeted_raw, "DEPART_Targeted")
+
+DEPART_Targeted <- DEPART_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+DEPART_CRE <- DEPART_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, Concentration_CRE = Concentration, Units_CRE = Units)
+
+DEPART_Targeted <- DEPART_Targeted %>%
+  left_join(DEPART_CRE, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE, -Units_CRE)
+
+## DISCOVER (SG correction) --------------------------------
+DISCOVER_Targeted_raw <- DISCOVER_data_list[["DISCOVER_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, Units, LOD, aw_visit, ds_visit, ds_day,
+    ID2 = paste0(aw_visit, ":", ds_visit, ":", ds_day), Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["DISCOVER_Targeted"]] <- collect_lod_summary(DISCOVER_Targeted_raw, "DISCOVER_Targeted")
+
+DISCOVER_Targeted <- DISCOVER_Targeted_raw %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD)) %>%
+  select(-aw_visit, -ds_visit, -ds_day)
+
+DISCOVER_SG <- DISCOVER_Targeted_raw %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Child_PID, ID2, Concentration_SG = Concentration)
+
+DISCOVER_Targeted <- DISCOVER_Targeted %>%
+  left_join(DISCOVER_SG, by = c("Child_PID","ID2")) %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG),
+         LOD = sg_correct(LOD, Concentration_SG)) %>%
+  select(-ID2, -Concentration_SG)
+
+## EEICC ---------------------------------------------------
+EEICC_Targeted_raw <- EEICC_data_list[["EEICC_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = Sample_collection_year
+  )
+lod_summary_list[["EEICC_Targeted"]] <- collect_lod_summary(EEICC_Targeted_raw, "EEICC_Targeted")
+EEICC_Targeted <- EEICC_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## ELEMENT (pivot to long for child + maternal) ------------
+ELEMENT_Targeted_Child <- ELEMENT_data_list[["ELEMENT_Targeted"]] %>%
+  filter(str_detect(Sample_collection_timepoint_desc, "early")) %>% 
+  pivot_longer(cols = 7:14, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  mutate(Units = "ng/L") %>%
+  transmute(Child_PID = PID, Analyte_Code, Concentration, Units)
+
+ELEMENT_Targeted_Mat <- ELEMENT_data_list[["ELEMENT_Targeted"]] %>%
+  filter(str_detect(Sample_collection_timepoint_desc, "preg")) %>%
+  pivot_longer(cols = 7:14, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  mutate(Units = "ng/L") %>%
+  transmute(Mat_PID = PID, Analyte_Code, Concentration, Units)
+
+ELEMENT_Targeted_PreAdjust <- bind_rows(ELEMENT_Targeted_Child, ELEMENT_Targeted_Mat)
+lod_summary_list[["ELEMENT_Targeted"]] <- collect_lod_summary(ELEMENT_Targeted_PreAdjust, "ELEMENT_Targeted")
+ELEMENT_Targeted <- ELEMENT_Targeted_PreAdjust
+rm(ELEMENT_Targeted_Child, ELEMENT_Targeted_Mat)
+
+## ESPINA --------------------------------------------------
+ESPINA_Targeted_raw <- ESPINA_data_list[["ESPINA_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, LOD = LOQ, Units,Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["ESPINA_Targeted"]] <- collect_lod_summary(ESPINA_Targeted_raw, "ESPINA_Targeted")
+ESPINA_Targeted <- ESPINA_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## GOALS (fix name) ---------------------------------------
+GOALS_Targeted_raw <- GOALS_data_list[["GOALS_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, LOD = LOQ, Units,Sample_Collection_Year = Sample_collection_year
+  )
+lod_summary_list[["GOALS_Targeted"]] <- collect_lod_summary(GOALS_Targeted_raw, "GOALS_Targeted")
+GOALS_Targeted <- GOALS_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## GOC (CRE correction) -----------------------------------
+GOC_Targeted_raw <- GOC_data_list[["GOC_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = chemical_group, Analyte_Code = analyte_code,
+    Concentration, Units, LOD, sample_collection_timepoint, Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["GOC_Targeted"]] <- collect_lod_summary(GOC_Targeted_raw, "GOC_Targeted")
+
+GOC_Targeted <- GOC_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+GOC_CRE <- GOC_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, sample_collection_timepoint, Concentration_CRE = Concentration)
+
+GOC_Targeted <- GOC_Targeted %>%
+  left_join(GOC_CRE, by = c("Child_PID","sample_collection_timepoint")) %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE, -sample_collection_timepoint)
+
+## IMBEDD (no targeted) -----------------------------------
+# (intentionally omitted)
+
+## MADRES --------------------------------------------------
+MADRES_Targeted_raw <- MADRES_data_list[["MADRES_Targeted"]] %>% 
+  transmute(
+    Mat_PID = child_PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD, Sample_Collection_Year = Sample_collection_year
+  )
+lod_summary_list[["MADRES_Targeted"]] <- collect_lod_summary(MADRES_Targeted_raw, "MADRES_Targeted")
+MADRES_Targeted <- MADRES_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## MARBLES (SG correction; multiple sources) ---------------
+marbtar <- MARBLES_data_list[["MARBLES_Targeted"]] %>%
+  select(Mat_PID = CHILD_PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = Sample_collection_year) 
+
+marb_uep1 <- MARBLES_data_list[["MARBLES_UEP_Tri1"]] %>% 
+  pivot_longer(cols = 5:13, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = CHILD_PID, Analyte_Code, Concentration)
+
+marb_uep2 <- MARBLES_data_list[["MARBLES_UEP_Tri2_3"]] %>%
+  pivot_longer(cols = 5:9, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = CHILD_PID, Analyte_Code, Concentration)
+
+marb_upest1 <- MARBLES_data_list[["MARBLES_UPEST_Tri1"]] %>%
+  pivot_longer(cols = 5:12, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = CHILD_PID, Analyte_Code, Concentration)
+
+marb_uphth1 <- MARBLES_data_list[["MARBLES_UPHTH_Trim1"]] %>%
+  pivot_longer(cols = 5:14, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = CHILD_PID, Analyte_Code, Concentration)
+
+MARBLES_all <- rbindlist(list(marbtar, marb_uep1, marb_uep2, marb_upest1, marb_uphth1),
+                         use.names = TRUE, fill = TRUE)
+lod_summary_list[["MARBLES_Targeted"]] <- collect_lod_summary(MARBLES_all, "MARBLES_Targeted")
+
+MARBLES_Targeted <- MARBLES_all %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+MARBLES_SG <- marbtar %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Mat_PID, Concentration_SG = ifelse(is.na(Concentration), 1.020, Concentration))
+
+MARBLES_Targeted <- MARBLES_Targeted %>%
+  left_join(MARBLES_SG, by = "Mat_PID") %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG),
+         LOD = sg_correct(LOD, Concentration_SG)) %>%
+  select(-Concentration_SG)
+
+## MDUC ----------------------------------------------------
+MDUC_Targeted_raw <- MDUC_data_list[["MDUC_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_Code, Analyte_Code, LOD,
+    Concentration, Units, Sample_Collection_Year = Sample_collection_year
+  )
+lod_summary_list[["MDUC_Targeted"]] <- collect_lod_summary(MDUC_Targeted_raw, "MDUC_Targeted")
+MDUC_Targeted <- MDUC_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## MEBCO (CRE correction) ---------------------------------
+MEBCO_long <- MEBCO_data_list[["MEBCO_Targeted"]] %>% 
+  pivot_longer(cols = 3:8, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Child_PID = PID, Analyte_Code, Concentration)
+
+lod_summary_list[["MEBCO_Targeted"]] <- collect_lod_summary(MEBCO_long, "MEBCO_Targeted")
+MEBCO_Targeted <- MEBCO_long %>%
+  filter(Analyte_Code != "CRE")
+
+MEBCO_CRE <- MEBCO_long %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, Concentration_CRE = Concentration)
+
+MEBCO_Targeted <- MEBCO_Targeted %>%
+  left_join(MEBCO_CRE, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+# MEBCO_Targeted %>% 
+#   dplyr::filter(Analyte_Code == "As") %>% 
+#   View
+
+## NASH ----------------------------------------------------
+NASH_Targeted_raw <- NASH_data_list[["NASH_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD, Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["NASH_Targeted"]] <- collect_lod_summary(NASH_Targeted_raw, "NASH_Targeted")
+NASH_Targeted <- NASH_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## NFGS (SG correction) -----------------------------------
+NFGS_Targeted_raw <- NFGS_data_list[["NFGS_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = sample_collection_year)
+lod_summary_list[["NFGS_Targeted"]] <- collect_lod_summary(NFGS_Targeted_raw, "NFGS_Targeted")
+
+NFGS_Targeted <- NFGS_Targeted_raw %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+NFGS_SG <- NFGS_Targeted_raw %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Child_PID, Concentration_SG = Concentration)
+
+NFGS_Targeted <- NFGS_Targeted %>%
+  left_join(NFGS_SG, by = "Child_PID") %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG),
+         LOD = sg_correct(LOD, Concentration_SG)) %>%
+  select(-Concentration_SG)
+
+## NHBCS_Cot (CRE correction; LOQ) ------------------------
+NHBCS_Cot_Targeted_raw <- NHBCS_Cot_data_list[["NHBCS_Cot_Targeted"]] %>%
+  transmute(Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD = LOQ,Sample_Collection_Year = Sample_Collection_Year)
+lod_summary_list[["NHBCS_Cot_Targeted"]] <- collect_lod_summary(NHBCS_Cot_Targeted_raw, "NHBCS_Cot_Targeted")
+
+NHBCS_Cot_Targeted <- NHBCS_Cot_Targeted_raw %>% 
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+NHBCS_Cot_CRE <- NHBCS_Cot_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Mat_PID, Concentration_CRE = Concentration)
+
+NHBCS_Cot_Targeted <- NHBCS_Cot_Targeted %>%
+  left_join(NHBCS_Cot_CRE, by = "Mat_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+## NHBCS (combine targeted + Epi PFAS) --------------------
+# MATRIX SEPARATION (2026-08, revised): NHBCS carries PFAS from TWO DIFFERENT
+# BIOLOGICAL MATRICES, not two assays of the same thing:
+#   * NHBCS_Targeted  -> Sample_matrix == "BR" (breast milk), all 9 SPFAS analytes
+#   * NHBCS_Epi       -> serum/plasma (pivoted below)
+# Breast-milk PFOS 0.024 vs serum 2.60 is a ~1% milk:serum ratio, which is the
+# documented partitioning -- the low values are physiology, NOT a failed assay.
+#
+# The bug was that bind_rows() put both under the same Analyte_Code, so the
+# pipeline's group_by(Study, PID, Analyte_Code) %>% mean() AVERAGED milk with
+# serum (PFOS entered analyses at 0.957 instead of 2.60).
+#
+# Fix: tag the breast-milk codes with a _BR suffix so they can never pool with
+# serum, but are retained rather than discarded. Same approach as ATLAA's _DBS.
+# Applied to ALL 9, not just the 4 that overlap Epi -- PFBS/PFHP/PFHX/PFUN are
+# measured in SERUM by other cohorts, so they were silently pooling too.
+#
+# NOTE: PFHX has 2 rows per person (852/426) differing only in LOQ (0.01 vs
+# 0.025) and Comment_code (0 vs 211). Both are non-detects; left as-is because
+# Comment_code 211 is undocumented here. Worth checking against NHBCS's codebook.
+NHBCS_Targeted_Targ <- NHBCS_data_list[["NHBCS_Targeted"]] %>%
+  mutate(Analyte_Code = if_else(Chemical_Group == "SPFAS",
+                                paste0(Analyte_Code, "_BR"), Analyte_Code)) %>%
+  transmute(Mat_PID = Mother_pid, Chemical_Group, Analyte_Code, Concentration, Units, LOD = LOQ,Sample_Collection_Year = sample_collection_year) %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+NHBCS_Targeted_Epi <- NHBCS_data_list[["NHBCS_Epi"]] %>%
+  pivot_longer(cols = 16:22, names_to = "Analyte_Code", values_to = "Concentration") %>%
+  transmute(Mat_PID = mother_pid, Analyte_Code, Concentration)
+
+NHBCS_Targeted_PreAdjust <- bind_rows(NHBCS_Targeted_Targ, NHBCS_Targeted_Epi)
+lod_summary_list[["NHBCS_Targeted"]] <- collect_lod_summary(NHBCS_Targeted_PreAdjust, "NHBCS_Targeted")
+NHBCS_Targeted <- NHBCS_Targeted_PreAdjust
+
+## nuMoM2b (SG correction) --------------------------------
+nuMoM2b_Targeted_raw <- nuMoM2b_data_list[["nuMoM2b_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,
+    sample_collection_timepoint,Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["nuMoM2b_Targeted"]] <- collect_lod_summary(nuMoM2b_Targeted_raw, "nuMoM2b_Targeted")
+
+nuMoM2b_Targeted <- nuMoM2b_Targeted_raw %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+nuMoM2b_SG <- nuMoM2b_Targeted_raw %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Mat_PID, sample_collection_timepoint, Concentration_SG = Concentration)
+
+nuMoM2b_Targeted <- nuMoM2b_Targeted %>%
+  left_join(nuMoM2b_SG, by = c("Mat_PID","sample_collection_timepoint")) %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG),
+         LOD = sg_correct(LOD, Concentration_SG)) %>%
+  select(-sample_collection_timepoint, -Concentration_SG)
+
+## PARENTs -------------------------------------------------
+PARENTs_Targeted_raw <- PARENTs_data_list[["PARENTs_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, Units, LOD,Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["PARENTs_Targeted"]] <- collect_lod_summary(PARENTs_Targeted_raw, "PARENTs_Targeted")
+PARENTs_Targeted <- PARENTs_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## SEARCH --------------------------------------------------
+SEARCH_Targeted_raw <- SEARCH_data_list[["SEARCH_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["SEARCH_Targeted"]] <- collect_lod_summary(SEARCH_Targeted_raw, "SEARCH_Targeted")
+SEARCH_Targeted <- SEARCH_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## SICAS (CRE correction) ---------------------------------
+SICAS_Targeted_raw <- SICAS_data_list[["SICAS_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = Sample_collection_year)
+lod_summary_list[["SICAS_Targeted"]] <- collect_lod_summary(SICAS_Targeted_raw, "SICAS_Targeted")
+
+SICAS_Targeted <- SICAS_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+SICAS_CRE <- SICAS_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, Concentration_CRE = Concentration)
+
+SICAS_Targeted <- SICAS_Targeted %>%
+  left_join(SICAS_CRE, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+## SLC (bind two parts) -----------------------------------
+
+
+slc_2517_raw <- SLC_data_list[["SLC_2517_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,CRE,Sample_Collection_Year = sample_collection_year) %>%
+  identity()
+
+slc_2517 <- slc_2517_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD),
+         # inline division kept (not cre_correct) so the default output is
+         # unchanged where CRE is missing; honours the switch above
+         Concentration = if (DILUTION_ADJUST) CRE_SCALE * Concentration/CRE else Concentration,
+         LOD = cre_correct(LOD, CRE)) %>%
+  dplyr::select(-CRE)
+
+
+slc_3131_raw <- SLC_data_list[["SLC_3131_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = sample_collection_year) %>%
+  identity()
+
+slc_3131 <- slc_3131_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+SLC_Targeted_PreAdjust <- bind_rows(slc_2517_raw, slc_3131_raw)
+lod_summary_list[["SLC_Targeted"]] <- collect_lod_summary(SLC_Targeted_PreAdjust, "SLC_Targeted")
+SLC_Targeted <- bind_rows(slc_2517, slc_3131)
+
+## TEDDY (CRE correction) ---------------------------------
+TEDDY_Targeted_raw <- TEDDY_data_list[["TEDDY_Targeted"]] %>%
+  # UNITS CORRECTION (2026-08): TEDDY's UPAH panel (NAP1, NAP2, PYR1) is
+  # labelled "ng/mL" but the values are numerically ng/L. Evidence:
+  #  * raw medians 588 / 1670 / 80 sit in the same numeric range as the cohorts
+  #    that DO report ng/L (GRAPHS 1890/6075/894, DCHS 870/5980/290,
+  #    SICAS 609/4690/126) rather than 1000x above them;
+  #  * TEDDY's reported LODs (150 / 800 / 100) likewise match SICAS's ng/L LODs
+  #    (200 / 100 / 20) -- a genuine ng/mL panel would imply a detection limit
+  #    ~1000x worse than the same assay elsewhere;
+  #  * across the 36 analytes TEDDY shares with other creatinine-corrected
+  #    cohorts the median ratio is 2x, but PYR1/NAP1/NAP2 are 1123x/901x/463x;
+  #  * every other TEDDY chemical group has a median of 0.19-9.59 (normal for
+  #    ng/mL); only UPAH sits at 511.
+  # Scope is deliberately narrow: UPAH only, TEDDY only. Re-check against the
+  # TEDDY data dictionary if one becomes available.
+  mutate(Units = if_else(Chemical_Group == "UPAH" & Units == "ng/mL", "ng/L", Units)) %>%
+  transmute(
+    Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,
+    Sample_collection_timepoint,Sample_Collection_Year = Sample_collection_year
+  )
+lod_summary_list[["TEDDY_Targeted"]] <- collect_lod_summary(TEDDY_Targeted_raw, "TEDDY_Targeted")
+
+TEDDY_Targeted <- TEDDY_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+TEDDY_CRE <- TEDDY_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>% 
+  transmute(Child_PID, Sample_collection_timepoint, Concentration_CRE = Concentration)
+
+TEDDY_Targeted <- TEDDY_Targeted %>%
+  left_join(TEDDY_CRE, by = c("Child_PID","Sample_collection_timepoint")) %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE, -Sample_collection_timepoint)
+
+## TSIC (bind inflam + cotinine; LOQ used for cot if provided) -----------
+tsic_inflam_raw <- TSIC_data_list[["TSIC_Inflam"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = Sample_collection_year) %>%
+  identity()
+
+tsic_inflam <- tsic_inflam_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+tsic_cot_raw <- TSIC_data_list[["TSIC_Cotine"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD = LOQ,Sample_Collection_Year = Sample_collection_year) %>%
+  identity()
+
+tsic_cot <- tsic_cot_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+TSIC_Targeted_PreAdjust <- bind_rows(tsic_inflam_raw, tsic_cot_raw)
+lod_summary_list[["TSIC_Targeted"]] <- collect_lod_summary(TSIC_Targeted_PreAdjust, "TSIC_Targeted")
+TSIC_Targeted <- bind_rows(tsic_inflam, tsic_cot)
+
+## USCEHC (none targeted) ---------------------------------
+# (intentionally omitted)
+
+## VAPS (CRE correction) ----------------------------------
+VAPS_Targeted_raw <- VAPS_data_list[["VAPS_Targeted"]] %>%
+  transmute(Child_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = Sample_Collection_Year)
+lod_summary_list[["VAPS_Targeted"]] <- collect_lod_summary(VAPS_Targeted_raw, "VAPS_Targeted")
+
+VAPS_Targeted <- VAPS_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+VAPS_CRE <- VAPS_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID, Concentration_CRE = Concentration)
+
+VAPS_Targeted <- VAPS_Targeted %>%
+  left_join(VAPS_CRE, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+## VDAART (SG correction) ---------------------------------
+VDAART_Targeted_raw <- VDAART_data_list[["VDAART_Targeted"]] %>%
+  transmute(
+    Child_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code = analyte_code,
+    Concentration, Units, LOD,Sample_Collection_Year = sample_collection_year
+  ) %>%
+  # 2026-11-05: VDAART codes 1-hydroxypyrene as "PYR"; every other cohort uses
+  # PYR1 (same CAS 5315-79-7). Effect on B4 is negligible (PYR1 R2 23.84 -> 23.54;
+  # R4_5_B4_PYR_sensitivity.R). Takes effect at the next full rebuild.
+  mutate(Analyte_Code = if_else(Analyte_Code == "PYR", "PYR1", Analyte_Code))
+lod_summary_list[["VDAART_Targeted"]] <- collect_lod_summary(VDAART_Targeted_raw, "VDAART_Targeted")
+
+VDAART_Targeted <- VDAART_Targeted_raw %>%
+  filter(Analyte_Code != "SG") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+VDAART_SG <- VDAART_Targeted_raw %>%
+  filter(Analyte_Code == "SG") %>%
+  transmute(Child_PID, Concentration_SG = Concentration)
+
+VDAART_Targeted <- VDAART_Targeted %>%
+  left_join(VDAART_SG, by = "Child_PID") %>%
+  mutate(Concentration = sg_correct(Concentration, Concentration_SG),
+         LOD = sg_correct(LOD, Concentration_SG)) %>%
+  select(-Concentration_SG)
+
+## VIVA ----------------------------------------------------
+VIVA_Targeted_raw <- VIVA_data_list[["VIVAC_Targeted"]] %>%
+  transmute(
+    Mat_PID = CHILD_PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = Sample_collection_year
+  )
+lod_summary_list[["VIVA_Targeted"]] <- collect_lod_summary(VIVA_Targeted_raw, "VIVA_Targeted")
+VIVA_Targeted <- VIVA_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## ZIP (CRE correction) -----------------------------------
+ZIP_Targeted_raw <- ZIP_data_list[["ZIP_Targeted"]] %>% 
+  transmute(Mat_PID = PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD,Sample_Collection_Year = sample_collection_year)
+lod_summary_list[["ZIP_Targeted"]] <- collect_lod_summary(ZIP_Targeted_raw, "ZIP_Targeted")
+
+ZIP_Targeted <- ZIP_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+ZIP_CRE <- ZIP_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Mat_PID, Concentration_CRE = Concentration)
+
+ZIP_Targeted <- ZIP_Targeted %>%
+  left_join(ZIP_CRE, by = "Mat_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+## CTS -----------------------------------------------------
+CTS_Targeted_raw <- CTS_data_list[["CTS_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group = Chemical_Group_code, Analyte_Code,
+    Concentration, Units, LOD, Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["CTS_Targeted"]] <- collect_lod_summary(CTS_Targeted_raw, "CTS_Targeted")
+CTS_Targeted <- CTS_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+## DCHS (prefer LOQ; CRE correction) ----------------------
+# Child
+DCHS_Targeted_Child_raw <- DCHS_data_list[["DCHS_Targeted"]] %>%
+  filter(Sample_collection_timepoint_unit == "Age")
+
+DCHS_Targeted_Child <- DCHS_Targeted_Child_raw %>%
+  transmute(
+    Child_PID = child_pid,
+    Chemical_Group = Chemical_Group_code,
+    Analyte_Code,
+    Concentration,
+    Units,
+    LOD = pick_reporting_limit(LOD, LOQ),
+    Sample_Collection_Year = sample_collection_year
+  ) %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+DCHS_CRE_Child <- DCHS_Targeted_Child_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Child_PID = child_pid, Concentration_CRE = Concentration)
+
+DCHS_Targeted_Child <- DCHS_Targeted_Child %>%
+  left_join(DCHS_CRE_Child, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+# Maternal
+DCHS_Targeted_Mat_raw <- DCHS_data_list[["DCHS_Targeted"]] %>%
+  filter(Sample_collection_timepoint_unit != "Age")
+
+DCHS_Targeted_Mat <- DCHS_Targeted_Mat_raw %>%
+  transmute(
+    Mat_PID = mother_pid,
+    Chemical_Group = Chemical_Group_code,
+    Analyte_Code,
+    Concentration,
+    Units,
+    LOD = pick_reporting_limit(LOD, LOQ),
+    Sample_Collection_Year = sample_collection_year
+  ) %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+DCHS_Targeted_PreAdjust <- bind_rows(
+  DCHS_Targeted_Child_raw %>%
+    transmute(
+      Child_PID = child_pid,
+      Chemical_Group = Chemical_Group_code,
+      Analyte_Code,
+      Concentration,
+      Units,
+      LOD = pick_reporting_limit(LOD, LOQ),
+      Sample_Collection_Year = sample_collection_year
+    ),
+  DCHS_Targeted_Mat_raw %>%
+    transmute(
+      Mat_PID = mother_pid,
+      Chemical_Group = Chemical_Group_code,
+      Analyte_Code,
+      Concentration,
+      Units,
+      LOD = pick_reporting_limit(LOD, LOQ),
+      Sample_Collection_Year = sample_collection_year
+    )
+)
+lod_summary_list[["DCHS_Targeted"]] <- collect_lod_summary(DCHS_Targeted_PreAdjust, "DCHS_Targeted")
+
+DCHS_CRE_Mat <- DCHS_Targeted_Mat_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Mat_PID = mother_pid, Concentration_CRE = Concentration)
+
+DCHS_Targeted_Mat <- DCHS_Targeted_Mat %>%
+  left_join(DCHS_CRE_Mat, by = "Mat_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+DCHS_Targeted <- bind_rows(DCHS_Targeted_Child, DCHS_Targeted_Mat)
+
+## OBSS ----------------------------------------------------
+OBSS_Targeted_raw <- OBSS_data_list[["OBSS_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID, Chemical_Group = Chemical_group, Analyte_Code,
+    Concentration, Units, LOD, Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["OBSS_Targeted"]] <- collect_lod_summary(OBSS_Targeted_raw, "OBSS_Targeted")
+OBSS_Targeted <- OBSS_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+
+
+```
+
+
+```{r}
+
+names(THS_data_list[["THS_Targeted"]])
+
+THS_Targeted_raw <- THS_data_list[["THS_Targeted"]] %>%  
+  transmute(
+    Mat_PID = PID,
+    Chemical_Group = Chemical_Group_code,
+    Analyte_Code,
+    Concentration,
+    Units,
+    LOD = pick_reporting_limit(LOD, LOQ),
+    Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["THS_Targeted"]] <- collect_lod_summary(THS_Targeted_raw, "THS_Targeted")
+
+THS_Targeted <- THS_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+
+
+THS_CRE <- THS_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Mat_PID, Concentration_CRE = Concentration)
+
+THS_Targeted <- THS_Targeted %>%
+  left_join(THS_CRE, by = "Mat_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+
+```
+
+
+
+```{r}
+
+names(NYUWHS_data_list[["NYUWHS_Targeted"]])
+
+NYUWHS_Targeted_raw <- NYUWHS_data_list[["NYUWHS_Targeted"]] %>%  
+  transmute(
+    Mat_PID = PID,
+    Chemical_Group = Chemical_Group_code,
+    Analyte_Code,
+    Concentration,
+    Units,
+    LOD = pick_reporting_limit(LOD, LOQ),
+    Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["NYUWHS_Targeted"]] <- collect_lod_summary(NYUWHS_Targeted_raw, "NYUWHS_Targeted")
+
+NYUWHS_Targeted <- NYUWHS_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+
+
+
+
+```
+
+```{r}
+
+PROGRESS_CRE <- PROGRESS_data_list[["PROGRESS_EPI"]] %>% 
+  dplyr::select(Child_PID= CHILD_PID,h_crea_ur) 
+
+
+PROGRESS_Targeted_raw <- PROGRESS_data_list[["PROGRESS_Targeted"]] %>% 
+  dplyr::filter(Sample_matrix == "URINE") %>% 
+  transmute(
+    Child_PID = PID,
+    Chemical_Group = Chemical_Group_code,
+    Analyte_Code,
+    Concentration,
+    Units,
+    LOD = pick_reporting_limit(LOD, LOQ),
+    Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["PROGRESS_Targeted"]] <- collect_lod_summary(PROGRESS_Targeted_raw, "PROGRESS_Targeted")
+
+ PROGRESS_Targeted<- PROGRESS_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD)) %>%
+  left_join(PROGRESS_CRE, by = "Child_PID") %>%
+  mutate(Concentration = cre_correct(Concentration, h_crea_ur),
+         LOD = cre_correct(LOD, h_crea_ur)) %>%
+  select(-h_crea_ur)
+
+
+```
+
+
+```{r}
+## =========================================================
+## NEW COHORTS (added 2026-08): GRAPHS, ATLAA, SWSD
+## Each produces a canonical <COHORT>_Targeted object which the auto-bind
+## below (ls pattern "^..._Targeted$") picks up with no further edits.
+## IMHRD is intentionally excluded: it is aggregated year-level summary data
+## (no participant IDs / per-sample concentrations) and cannot enter a
+## participant-level harmonization. See HHEAR_Dataset_Creation.Rmd.
+## =========================================================
+
+## GRAPHS (maternal urine; CRE correction, joined per-sample on SID) --------
+GRAPHS_Targeted_raw <- GRAPHS_data_list[["GRAPHS_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID,
+    SID,
+    Chemical_Group,
+    Analyte_Code,
+    Concentration,
+    Units,                                        # NOTE: VOCs are pmol/mL (not handled by to_ng_per_mL)
+    LOD = pick_reporting_limit(LOD, LOQ),
+    Sample_Collection_Year = sample_collection_year
+  )
+lod_summary_list[["GRAPHS_Targeted"]] <- collect_lod_summary(GRAPHS_Targeted_raw, "GRAPHS_Targeted")
+
+GRAPHS_Targeted <- GRAPHS_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD),
+         Concentration = censor_to_limit(Concentration, LOD))
+
+GRAPHS_CRE <- GRAPHS_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Mat_PID, SID, Concentration_CRE = Concentration)
+
+GRAPHS_Targeted <- GRAPHS_Targeted %>%
+  left_join(GRAPHS_CRE, by = c("Mat_PID","SID")) %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE)
+  # KEEP SID: GRAPHS has 898 distinct (PID, SID) samples across 300 mothers and
+  # most PID x year combinations contain MORE THAN ONE sample, so dropping SID
+  # would leave thousands of rows that are exact duplicates on
+  # (Mat_PID, Analyte_Code, Sample_Collection_Year) and destroy repeat-sample
+  # identity. Retained the same way SWSD retains `trimester`. Downstream the
+  # quantile pipeline still collapses to one value per participant per analyte
+  # via group_by(Study, PID, Analyte_Code) %>% mean().
+
+## ATLAA (maternal PFAS; serum T1/T2 + DBS; pre-imputed, no LOD) -------------
+## Sample_Matrix / Timepoint are carried through (NA for other cohorts via
+## rbindlist fill=TRUE). CHECK: downstream per-participant summaries that
+## group_by(Study, PID, Analyte_Code) will pool serum T1/T2 and DBS unless
+## matrix/timepoint handling is added.
+ATLAA_Targeted_raw <- ATLAA_data_list[["ATLAA_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID,
+    Chemical_Group,
+    Analyte_Code,
+    Concentration,
+    Units,
+    LOD,                                          # reconstructed LOD (=imputed floor*sqrt(2))
+    Sample_Matrix,
+    Timepoint,
+    Sample_Collection_Year = NA_real_             # no collection year provided
+  )
+lod_summary_list[["ATLAA_Targeted"]] <- collect_lod_summary(ATLAA_Targeted_raw, "ATLAA_Targeted")
+
+ATLAA_Targeted <- ATLAA_Targeted_raw %>%
+  mutate(Detected = detected_flag(Concentration, LOD))
+  # No censor_to_limit(): concentrations are already provider-imputed to
+  # LOD/sqrt(2). The censored-quantile engine downstream uses Detected + LOD.
+
+## SWSD (maternal urine neonicotinoids; CRE correction per subject x trimester)
+## Trimester is carried through so repeated measures stay distinguishable.
+SWSD_Targeted_raw <- SWSD_data_list[["SWSD_Targeted"]] %>%
+  transmute(
+    Mat_PID = PID,
+    trimester,
+    Chemical_Group,
+    Analyte_Code,
+    Concentration,
+    Units,
+    LOD,                                          # reconstructed LOD (=imputed floor*sqrt(2))
+    Sample_Collection_Year = NA_real_             # no collection year provided
+  )
+lod_summary_list[["SWSD_Targeted"]] <- collect_lod_summary(SWSD_Targeted_raw, "SWSD_Targeted")
+
+SWSD_Targeted <- SWSD_Targeted_raw %>%
+  filter(Analyte_Code != "CRE") %>%
+  mutate(Detected = detected_flag(Concentration, LOD))
+  # No censor_to_limit(): concentrations already provider-imputed to LOD/sqrt(2).
+
+SWSD_CRE <- SWSD_Targeted_raw %>%
+  filter(Analyte_Code == "CRE") %>%
+  transmute(Mat_PID, trimester, Concentration_CRE = Concentration)
+
+SWSD_Targeted <- SWSD_Targeted %>%
+  left_join(SWSD_CRE, by = c("Mat_PID","trimester")) %>%
+  mutate(Concentration = cre_correct(Concentration, Concentration_CRE),
+         LOD = cre_correct(LOD, Concentration_CRE)) %>%
+  select(-Concentration_CRE)          # keep 'trimester' to distinguish repeated measures
+
+```
+
+
+```{r}
+## =========================================================
+## Final bind & save
+## =========================================================
+if (exists("Targeted_Data_All")) rm(Targeted_Data_All)
+
+tgt_names <- ls(envir = .GlobalEnv, pattern = "^[A-Za-z0-9._]+_Targeted$")
+# drop helper or raw suffixes if any slipped in
+tgt_names <- tgt_names[!grepl("_Targeted_(SG|CRE|raw|Raw)$", tgt_names)]
+
+bind_list <- mget(tgt_names, envir = .GlobalEnv)
+
+Targeted_Data_All <- rbindlist(bind_list, use.names = TRUE, fill = TRUE, idcol = "Study") %>%
+  # Participant IDs are CHARACTER across all harmonized artifacts (2026-08).
+  # Some cohorts (e.g. ATLAA) use alphanumeric IDs such as "E0604", so rbindlist
+  # would coerce the column to character anyway; doing it EXPLICITLY here makes the
+  # type deterministic regardless of which cohorts are present, instead of silently
+  # flipping numeric->character the first time an alphanumeric-ID cohort is added.
+  # Harmonized_SDOH and Harmonized_Outcomes apply the same coercion.
+  mutate(across(any_of(c("Child_PID","Mat_PID")), as.character)) %>%
+  # One cohort (MDUC / HAPTOGLOBIN, 406 rows) ships "ug/mL" with the micro sign
+  # stored as a RAW LATIN1 BYTE (0xB5). That is invalid UTF-8: it makes grepl()
+  # error with "unable to translate ... to a wide string" and it crashes gridtext
+  # ("has encountered a tag that isn't supported yet: <c3>"), which blocks
+  # Intervals_ByCountry.Rmd and leaves Figure 1's country-interval panel stale.
+  # Normalise ONLY the strings that are invalid UTF-8, to ASCII "ug/mL".
+  # Values are unchanged: to_ng_per_mL() did not convert this unit before and
+  # does not now -- this is purely an encoding/label repair. (2026-08)
+  # NOTE: no literal non-ASCII character appears below on purpose -- writing the
+  # micro sign into this source file makes the pattern itself invalid once purled.
+  # iconv(..., to = "ASCII", sub = "u") maps the latin1 micro byte to "u",
+  # turning the bad string into plain "ug/mL".
+  mutate(Units = {
+    .u <- Units
+    .bad <- !is.na(.u) & is.na(iconv(.u, "UTF-8", "UTF-8"))
+    if (any(.bad)) .u[.bad] <- iconv(.u[.bad], from = "latin1", to = "ASCII", sub = "u")
+    .u
+  }) %>%
+  # Implausible collection years -> NA (2026-08).
+  # DISCOVER ships 9 rows dated 1905 -- 9 analytes for a SINGLE participant,
+  # while every other DISCOVER row is 2009-2019. It is a data-entry/parsing
+  # artefact, but it silently set the lower bound of the study-wide collection
+  # year range reported in the manuscript ("1985 to 2020" became 1905-2021).
+  # HHEAR biospecimen collection starts in the 1980s (NYUWHS, 1985), so
+  # anything before 1980 cannot be a real collection year. NA rather than a
+  # guess: the row's CONCENTRATION is still usable, only its date is not.
+  mutate(Sample_Collection_Year = if_else(
+    !is.na(Sample_Collection_Year) & Sample_Collection_Year < 1980,
+    NA_real_, as.numeric(Sample_Collection_Year))) %>%
+  relocate(any_of(c("Study","Child_PID","Mat_PID","Chemical_Group","Analyte_Code",
+                    "Detected","Concentration","Units","LOD")))
+
+## ---------------------------------------------------------------------------
+## Sample matrix (2026-08-10)
+##
+## The raw HHEAR TARGETED_DATA files all carry a `Sample_matrix` column, and the
+## readers preserve it -- 37 of 40 targeted objects in Input/*_Data_All.RData
+## have it. It was being lost HERE: the 68 per-cohort transmute() calls above
+## each name their columns explicitly and none of them names it.
+##
+## Losing it forced every downstream consumer to infer matrix from the
+## Chemical_Group prefix, which is only a proxy. That proxy is wrong often
+## enough to matter: it classifies CCREOH as blood via "BTE" but cannot tell
+## you CCREOH is WHOLE BLOOD, and it silently pools house dust (PROGRESS) with
+## biospecimens.
+##
+## Rather than edit 68 transmutes, the field is re-attached by a join. This is
+## safe because matrix is fully determined by (Study, Analyte_Code): checked
+## across all 891 (object, analyte) pairs in the source lists, ZERO have more
+## than one matrix. A study measuring phthalates in urine and PFAS in serum is
+## handled correctly, because the key includes the analyte.
+##
+## Values arrive in two conventions -- HHEAR specimen codes (U, S, P, WB, RBC,
+## BR, DBS) and spelled-out names (URINE, SERUM, PLASMA, WHOLE BLOOD) -- so
+## they are normalised to the README glossary vocabulary. Matrix_Class is the
+## coarse grouping most analyses actually want.
+## ---------------------------------------------------------------------------
+## Read the lookup back from Input/*_Data_All.RData rather than from memory:
+## several cohort blocks rm() their *_data_list once used, so the objects are
+## not reliably in scope here.
+.matrix_lookup <- local({
+  # same discovery the loader at the top of this file uses
+  files <- list.files("../Input/", pattern = "All\\.RData$",
+                      recursive = TRUE, full.names = TRUE)
+  out <- list()
+  for (f in files) {
+    e <- new.env()
+    ok <- tryCatch({ load(f, envir = e); TRUE }, error = function(err) FALSE)
+    if (!ok) next
+    for (obj in ls(e)) {
+      L <- get(obj, envir = e)
+      if (!is.list(L)) next
+      for (nm in names(L)) {
+        d <- L[[nm]]
+        if (!is.data.frame(d) || !grepl("Targeted", nm)) next
+        mc <- grep("^sample_matrix$", names(d), ignore.case = TRUE, value = TRUE)
+        ac <- grep("^analyte_code$",  names(d), ignore.case = TRUE, value = TRUE)
+        if (!length(mc) || !length(ac)) next
+        out[[length(out) + 1]] <- data.frame(
+          Study        = nm,
+          Analyte_Code = as.character(d[[ac[1]]]),
+          .raw_matrix  = toupper(trimws(as.character(d[[mc[1]]]))),
+          stringsAsFactors = FALSE)
+      }
+    }
+  }
+  if (!length(out)) return(NULL)
+  res <- dplyr::distinct(dplyr::bind_rows(out))
+  # A few cohorts are assembled under a different label than their source
+  # object: SLC is bound from SLC_2517 + SLC_3131 (urine + plasma), and VIVA's
+  # source object is VIVAC. Without these aliases the join silently misses them.
+  res$Study <- sub("^SLC_[0-9]+_Targeted$", "SLC_Targeted", res$Study)
+  res$Study <- sub("^VIVAC_Targeted$",      "VIVA_Targeted", res$Study)
+  # NHBCS's breast-milk PFAS are renamed to *_BR by the cohort block above, but
+  # this lookup is read from the raw delivery where they are still unsuffixed.
+  # Without the same rename the join lands on the WRONG rows: the unsuffixed
+  # codes in the harmonized table are NHBCS_Epi serum, so the four overlapping
+  # analytes (PFDA/PFNA/PFOA/PFOS) were being labelled "Breast Milk" while the
+  # nine actual breast-milk analytes got no matrix at all.
+  res$Analyte_Code <- ifelse(res$Study == "NHBCS_Targeted" & res$.raw_matrix == "BR",
+                             paste0(res$Analyte_Code, "_BR"), res$Analyte_Code)
+  dplyr::distinct(res)
+})
+
+if (!is.null(.matrix_lookup)) {
+  .matrix_lookup <- .matrix_lookup %>%
+    dplyr::filter(!is.na(.raw_matrix), .raw_matrix != "", .raw_matrix != "NA") %>%
+    dplyr::mutate(Sample_Matrix = dplyr::case_when(
+      .raw_matrix %in% c("U", "URINE")               ~ "Urine",
+      .raw_matrix %in% c("S", "SERUM", "MATERNAL SERUM") ~ "Serum",
+      .raw_matrix %in% c("P", "PLASMA")              ~ "Plasma",
+      .raw_matrix %in% c("WB", "WHOLE BLOOD")        ~ "Whole Blood",
+      .raw_matrix == "RBC"                           ~ "Red Blood Cells",
+      .raw_matrix == "DBS"                           ~ "Dried Blood Spots",
+      .raw_matrix == "CB"                            ~ "Cord Blood",
+      .raw_matrix == "BC"                            ~ "Buffy Coat",
+      .raw_matrix == "BR"                            ~ "Breast Milk",
+      .raw_matrix == "DUST"                          ~ "Dust",
+      TRUE                                           ~ .raw_matrix)) %>%
+    dplyr::mutate(Matrix_Class = dplyr::case_when(
+      Sample_Matrix == "Urine" ~ "Urine",
+      Sample_Matrix %in% c("Serum","Plasma","Whole Blood","Red Blood Cells",
+                           "Dried Blood Spots","Cord Blood","Buffy Coat") ~ "Blood",
+      Sample_Matrix == "Dust" ~ "Non-biological",
+      TRUE ~ "Other")) %>%
+    dplyr::select(Study, Analyte_Code, Sample_Matrix, Matrix_Class) %>%
+    dplyr::distinct()
+
+  ## -------------------------------------------------------------------------
+  ## Five cohorts cannot be covered by the (Study, Analyte_Code) join:
+  ##   ELEMENT - source table is WIDE (analytes are columns 7:14), so there is
+  ##             no Analyte_Code to key on. Its Sample_matrix is "Urine" for all
+  ##             887 source rows, so a study-level value is exact, not a guess.
+  ##   MEBCO   - raw TARGETED_DATA ships no matrix column.
+  ##             README: "Trace Elements in urine".
+  ##   TSIC    - raw ships no matrix column.
+  ##             README: cotinine and inflammatory markers in children's SALIVA.
+  ##   SWSD    - the provider workbook has no matrix column at all; its data
+  ##             dictionary states maternal urine.
+  ##   OBSS    - raw ships no matrix column, and its README is explicit PER
+  ##             ASSAY: serum brominated flame retardants / organochlorines /
+  ##             PCBs, and PLASMA perfluoroalkyls. Keyed on Chemical_Group.
+  ## Everything here is read off a README or data dictionary, not inferred from
+  ## the numbers.
+  ## -------------------------------------------------------------------------
+  .matrix_study <- data.frame(
+    Study = c("ELEMENT_Targeted", "MEBCO_Targeted", "TSIC_Targeted", "SWSD_Targeted"),
+    .study_matrix = c("Urine", "Urine", "Saliva", "Urine"),
+    stringsAsFactors = FALSE)
+
+  .matrix_obss <- data.frame(
+    Study = "OBSS_Targeted",
+    Chemical_Group = c("PBFR", "SOC", "SPCB", "SPFAS"),
+    .grp_matrix = c("Serum", "Serum", "Serum", "Plasma"),
+    stringsAsFactors = FALSE)
+
+  # ATLAA already sets Sample_Matrix in its reader; drop the old column first so
+  # the join is the single source of truth and cannot produce .x/.y duplicates.
+  Targeted_Data_All <- Targeted_Data_All %>%
+    dplyr::select(-dplyr::any_of(c("Sample_Matrix", "Matrix_Class"))) %>%
+    dplyr::left_join(.matrix_lookup %>% dplyr::select(-dplyr::any_of("Matrix_Class")),
+                     by = c("Study", "Analyte_Code")) %>%
+    dplyr::left_join(.matrix_study, by = "Study") %>%
+    dplyr::left_join(.matrix_obss,  by = c("Study", "Chemical_Group")) %>%
+    dplyr::mutate(Sample_Matrix = dplyr::coalesce(Sample_Matrix, .grp_matrix, .study_matrix)) %>%
+    dplyr::select(-dplyr::any_of(c(".study_matrix", ".grp_matrix"))) %>%
+    dplyr::mutate(Matrix_Class = dplyr::case_when(
+      Sample_Matrix == "Urine" ~ "Urine",
+      Sample_Matrix %in% c("Serum","Plasma","Whole Blood","Red Blood Cells",
+                           "Dried Blood Spots","Cord Blood","Buffy Coat") ~ "Blood",
+      Sample_Matrix == "Dust" ~ "Non-biological",
+      is.na(Sample_Matrix) ~ NA_character_,
+      TRUE ~ "Other"))
+
+  message(sprintf("Sample_Matrix attached: %.1f%% of rows, %d of %d studies",
+                  100 * mean(!is.na(Targeted_Data_All$Sample_Matrix)),
+                  dplyr::n_distinct(Targeted_Data_All$Study[!is.na(Targeted_Data_All$Sample_Matrix)]),
+                  dplyr::n_distinct(Targeted_Data_All$Study)))
+}
+
+Targeted_LOD_Summary <- bind_rows(lod_summary_list) %>%
+  mutate(
+    Pct_People_Below_LOD = round(Pct_People_Below_LOD, 1),
+    Pct_Results_Below_LOD = round(Pct_Results_Below_LOD, 1)
+  ) %>%
+  arrange(desc(Pct_People_Below_LOD), desc(Pct_Results_Below_LOD), Study, Analyte_Code)
+
+lod_fold_change_flag <- 10
+
+Targeted_Study_Analyte_LOD <- Targeted_Data_All %>%
+  filter(!Analyte_Code %in% c("CRE", "SG")) %>%
+  mutate(LOD = suppressWarnings(as.numeric(LOD))) %>%
+  filter(!is.na(LOD), LOD > 0) %>%
+  group_by(Study, Chemical_Group, Analyte_Code, Units) %>%
+  summarise(
+    N_Results_With_LOD = n(),
+    N_Unique_LOD_Within_Study = n_distinct(LOD),
+    Study_LOD_Min = min(LOD),
+    Study_LOD_Median = median(LOD),
+    Study_LOD_Max = max(LOD),
+    .groups = "drop"
+  ) %>%
+  arrange(Analyte_Code, Study)
+
+Targeted_LOD_CrossStudy_Summary <- Targeted_Study_Analyte_LOD %>%
+  group_by(Chemical_Group, Analyte_Code, Units) %>%
+  summarise(
+    N_Studies = n_distinct(Study),
+    Min_Study_LOD = min(Study_LOD_Median),
+    Median_Study_LOD = median(Study_LOD_Median),
+    Max_Study_LOD = max(Study_LOD_Median),
+    LOD_Fold_Difference = max(Study_LOD_Median) / min(Study_LOD_Median),
+    Any_Within_Study_LOD_Variation = any(N_Unique_LOD_Within_Study > 1),
+    Flag_Wide_CrossStudy_LOD_Difference = LOD_Fold_Difference >= lod_fold_change_flag,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(LOD_Fold_Difference), Analyte_Code, Units)
+
+Targeted_LOD_CrossStudy_Flagged <- Targeted_LOD_CrossStudy_Summary %>%
+  filter(Flag_Wide_CrossStudy_LOD_Difference)
+
+dir.create(HARMONIZED_OUT, recursive = TRUE, showWarnings = FALSE)
+save(
+  Targeted_Data_All,
+  #Targeted_LOD_Summary,
+  #Targeted_Study_Analyte_LOD,
+  #Targeted_LOD_CrossStudy_Summary,
+  #Targeted_LOD_CrossStudy_Flagged,
+  file = file.path(HARMONIZED_OUT, "Harmonized_Targeted.RData")
+)
+## NOTE (2026-08): do NOT write Harmonized_Targeted.csv from here.
+## An earlier version of this chunk wrote Targeted_Data_All to
+## ../Input/Harmonized_Datasets/Harmonized_Targeted.csv, but that is the WRONG
+## target and is destructive:
+##   * The CSV-based consumers (Targeted_ExWAS_Replication.Rmd,
+##     cohort_regime_diagnostic.R) resolve their input_dir to
+##     Health_Outcome_Analysis/Input/, NOT Input/Harmonized_Datasets/.
+##   * The existing Input/Harmonized_Datasets/Harmonized_Targeted.csv has a
+##     different schema (carries `Limit` and `LOQ`), which the overwrite dropped.
+## To propagate new cohorts to the CSV consumers, regenerate
+## Health_Outcome_Analysis/Input/Harmonized_Targeted.csv deliberately via
+## whatever process produces that file.
+write.csv(Targeted_LOD_Summary,
+          file = file.path(HARMONIZED_OUT, "Harmonized_Targeted_LOD_Summary.csv"),
+          row.names = FALSE)
+write.csv(Targeted_Study_Analyte_LOD,
+          file = file.path(HARMONIZED_OUT, "Harmonized_Targeted_Study_Analyte_LOD.csv"),
+          row.names = FALSE)
+write.csv(Targeted_LOD_CrossStudy_Summary,
+          file = file.path(HARMONIZED_OUT, "Harmonized_Targeted_LOD_CrossStudy_Summary.csv"),
+          row.names = FALSE)
+write.csv(Targeted_LOD_CrossStudy_Flagged,
+          file = file.path(HARMONIZED_OUT, "Harmonized_Targeted_LOD_CrossStudy_Flagged.csv"),
+          row.names = FALSE)
+
+# quick sanity
+print(dim(Targeted_Data_All))
+print(Targeted_LOD_Summary)
+print(Targeted_LOD_CrossStudy_Flagged)
+
+
+```
+
+```{r}
+
+```
+

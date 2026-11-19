@@ -1,0 +1,542 @@
+---
+title: "PXS_Voter"
+output: html_document
+date: "2024-04-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(glmnet)
+library(caret)
+library(randomForest)
+library(e1071)
+library(xgboost)
+library(quantreg)
+library(scales)
+library(paletteer)
+library(data.table)
+
+```
+
+Input Data
+------------
+
+```{r}
+ 
+
+#load("../../Output/Child_SDOH_Metab_Quantile_Results.RData")
+#Reg_Results <- Child_SDOH_Metab_Quantile_Results
+# Removed 2026-08-10: these two Submission-1 files were loaded but never
+# referenced anywhere below -- everything here is computed from
+# Targeted_Data_All and SDOH_Data_All. Loading them made the pipeline look
+# tied to the Submission-1 output tree when it is not.
+load("../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+load("../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+
+```
+
+```{r}
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>% 
+  mutate(Edu_Any = case_when(!is.na(Max_Edu) ~ Max_Edu,
+                             is.na(Max_Edu) ~ Mat_Edu,
+                             !is.na(Mat_Edu) ~ Mat_Edu)) %>% 
+  mutate(Mat_Child_Comb_Race = case_when(!is.na(Child_Race) ~ Child_Race,
+                             is.na(Child_Race) ~ Mat_Race,
+                             !is.na(Mat_Race) ~ Mat_Race)) %>% 
+  mutate(Mat_Age = as.numeric(Mat_Age)) %>% 
+  dplyr::mutate(Location = relevel(as.factor(Location),ref = "United_States")) %>% 
+  mutate(Study = str_remove(Study, "_.*"))
+
+```
+
+
+
+```{r}
+
+
+Child_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  dplyr::select(-Mat_PID)
+
+
+# Child_Data_Targeted %>% 
+#     dplyr::filter(Analyte_Code == "As" ) %>% View 
+
+
+myanalytes <- unique(Child_Data_Targeted$Analyte_Code)
+child_analytes <- myanalytes
+
+child_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Child_PID","Study",curr_analyte,"Units")
+  
+  curr_data <- Child_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+    
+  child_list_Targeted[[i]] <- curr_data
+  names(child_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+```{r}
+Mat_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Mat_PID)) %>% 
+  dplyr::select(-Child_PID) %>% 
+  dplyr::filter(!is.na(Analyte_Code))
+myanalytes <- unique(Mat_Data_Targeted$Analyte_Code)
+
+mat_analytes <- myanalytes
+
+mat_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  #print(i)
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Mat_PID","Study",curr_analyte)
+  
+  curr_data <- Mat_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+    
+  mat_list_Targeted[[i]] <- curr_data
+  names(mat_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+Create Burden Percentiles 
+-------
+```{r}
+Create_Burden <- function(analyte_list = child_list_Targeted,join_var){
+  
+  All_Perc <- list()
+  
+  for (i in seq_along(analyte_list)) {
+    
+    Curr_Analyte <- analyte_list[[i]]
+    analyte_name <- names(analyte_list)[i]
+    #Break into percntiles
+   Curr_Perc <- Curr_Analyte %>% 
+      mutate(percentile = percent_rank(!!sym(analyte_name)) * 100) %>% 
+     dplyr::select(!!sym(join_var),Study,percentile)
+   
+   names(Curr_Perc) <- c(join_var,"Study",paste0(analyte_name,"_Percentile"))
+   
+   All_Perc[[i]] <- Curr_Perc
+  
+    
+    #Place individuals into percentiles
+    
+  }
+  return(All_Perc)
+  
+}
+```
+
+```{r}
+Fast_Merge <- function(mylist = All_Perc,ID_Col = "Child_PID"){
+  
+
+  results_df <- mylist[[1]] %>% 
+   group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    #summarise(value = mean(col_name,na.rm = T))
+  
+
+  for(i in 2:length(mylist)){
+    
+    #print(i)
+    
+    curr_df <- mylist[[i]] %>% 
+      group_by(!!sym(ID_Col),Study) %>% 
+    dplyr::slice_head(n = 1) %>% 
+    ungroup()
+    
+    #names(curr_df) <- c(ID_Col,"Study",metab_new)
+    results_df <- full_join(results_df, curr_df, by = c(ID_Col,"Study"))
+
+  }
+  
+  return(results_df)  
+}
+```
+
+
+```{r}
+All_Perc_Child <- Create_Burden(analyte_list = child_list_Targeted,join_var = "Child_PID")
+All_Perc_Df_Child <- Fast_Merge(All_Perc_Child)
+
+All_Perc_Mat <- Create_Burden(analyte_list = mat_list_Targeted,join_var = "Mat_PID")
+All_Perc_Df_Mat <- Fast_Merge(All_Perc_Mat,ID_Col = "Mat_PID")
+```
+
+```{r}
+scale_x <- function(x){
+  scaled_x <- (x - min(x,na.rm = T)) / (max(x,na.rm = T) - min(x,na.rm = T))
+  return(scaled_x)
+}
+
+Burden_Df_Child <- All_Perc_Df_Child %>% 
+  mutate(non_missing_count = rowSums(!is.na(across(-c("Child_PID","Study"))))) %>% 
+  mutate(Total_Val = rowSums(across(!c("Child_PID","non_missing_count","Study")), na.rm = TRUE)) %>% 
+  mutate(Normalize_Value = Total_Val/non_missing_count) %>% 
+  mutate(Burden = Total_Val/log(1 + non_missing_count)) %>% 
+  mutate(Burden = Burden * Normalize_Value/100) %>% 
+  mutate(Burden = scale_x(Burden)) %>% 
+  #mutate(Weighted_Score = with(., weighted.mean(Total_Val, non_missing_count))) %>% 
+  #dplyr::select(Child_PID,Study,Total_Val,non_missing_count,Normalize_Value,Burden,everything()) %>% 
+  dplyr::select(Child_PID,Study,Total_Val,non_missing_count,Normalize_Value,Burden,everything()) %>% 
+  dplyr::filter(non_missing_count > 5) %>% 
+  dplyr::filter(non_missing_count != 0) %>% 
+  #filter(complete.cases(.)) %>% 
+  mutate(z_score = (Normalize_Value - mean(Normalize_Value,na.rm = T))/sd(Normalize_Value,na.rm = T)) %>% 
+  mutate(Burden_Adj = sqrt(non_missing_count) * z_score) %>% 
+  mutate(Burden_Adj = scale_x(Burden_Adj) * 100) %>% 
+  mutate(rank_adj = dense_rank(desc(Burden_Adj))) 
+
+Burden_Df_Mat <- All_Perc_Df_Mat %>% 
+  mutate(non_missing_count = rowSums(!is.na(across(-c("Mat_PID","Study"))))) %>% 
+  mutate(Total_Val = rowSums(across(!c("Mat_PID","non_missing_count","Study")), na.rm = TRUE)) %>% 
+  mutate(Normalize_Value = Total_Val/non_missing_count) %>% 
+  mutate(Burden = Total_Val/log(1 + non_missing_count)) %>% 
+  mutate(Burden = Burden * Normalize_Value/100) %>% 
+  mutate(Burden = scale_x(Burden)) %>% 
+  #mutate(Weighted_Score = with(., weighted.mean(Total_Val, non_missing_count))) %>% 
+  #dplyr::select(Child_PID,Study,Total_Val,non_missing_count,Normalize_Value,Burden,everything()) %>% 
+  dplyr::select(Mat_PID,Study,Total_Val,non_missing_count,Normalize_Value,Burden,everything()) %>% 
+  dplyr::filter(non_missing_count > 5) %>% 
+  dplyr::filter(non_missing_count != 0) %>% 
+  #filter(complete.cases(.)) %>% 
+  mutate(z_score = (Normalize_Value - mean(Normalize_Value,na.rm = T))/sd(Normalize_Value,na.rm = T)) %>% 
+  mutate(Burden_Adj = sqrt(non_missing_count) * z_score) %>% 
+  mutate(Burden_Adj = scale_x(Burden_Adj) * 100) %>% 
+  mutate(rank_adj = dense_rank(desc(Burden_Adj))) 
+
+save(Burden_Df_Child,file = "../../Output/Paper1_Output_Submission2/Burden_Child.RData")
+save(Burden_Df_Mat,file = "../../Output/Paper1_Output_Submission2/Burden_Mat.RData")
+
+# Added 2026-08-10. Everything below this point plots a single `Burden_Df`, but
+# the score is now built separately for the child and maternal panels and the
+# combined object was never reintroduced -- which is why S11-S13 still date from
+# before that refactor. Rebuilt here from the two halves.
+#
+# Only the columns the figures actually use are carried across: the per-analyte
+# *_Percentile columns differ between the two panels (child and maternal measure
+# different chemicals) and none of S11-S13 reads them, so binding them would just
+# produce a very wide sparse frame.
+SCORE_COLS <- c("Study", "Total_Val", "non_missing_count", "Normalize_Value",
+                "Burden", "z_score", "Burden_Adj", "rank_adj")
+
+# Child_PID and Mat_PID are both carried through, not just a merged PID: some of
+# the chunks below are population-specific and address the original column.
+Burden_Df <- dplyr::bind_rows(
+  Burden_Df_Child %>% dplyr::transmute(PID = as.character(Child_PID),
+                                       Child_PID = as.character(Child_PID),
+                                       Mat_PID = NA_character_, Population = "Child",
+                                       dplyr::across(dplyr::all_of(SCORE_COLS))),
+  Burden_Df_Mat   %>% dplyr::transmute(PID = as.character(Mat_PID),
+                                       Child_PID = NA_character_,
+                                       Mat_PID = as.character(Mat_PID), Population = "Maternal",
+                                       dplyr::across(dplyr::all_of(SCORE_COLS)))
+)
+
+stopifnot(nrow(Burden_Df) == nrow(Burden_Df_Child) + nrow(Burden_Df_Mat))
+message("Burden_Df rebuilt: ", nrow(Burden_Df), " rows across ",
+        dplyr::n_distinct(Burden_Df$Study), " cohorts")
+```
+
+
+```{r}
+#myform <- as.formula("Normalize_Value ~ non_missing_count")
+#myform <- as.formula("Total_Val ~ non_missing_count")
+
+
+#save(Res_Burden, file = "../../Output/Ref_Intervals/Burden_Adj.RData")
+ # mutate(Burden_Res = Total_Val / abs(Residuals)) %>% 
+
+```
+
+
+
+
+
+Visualize
+------
+
+
+
+
+
+
+
+
+```{r, eval=FALSE, purl=FALSE}   # Res_Burden was retired by the author (its builder is commented out above); this chunk is dead code
+Res_Burden %>% 
+  dplyr::filter(Study == "ESPINA") %>% 
+  View
+#mypal <- paletteer_d("ggsci::planetexpress_futurama")
+
+# Tableau_20 stops at 20 colours and there are now more cohorts than that,
+# which aborts the plot outright. Interpolate the same palette up to the
+# number of cohorts actually present so the base colours stay recognisable.
+mypal <- grDevices::colorRampPalette(as.character(paletteer_d("ggthemes::Tableau_20")))(
+  max(20L, dplyr::n_distinct(Burden_Df$Study)))
+
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_Intervals_Res.pdf",height = 6,width = 6)
+
+  curr_data <- Res_Burden %>% 
+    arrange(Study) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(plot_value = Total_Val,
+           ID = as.numeric(ID)) 
+
+
+  p <- ggplot() +
+    geom_point(data = curr_data, aes(x = Burden_Res,y = ID, color = Study), size = .5,alpha = 1) +
+    scale_color_manual(values = mypal) +
+    theme_classic() +
+    labs(title = paste0("Exposure Burden - Residual Adjustment"), x = "Burden Value", y = "Participant")
+print(p)
+  
+
+dev.off()
+```
+
+```{r}
+
+#mypal <- paletteer_d("ggsci::planetexpress_futurama")
+
+# Tableau_20 stops at 20 colours and there are now more cohorts than that,
+# which aborts the plot outright. Interpolate the same palette up to the
+# number of cohorts actually present so the base colours stay recognisable.
+mypal <- grDevices::colorRampPalette(as.character(paletteer_d("ggthemes::Tableau_20")))(
+  max(20L, dplyr::n_distinct(Burden_Df$Study)))
+
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_Intervals_Perc.pdf",height = 6,width = 6)
+
+  
+  # curr_interval <- Final_Intervals_Df_Adjusted %>% 
+  #     dplyr::filter(Outcome == myanalytes[[i]]) 
+  
+  curr_data <- Burden_Df %>% 
+    #mutate(Above_75 = ifelse(!!sym(myanalytes[[i]]) >= curr_interval$Tau75 * 2,1,0)) %>% 
+    arrange(Study) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(plot_value = Total_Val,
+           ID = as.numeric(ID)) 
+
+    error_y <- mean(curr_data$ID,na.rm = T)
+    bar_height = nrow(curr_data) + 500
+
+  p <- ggplot() +
+    # Ribbon from df_range
+    #geom_ribbon(data = curr_interval, aes(x = Outcome, ymin = Tau25, ymax = Tau75), fill = "lightblue", alpha = 0.4) +
+    # Points from df_points
+    #geom_point(data = curr_data, aes(x = log1p(plot_value),y = ID, color = Study), size = .5,alpha = 1) +
+    geom_point(data = curr_data, aes(x = Normalize_Value,y = ID, color = Study), size = .5,alpha = 1) +
+    #scale_color_brewer(palette = "Paired") +
+    scale_color_manual(values = mypal) +
+    # geom_errorbarh(data = curr_interval,aes(y = error_y,xmin = log1p(Tau25), xmax =log1p(Tau75)), 
+    #                height = bar_height, color = "#1A5354",linewidth = 1) +
+    # geom_errorbarh(data = curr_interval,aes(y = error_y,xmin = log1p(Tau05), xmax =log1p(Tau95)), 
+    #                height = bar_height/2, color = "#1A5354",linewidth = 1,alpha = .6) +
+    # geom_point(data = curr_interval,aes(y = error_y,x = log1p(Tau50)), color = "#1A5354", size = 6) +
+    theme_classic() +
+    labs(title = paste0("Exposure Burden"), x = "Burden Value", y = "Participant")
+print(p)
+  
+
+dev.off()
+```
+
+
+```{r}
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_Intervals_Perc_Log.pdf",height = 6,width = 6)
+
+  
+  # curr_interval <- Final_Intervals_Df_Adjusted %>% 
+  #     dplyr::filter(Outcome == myanalytes[[i]]) 
+  
+  curr_data <- Burden_Df %>% 
+    #mutate(Above_75 = ifelse(!!sym(myanalytes[[i]]) >= curr_interval$Tau75 * 2,1,0)) %>% 
+    arrange(Study) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(plot_value = Total_Val,
+           ID = as.numeric(ID)) 
+
+    error_y <- mean(curr_data$ID,na.rm = T)
+    bar_height = nrow(curr_data) + 500
+
+  p <- ggplot() +
+    # Ribbon from df_range
+    #geom_ribbon(data = curr_interval, aes(x = Outcome, ymin = Tau25, ymax = Tau75), fill = "lightblue", alpha = 0.4) +
+    # Points from df_points
+    #geom_point(data = curr_data, aes(x = log1p(plot_value),y = ID, color = Study), size = .5,alpha = 1) +
+    geom_point(data = curr_data, aes(x = Burden,y = ID, color = Study), size = .5,alpha = 1) +
+    #scale_color_brewer(palette = "Paired") +
+    scale_color_manual(values = mypal) +
+    # geom_errorbarh(data = curr_interval,aes(y = error_y,xmin = log1p(Tau25), xmax =log1p(Tau75)), 
+    #                height = bar_height, color = "#1A5354",linewidth = 1) +
+    # geom_errorbarh(data = curr_interval,aes(y = error_y,xmin = log1p(Tau05), xmax =log1p(Tau95)), 
+    #                height = bar_height/2, color = "#1A5354",linewidth = 1,alpha = .6) +
+    # geom_point(data = curr_interval,aes(y = error_y,x = log1p(Tau50)), color = "#1A5354", size = 6) +
+    theme_classic() +
+    labs(title = paste0("Exposure Burden - Log"), x = "Burden Value", y = "Participant")
+print(p)
+  
+
+dev.off()
+```
+
+
+#Histogram 
+```{r}
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_Hist.pdf",height = 4,width = 6)
+ggplot(Burden_Df, aes(x=Normalize_Value)) + 
+  geom_histogram(fill = "darkorchid4") +
+  labs(x = "Burden Value",title = "Exposome Burden Distribution") +
+  theme_classic()
+dev.off()
+```
+
+```{r}
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_Hist_Log.pdf",height = 4,width = 6)
+ggplot(Burden_Df, aes(x=Burden)) + 
+  geom_histogram(fill = "darkorchid4") +
+  labs(x = "Burden Value",title = "Exposome Burden Distribution - Log") +
+  theme_classic()
+dev.off()
+```
+
+```{r, eval=FALSE, purl=FALSE}   # Res_Burden was retired by the author (its builder is commented out above); this chunk is dead code
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_Hist_Res.pdf",height = 4,width = 6)
+ggplot(Res_Burden, aes(x=Burden_Res)) + 
+  geom_histogram(fill = "darkorchid4") +
+  labs(x = "Burden Value",title = "Exposome Burden Distribution") +
+  theme_classic()
+dev.off()
+```
+
+```{r, eval=FALSE, purl=FALSE}   # Res_Burden was retired by the author (its builder is commented out above); this chunk is dead code
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_Hist_Adj.pdf",height = 4,width = 6)
+ggplot(Res_Burden, aes(x=Burden_Adj)) + 
+  geom_histogram(fill = "darkorchid4") +
+  labs(x = "Burden Value",title = "Exposome Burden Distribution") +
+  theme_classic()
+dev.off()
+```
+
+#Number of Burden Score by Number of Exposures
+
+
+```{r}
+# Split out 2026-08-10: this chunk originally held four plots, two drawn from
+# Burden_Df and two from the retired Res_Burden. Disabling it wholesale to get
+# past Res_Burden also killed the two live ones, which are the S12 panels.
+
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_to_N_Exposures.pdf",height = 6,width = 6)
+ggplot(data = Burden_Df) + 
+  geom_jitter(aes(x = non_missing_count,y = Normalize_Value, color = Study),size = .5,alpha = 1) +
+  labs(x = "Number of Exposures Measured",title = "Exposure Burden to Number of Exposure measured By Cohort") + 
+  scale_color_manual(values = mypal) +
+
+  theme_classic()
+dev.off()
+
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_to_N_Exposures_log.pdf",height = 6,width = 6)
+ggplot(data = Burden_Df) + 
+  geom_jitter(aes(x = non_missing_count,y = Burden, color = Study),size = .5,alpha = 1) +
+  labs(x = "Number of Exposures Measured",title = "Exposure Burden to Number of Exposure measured By Cohort") + 
+  scale_color_manual(values = mypal) +
+
+  theme_classic()
+dev.off()
+```
+
+```{r, eval=FALSE, purl=FALSE}   # Res_Burden was retired by the author; these two are dead code
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_to_N_Exposures_Res.pdf",height = 6,width = 6)
+ggplot(data = Res_Burden) + 
+  geom_jitter(aes(x = non_missing_count,y = Burden_Res, color = Study),size = .5,alpha = 1) +
+  labs(x = "Number of Exposures Measured",title = "Exposure Burden to Number of Exposure measured By Cohort") + 
+  scale_color_manual(values = mypal) +
+
+  theme_classic()
+dev.off()
+
+
+pdf(file = "../../Output/Paper1_Output_Submission2/Plots/Ref_Intervals/Burden_to_N_Exposures_Adj.pdf",height = 6,width = 6)
+ggplot(data = Res_Burden) + 
+  geom_jitter(aes(x = non_missing_count,y = Burden_Adj, color = Study),size = .5,alpha = 1) +
+  labs(x = "Number of Exposures Measured",title = "Exposure Burden to Number of Exposure measured By Cohort") + 
+  scale_color_manual(values = mypal) +
+
+  theme_classic()
+dev.off()
+
+```
+
+
+#Example of high and low Burden Individuals
+Case study of a lot of alot, a little of a lot, a lot of a little, and a little of a little 
+
+```{r}
+Adj_Burden <- Burden_Df %>% 
+  #dplyr::select(Child_PID,Study,Total_Val,non_missing_count,Normalize_Value,Burden) %>% 
+  dplyr::filter(non_missing_count > 5) %>% 
+  dplyr::filter(non_missing_count != 0) %>% 
+  #mutate(z_score_qnorm = qnorm(Normalize_Value / 100)) %>% 
+  mutate(z_score = (Normalize_Value - mean(Normalize_Value,na.rm = T))/sd(Normalize_Value,na.rm = T)) %>% 
+  mutate(Burden_Adj = sqrt(non_missing_count) * z_score) %>% 
+  mutate(Burden_Adj = scale_x(Burden_Adj) * 100) %>% 
+  mutate(rank_adj = dense_rank(desc(Burden_Adj))) 
+
+```
+
+```{r, eval=FALSE, purl=FALSE}   # per-individual heatmap; needs the per-analyte *_Percentile columns that the rebuilt Burden_Df does not carry, and is not one of S11-S13
+Adj_Burden %>%
+  dplyr::filter(rank_adj <= 30) %>% 
+  select(where(~ !all(is.na(.)))) %>% 
+  dplyr::select(Child_PID,Study,Total_Val,non_missing_count,Normalize_Value,Burden_Adj,everything()) %>% 
+  pivot_longer(cols = ends_with("Percentile"), names_to = "metric", values_to = "value") %>% 
+  mutate(Child_PID = as.factor(Child_PID)) %>% 
+  ggplot(aes(x = metric, y = Child_PID, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "darkorchid", high = "dodgerblue",na.value = "white") +
+  theme_classic() 
+
+
+```
+
+```{r, eval=FALSE, purl=FALSE}   # per-individual heatmap; needs the per-analyte *_Percentile columns that the rebuilt Burden_Df does not carry, and is not one of S11-S13
+Adj_Burden %>%
+  dplyr::filter(rank_adj >= 6100) %>% 
+  select(where(~ !all(is.na(.)))) %>% 
+  dplyr::select(Child_PID,Study,Total_Val,non_missing_count,Normalize_Value,Burden_Adj,everything()) %>% 
+  pivot_longer(cols = ends_with("Percentile"), names_to = "metric", values_to = "value") %>% 
+  mutate(Child_PID = as.factor(Child_PID)) %>% 
+  ggplot(aes(x = metric, y = Child_PID, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient(low = "darkorchid", high = "dodgerblue",na.value = "white") +
+  theme_classic() 
+
+```
+

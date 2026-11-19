@@ -1,0 +1,558 @@
+---
+title: "Cohort Pooling Simulation Results"
+output: html_document
+date: "2026-06-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+This notebook visualizes the cohort-pooling simulation produced by
+`Coding/Paper1_Submission2/cohort_pooling_simulation.R`. The simulation makes
+the rebuttal to the "your cohorts are contrived by construction" critique
+concrete: an exposure-outcome association is a property of the **unit** (cohort
+/ location) it emerged from, and naively pooling across units can blur or even
+reverse the signal that is real within each unit (Simpson's paradox /
+ecological-aggregation bias). This is the cross-sectional analog of the
+longitudinal *within-person vs. between-person* decomposition, with **cohort**
+in the role of subject.
+
+Two regimes are shown:
+
+- **Averaging** -- effects are genuinely heterogeneous across cohorts (with no
+  cross-cohort confounding by construction); pooling is honest on average -- the
+  pooled estimate lands on the within-cohort effect -- but it collapses the
+  heterogeneity into a single number that represents no real location.
+- **Simpson** -- the effect is positive within *every* cohort, yet naive pooling
+  returns a *negative* association because high-exposure locations happen to
+  have lower baseline outcomes.
+
+## Packages
+
+```{r}
+library(tidyverse)
+library(scales)
+library(knitr)
+library(patchwork)
+library(glue)
+library(paletteer)
+```
+
+## Input Files
+
+```{r}
+resolve_existing_path <- function(candidates) {
+  existing <- candidates[file.exists(candidates)]
+  if (length(existing) == 0) {
+    stop(
+      "Could not find the pooling simulation output directory. Checked:\n",
+      paste(candidates, collapse = "\n")
+    )
+  }
+  existing[[1]]
+}
+
+sim_dir <- dirname(resolve_existing_path(c(
+  "../../../Output/Paper1_Output_Submission2/Pooling_Sim_Output/pooling_sim_estimands.csv",
+  "../../Output/Paper1_Output_Submission2/Pooling_Sim_Output/pooling_sim_estimands.csv",
+  "Output/Paper1_Output_Submission2/Pooling_Sim_Output/pooling_sim_estimands.csv"
+)))
+
+individual <- readr::read_csv(file.path(sim_dir, "pooling_sim_individual.csv"),
+                              show_col_types = FALSE)
+per_cohort <- readr::read_csv(file.path(sim_dir, "pooling_sim_per_cohort.csv"),
+                              show_col_types = FALSE)
+estimands  <- readr::read_csv(file.path(sim_dir, "pooling_sim_estimands.csv"),
+                              show_col_types = FALSE)
+curve      <- readr::read_csv(file.path(sim_dir, "pooling_sim_curve.csv"),
+                              show_col_types = FALSE)
+sim_params <- readr::read_csv(file.path(sim_dir, "pooling_sim_params.csv"),
+                              show_col_types = FALSE)
+budget        <- readr::read_csv(file.path(sim_dir, "budget_allocation_results.csv"),
+                                 show_col_types = FALSE)
+budget_params <- readr::read_csv(file.path(sim_dir, "budget_allocation_params.csv"),
+                                 show_col_types = FALSE)
+
+# Real ExWAS diagnostic (sibling output folder)
+diag_dir <- file.path(dirname(sim_dir), "Cohort_Regime_Diagnostic")
+diag_pairs    <- readr::read_csv(file.path(diag_dir, "cohort_regime_pairs.csv"),
+                                 show_col_types = FALSE)
+diag_coverage <- readr::read_csv(file.path(diag_dir, "cohort_regime_coverage_summary.csv"),
+                                 show_col_types = FALSE)
+
+regime_levels <- c("averaging", "simpson")
+regime_labels <- c(averaging = "Averaging", simpson = "Simpson")
+
+prettify_regime <- function(x) {
+  factor(recode(x, !!!regime_labels), levels = unname(regime_labels))
+}
+
+individual <- individual %>%
+  mutate(regime = prettify_regime(regime), cohort = factor(cohort))
+per_cohort <- per_cohort %>%
+  mutate(regime = prettify_regime(regime), cohort = factor(cohort))
+estimands  <- estimands  %>% mutate(regime = prettify_regime(regime))
+curve      <- curve      %>% mutate(regime = prettify_regime(regime))
+```
+
+```{r}
+regime_palette <- c(
+  "Averaging" = "#0F4C5C",
+  "Simpson"   = "#D17A22"
+)
+
+estimand_palette <- c(
+  "Within-cohort (contextual)" = "#0F4C5C",
+  "Naive pooled"               = "#D17A22",
+  "Between-cohort (ecological)" = "#9A4C95"
+)
+
+pooling_theme <- function() {
+  theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", size = 15, color = "#14213D"),
+      plot.subtitle = element_text(size = 10.5, color = "#4F5D75"),
+      axis.title = element_text(face = "bold", color = "#14213D"),
+      axis.text = element_text(color = "#2B2D42"),
+      strip.text = element_text(face = "bold", color = "#14213D"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.x = element_line(color = "#E6E8EF", linewidth = 0.3),
+      panel.grid.major.y = element_line(color = "#D9DEE8", linewidth = 0.35),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      legend.background = element_rect(fill = "transparent", colour = NA)
+    )
+}
+
+# Long-format estimand table for plotting / tabulating the three summaries.
+estimand_long <- estimands %>%
+  select(regime,
+         `Within-cohort (contextual)` = within_adjusted,
+         `Naive pooled` = naive_pooled,
+         `Between-cohort (ecological)` = between_cohort) %>%
+  pivot_longer(-regime, names_to = "estimand", values_to = "beta") %>%
+  mutate(estimand = factor(estimand, levels = names(estimand_palette)))
+
+# Budget-allocation metrics in long form. Two goals want MANY diverse units
+# (their error falls with K); one wants ENOUGH per unit (its error rises with K).
+budget_metric_levels <- c(
+  "Population-average effect (RMSE)"   = "beta_within_rmse",
+  "Cross-cohort heterogeneity (RMSE)"  = "tau_rmse",
+  "Single location (median SE)"        = "median_location_se"
+)
+budget_palette <- c(
+  "Population-average effect (RMSE)"  = "#0F4C5C",
+  "Cross-cohort heterogeneity (RMSE)" = "#9A4C95",
+  "Single location (median SE)"       = "#D17A22"
+)
+
+budget_long <- budget %>%
+  select(K, n_per, all_of(unname(budget_metric_levels))) %>%
+  pivot_longer(-c(K, n_per), names_to = "metric_key", values_to = "value") %>%
+  mutate(metric = factor(
+    names(budget_metric_levels)[match(metric_key, budget_metric_levels)],
+    levels = names(budget_metric_levels)
+  ))
+```
+
+## Generator Parameters
+
+```{r}
+kable(sim_params, digits = 3)
+```
+
+## Overview
+
+```{r}
+overview_tbl <- tibble(
+  Metric = c(
+    "Regimes",
+    "Cohorts per regime",
+    "Subjects per cohort",
+    "Total simulated observations",
+    "Pooling-curve points per regime"
+  ),
+  Value = c(
+    n_distinct(individual$regime),
+    n_distinct(per_cohort$cohort),
+    individual %>% count(regime, cohort) %>% pull(n) %>% median(),
+    nrow(individual),
+    n_distinct(curve$m)
+  )
+)
+
+kable(overview_tbl)
+```
+
+## Estimand Summary
+
+The headline table: within each regime, the three ways of estimating "the
+association" diverge. `within_true` is the data-generating contextual effect;
+`within_adjusted` recovers it; `naive_pooled` does not.
+
+```{r}
+estimands %>%
+  select(regime, within_true, within_adjusted, naive_pooled, between_cohort) %>%
+  kable(digits = 3,
+        col.names = c("Regime", "Within (true)", "Within (adjusted)",
+                      "Naive pooled", "Between (ecological)"))
+```
+
+```{r}
+per_cohort %>%
+  group_by(regime) %>%
+  summarise(
+    cohorts = n(),
+    min_beta_hat = min(beta_hat),
+    median_beta_hat = median(beta_hat),
+    max_beta_hat = max(beta_hat),
+    frac_negative = mean(beta_hat < 0),
+    .groups = "drop"
+  ) %>%
+  kable(digits = 3,
+        col.names = c("Regime", "Cohorts", "Min beta", "Median beta",
+                      "Max beta", "Frac. negative"))
+```
+
+## Plot 1: Within-Cohort vs Naive Pooled Fits
+
+The clearest single picture. Colored lines are within-cohort fits; the heavy
+black line is the single naive pooled fit. In the Simpson regime the pooled
+line slopes the *opposite* way to every cohort it is built from.
+
+> **How to read this panel (the basis for patchplot A).**
+>
+> *What is plotted.* Each point is one subject; **X** is exposure, **Y** is the
+> outcome. Points are colored by cohort, so each colored cloud is a single
+> location's data. The **thin colored line** through each cloud is that
+> location's own fit (`lm(y ~ x)` within the cohort) -- the *contextual* effect.
+> The **heavy dark line** is the single naive pooled fit (`lm(y ~ x)` on
+> everyone at once, ignoring the cohort label).
+>
+> *Averaging regime.* The colored clouds sit at different exposure levels and
+> their slopes genuinely disagree -- some tilt up, some flat, a few down. The
+> dark pooled line runs through the middle of them: it is roughly the **average**
+> of the cohort slopes. It is not "wrong" -- pooling is honest on average here --
+> but it represents no actual location and it **hides the disagreement** that is
+> plainly visible in the colored lines.
+>
+> *Simpson regime.* Every colored cloud tilts **upward** (positive within each
+> location), yet the clouds are arranged so that higher-exposure locations sit
+> **lower** on the Y axis. The dark pooled line follows that downward staircase
+> across clouds and ends up tilting **down** -- the opposite sign of every
+> cohort it was built from. Ignoring the cohort unit has not blurred the signal,
+> it has **reversed** it.
+>
+> *Takeaway.* The line that answers the science is the within-cohort one. The
+> pooled line can disagree with all of its parts.
+
+```{r fig.width=11, fig.height=5.5}
+p_within_vs_pooled <- individual %>%
+  ggplot(aes(x, y)) +
+  geom_point(aes(color = cohort), alpha = 0.18, size = 0.5, show.legend = FALSE) +
+  geom_smooth(aes(color = cohort, group = cohort), method = "lm", se = FALSE,
+              linewidth = 0.45, show.legend = FALSE) +
+  geom_smooth(method = "lm", se = FALSE, color = "#14213D", linewidth = 1.7) +
+  facet_wrap(~ regime, scales = "free") +
+  scale_color_manual(values = colorRampPalette(
+    as.character(paletteer::paletteer_d("ggsci::springfield_simpsons")))(
+      n_distinct(individual$cohort))) +
+  labs(
+    title = "Within-Cohort Fits vs the Naive Pooled Fit",
+    subtitle = "Dark line = pooled lm(y ~ x); thin lines = per-cohort fits. Simpson regime: pooled slope reverses sign.",
+    x = "Exposure (X)",
+    y = "Outcome (Y)"
+  ) +
+  pooling_theme()
+
+p_within_vs_pooled
+```
+
+## Plot 2: Distribution of Per-Cohort Effects
+
+Histogram of each cohort's estimated slope, with the three pooled summaries
+overlaid. The naive-pooled line can sit far from the bulk of the cohorts.
+
+```{r fig.width=11, fig.height=5}
+p_cohort_hist <- per_cohort %>%
+  ggplot(aes(x = beta_hat)) +
+  geom_histogram(bins = 16, fill = "#C9D2DF", color = "white", linewidth = 0.2) +
+  geom_vline(data = estimand_long,
+             aes(xintercept = beta, color = estimand), linewidth = 1.1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "#4F5D75") +
+  facet_wrap(~ regime, scales = "free") +
+  scale_color_manual(values = estimand_palette) +
+  labs(
+    title = "Per-Cohort Exposure Effects and the Pooled Summaries",
+    subtitle = "Bars = per-cohort beta-hat; vertical lines = the three estimands",
+    x = "Estimated exposure effect",
+    y = "Number of cohorts",
+    color = NULL
+  ) +
+  pooling_theme()
+
+p_cohort_hist
+```
+
+## Plot 3: Pooling Toward the Limit
+
+As the sampling unit grows from 1 to all K cohorts, the naive pooled estimate
+converges to its population limit. The dashed red line is the within-cohort
+(contextual) effect: in the Averaging regime the limit lands *on* it (only the
+heterogeneity is lost), while in the Simpson regime it converges *away* from it.
+
+> **How to read this panel (the basis for patchplot B).**
+>
+> *What is plotted.* The **X axis** is `m`, the number of cohorts pooled
+> together, from 1 up to all of them. The **Y axis** is the **naive pooled
+> effect** -- the slope from `lm(y ~ x)` when those `m` cohorts are combined and
+> the cohort label is ignored. For each `m`, we draw many random subsets of `m`
+> cohorts, fit the pooled model on each, and summarize: the **black line** is the
+> average slope and the **grey band** is its 5th-95th percentile (how much the
+> answer depends on *which* cohorts you happened to pool). The **dashed red
+> line** is the within-cohort (contextual) truth -- flat, because it does not
+> depend on how many cohorts you pool.
+>
+> *The sweep is the point.* Moving left to right walks from a single-unit
+> finding (`m = 1`, the "n = 1" analog) toward the population limit (`m` = all
+> cohorts). This is the cross-sectional version of the longitudinal
+> *one subject -> population* trajectory, with cohort as the unit.
+>
+> *Reading the ends.* At the **left** the band is wide (with one cohort you are
+> at the mercy of which one you drew) but the line sits near the truth. At the
+> **right** the band **collapses to almost a point** -- pool everything and there
+> is no sampling randomness left. Where it collapses to is the whole story:
+>
+> - **Averaging regime:** the line stays **on** the dashed red truth as `m`
+>   grows; only the band shrinks. Pooling is honest on average -- but the
+>   cohort-to-cohort heterogeneity that was visible at `m = 1` is **averaged
+>   away** by the limit.
+> - **Simpson regime:** the line starts positive, then **bends down across zero**
+>   and converges *away* from the red truth. Adding cohorts does not fix the
+>   bias; it accumulates it. The tight band at the limit is the trap -- a
+>   precise-looking estimate with the **wrong sign**.
+>
+> *Takeaway.* More data (a larger pooled sample) shrinks the **variance** of the
+> naive estimate but does nothing for its **cohort-driven bias**. "Bigger pool =
+> more trustworthy" is only true for uncertainty, not for the bias, so the
+> within-cohort analysis is not optional at any sample size.
+
+```{r fig.width=11, fig.height=5}
+within_ref <- estimands %>% select(regime, within = within_adjusted)
+
+p_limit <- curve %>%
+  ggplot(aes(m, mean_slope)) +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.18, fill = "#0F4C5C") +
+  geom_line(linewidth = 0.95, color = "#14213D") +
+  geom_hline(data = within_ref, aes(yintercept = within),
+             linetype = "dashed", color = "#C1121F", linewidth = 0.8) +
+  geom_hline(yintercept = 0, color = "#9AA3AD", linewidth = 0.4) +
+  facet_wrap(~ regime, scales = "free_y") +
+  labs(
+    title = "As the Sampling Unit Approaches the Limit",
+    subtitle = "Naive pooled effect vs number of cohorts pooled. Dashed red = within-cohort effect; band = 5-95% over random subsets.",
+    x = "Number of cohorts pooled (m)",
+    y = "Naive pooled exposure effect"
+  ) +
+  pooling_theme()
+
+p_limit
+```
+
+## Plot 4: Exposure Profiles Differ Across Locations
+
+The mechanism behind the paradox: each location occupies a different stretch of
+the exposure axis. Pooling stitches these offset clouds together, and the
+between-location trend can dominate the within-location signal.
+
+```{r fig.width=11, fig.height=5}
+p_profiles <- individual %>%
+  ggplot(aes(x = x, fill = regime)) +
+  geom_density(aes(group = cohort), color = NA, alpha = 0.25) +
+  facet_wrap(~ regime, scales = "free") +
+  scale_fill_manual(values = regime_palette, guide = "none") +
+  labs(
+    title = "Cohort-Specific Exposure Profiles",
+    subtitle = "Each density is one location's exposure distribution",
+    x = "Exposure (X)",
+    y = "Density"
+  ) +
+  pooling_theme()
+
+p_profiles
+```
+
+## Plot 5: Budget Allocation -- Diverse Units vs Unplanned Volume
+
+This panel answers the design question behind the rebuttal: given a **fixed
+budget** (total sample size held constant), how should you spend it? We sweep
+the allocation from a few large cohorts to many small cohorts -- `K` cohorts of
+`n_per` each with `K * n_per` constant -- and track three things you might want
+from the study. It is produced by
+`Coding/Paper1_Submission2/budget_allocation_simulation.R`.
+
+> **How to read this panel.**
+>
+> *X axis:* number of cohorts `K` (log scale), with the subjects-per-cohort it
+> implies printed underneath -- moving right means *more, smaller* cohorts for
+> the same total budget. *Y axis:* error / uncertainty (lower is better).
+>
+> - **Population-average effect (teal)** and **cross-cohort heterogeneity
+>   (purple)** both **fall** as you add units. With only a few large cohorts you
+>   have a big sample but the *handful of contexts you sampled* cannot represent
+>   the population of locations -- the error here scales with the number of
+>   **units** (~ `tau / sqrt(K)`), not the number of people. Piling more
+>   subjects into a few convenient sites does **not** fix it.
+> - **Single location (orange)** moves the other way: it **rises** as cohorts
+>   shrink, because each location is estimated from fewer subjects. Push to many
+>   tiny cohorts and any one location's estimate becomes noise.
+>
+> *Takeaway.* The two curves form a scissors. There is no single-number "best,"
+> but the defensible region is the middle -- a **deliberately diverse set of
+> locations, each with enough subjects** -- not "as small as possible" and not
+> "everyone from a few unplanned, convenient sites." The left edge is exactly
+> the design the reviewer's critique would push you toward; this panel shows what
+> it costs.
+
+```{r}
+budget %>%
+  transmute(
+    `Cohorts (K)` = K,
+    `Subjects / cohort` = n_per,
+    `Pop. effect RMSE` = beta_within_rmse,
+    `Heterogeneity RMSE` = tau_rmse,
+    `Single-location SE` = median_location_se
+  ) %>%
+  kable(digits = 3)
+```
+
+```{r fig.width=10, fig.height=6}
+k_breaks <- sort(unique(budget$K))
+k_labels <- budget %>%
+  distinct(K, n_per) %>%
+  arrange(K) %>%
+  mutate(lab = glue("{K}\n({n_per})")) %>%
+  pull(lab)
+
+p_budget <- budget_long %>%
+  ggplot(aes(x = K, y = value, color = metric)) +
+  geom_line(linewidth = 1.05) +
+  geom_point(size = 2.2) +
+  scale_x_log10(breaks = k_breaks, labels = k_labels) +
+  scale_color_manual(values = budget_palette) +
+  labs(
+    title = "Spending a Fixed Budget: Diverse Units vs Unplanned Volume",
+    subtitle = "Total N held constant. Two goals want many diverse units (falling); one wants enough subjects per unit (rising).",
+    x = "Number of cohorts  (subjects per cohort)",
+    y = "Error / uncertainty (lower is better)",
+    color = NULL
+  ) +
+  pooling_theme() +
+  theme(axis.text.x = element_text(size = 8))
+
+# Shown inline only; the budget panel is exported as panel C of the
+# Cohort_Pooling_Simulation_Patchplot, so no standalone PDF is written.
+p_budget
+```
+
+## Suggested Supplementary Figure Panel
+
+```{r fig.width=14, fig.height=15}
+supp_a <- p_within_vs_pooled +
+  labs(title = "A. Within-cohort fits vs naive pooled fit", subtitle = NULL)
+
+supp_b <- p_limit +
+  labs(title = "B. Pooled estimate as the sampling unit approaches the limit",
+       subtitle = NULL)
+
+supp_c <- p_budget +
+  labs(title = "C. Spending a fixed budget: diverse units vs unplanned volume",
+       subtitle = NULL)
+
+pooling_patchwork <- (supp_a / supp_b / supp_c) +
+  plot_annotation(
+    title = "Associations are contextual to the cohort unit they emerge from",
+    subtitle = "Naive pooling blurs (Averaging) or reverses (Simpson) the within-cohort signal (A-B); under a fixed budget, a diverse set of units beats unplanned volume (C)",
+    theme = theme(
+      plot.title = element_text(face = "bold", size = 17, color = "#14213D"),
+      plot.subtitle = element_text(size = 11, color = "#4F5D75")
+    )
+  ) &
+  theme(legend.position = "bottom")
+
+pooling_patchwork <- pooling_patchwork +
+  plot_layout(guides = "collect", heights = c(1, 1, 1))
+
+plots_dir <- dirname(sim_dir)  # .../Paper1_Output_Submission2
+ggsave(
+  filename = file.path(plots_dir, "Plots", "Final_Patchplots",
+                       "Cohort_Pooling_Simulation_Patchplot.pdf"),
+  plot = pooling_patchwork,
+  device = "pdf",
+  height = 15,
+  width = 12
+)
+
+pooling_patchwork
+```
+
+## Real ExWAS: What Is Actually Happening
+
+The simulation shows what *can* happen when associations are pooled across
+cohorts. This panel shows what *does* happen in the targeted ExWAS. Of the
+thousands of exposure-outcome pairs, the overwhelming majority are observed in
+a **single cohort** (see coverage below), so pooling is not even possible. Only
+the handful of pairs seen in **>= 3 cohorts** can be examined for the pooling
+phenomenon -- and that is exactly the set shown here.
+
+```{r}
+diag_coverage %>%
+  transmute(
+    Panel = recode(panel, child = "Child", mat = "Maternal"),
+    `Pairs (total)` = pairs_total,
+    `1 cohort` = pairs_1_cohort,
+    `>=2 cohorts` = pairs_ge2_cohort,
+    `>=3 cohorts` = pairs_ge3_cohort,
+    `% single-cohort` = pct_single_cohort
+  ) %>%
+  kable()
+```
+
+The combined real-data figure below pulls together three views on the
+**maternal** panel, the same slice as the manuscript heterogeneity figure:
+
+- **A -- cohorts disagree by location.** Per-cohort adjusted effect estimates
+  (z-statistics) for each exposure|outcome, colored by study location; 67% of
+  exposures have cohorts on both sides of zero.
+- **B -- pooling distorts the contextual effect.** For the **same pairs as A**,
+  the within-cohort (filled) vs naive-pooled (open) standardized effect; the
+  connecting segment is the distortion from pooling, and a crossing of zero
+  (red) is Simpson's paradox. (Unadjusted decomposition: it isolates the
+  cohort-pooling mechanism, and full covariate adjustment is infeasible here
+  because covariate completeness is itself cohort-specific.)
+- **C -- heterogeneity is not just an exposure-range artifact.** I^2 versus the
+  between-cohort concentration fold-change shows no clear relationship
+  (Spearman rho ~ 0.24).
+
+The figure is built by `Vis_Code/combined_realdata_figure.R` (which also writes
+`Final_Patchplots/MS_Fig_RealData_Combined.pdf`); we source it here so it renders
+right after the simulation figure.
+
+```{r fig.width=9, fig.height=17}
+source("combined_realdata_figure.R")
+combined
+```
+
+The real data matches the simulation's warning: where pooling *is* possible
+(panel B), the naive pooled effect (open) routinely sits away from the
+within-cohort effect (filled), pulled toward the ecological slope (diamond) --
+mostly inflating the magnitude, occasionally flipping the sign. But such pairs
+are the rare exception; for almost the entire ExWAS there is only one cohort per
+pair (coverage table above), which is itself the strongest argument for
+analyzing associations within their cohort unit rather than pooling across
+contrived cohort differences.

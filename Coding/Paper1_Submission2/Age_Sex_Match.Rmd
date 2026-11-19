@@ -1,0 +1,485 @@
+----
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(quantreg)
+library(survival)
+source("censored_quantile_helpers.R")
+library(MatchIt)
+```
+
+
+
+Input Data
+------------
+
+```{r}
+
+#load("../../Input/Harmonized_Datasets/Harmonized_Outcomes.RData")
+load("../../Input/Harmonized_Datasets/Harmonized_SDOH.RData")
+load("../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+
+std_study <- function(x) {
+  stringr::str_remove(x, '[_]\\w+|:')  # CHECK: ensure this collapse is intended
+}
+```
+
+```{r}
+
+ExWAS_SDOH_Exposures <- SDOH_Data_All %>%
+  mutate(
+    # Prefer Max_Edu but fall back to Mat_Edu
+    Edu_Any = dplyr::coalesce(Max_Edu, Mat_Edu),
+    # Prefer Child_Race but fall back to Mat_Race
+    Mat_Child_Comb_Race = dplyr::coalesce(Child_Race, Mat_Race),
+    Mat_Age = suppressWarnings(as.numeric(Mat_Age)),  # NOTE: coercion; NAs may be introduced
+    # Make Location a factor with reference "United_States"
+    Location = stats::relevel(as.factor(Location), ref = "United_States"),
+    # Collapse various US-specific locations to a single "United_States"
+    Location_Country = dplyr::case_when(
+      Location %in% c(
+        "United_States","NorthEast_US","New_Hampshire","Washington_State",
+        "Midwestern_US","Denver","Baltimore","Sacramento",
+        "Southern_California","Syracuse","Michigan","California",
+        "SanFrancisco","Massachusetts","Atlanta"
+      ) ~ "United_States",
+      TRUE ~ "Worldwide"
+    ),
+    # Binary maternal education bucket
+    Mat_Edu_Binary = dplyr::case_when(
+      Mat_Edu %in% c("No_Education","Primary_Education","Primary_School","High_School") ~ "No_College",
+      Mat_Edu %in% c("Some_College","Four_Year_College_Degree","Some_Grad_School") ~ "Some_College",
+      Mat_Edu == "Not_Reported" ~ NA_character_,
+      TRUE ~ NA_character_  # CHECK: any unexpected levels?
+    ),
+    # Binary maternal income bucket
+    Mat_Income_Binary = dplyr::case_when(
+      Mat_Income %in% c("0_25k","25_49k") ~ "Under_49k",
+      Mat_Income %in% c("50_74k","75_99k","100_124k","Over_100k","Over_125k","Over_49k") ~ "Over_49k",
+      TRUE ~ NA_character_
+    )
+  )
+
+
+```
+
+
+```{r}
+unique(ExWAS_SDOH_Exposures$Location)
+```
+
+
+```{r}
+# Unit conversion helper: convert to ng/mL --------------------------------
+# UNIT CONVERSION (2026-08-11, CODE_AUDIT_2026-08-11.md section 1.1).
+# The local to_ng_per_mL() removed here ended in `TRUE ~ value`, so mg/dL,
+# ug/mL, ng/g, pmol/mL, nM and kg/m3 fell through UNCONVERTED and were treated
+# as ng/mL -- 39,475 rows (5.9%), wrong by factors of 10^3 to 10^6.
+local({
+  cands <- c("harmonization_helpers.R", "harmonization_helpers.R",
+             "Coding/Paper1_Submission2/harmonization_helpers.R")
+  hit <- cands[file.exists(cands)]
+  if (length(hit) == 0) stop("Cannot locate harmonization_helpers.R")
+  source(hit[[1]], local = FALSE)
+})
+
+```
+
+
+```{r}
+# CHILD targeted data: long -> wide per-analyte list ----------------------
+Child_Data_Targeted <- build_censored_targeted_panel(
+  targeted_df = Targeted_Data_All,
+  id_var = "Child_PID",
+  unit_converter = to_ng_per_mL
+)
+
+child_analytes <- sort(unique(Child_Data_Targeted$Analyte_Code))  # vector of analytes
+
+# Build a list of per-analyte wide data.frames keyed by Child_PID ---------
+child_list_Targeted <- build_censored_targeted_list(
+  panel_df = Child_Data_Targeted,
+  id_var = "Child_PID",
+  analytes = child_analytes
+)
+
+# MATERNAL targeted data: long -> wide per-analyte list -------------------
+Mat_Data_Targeted <- build_censored_targeted_panel(
+  targeted_df = Targeted_Data_All,
+  id_var = "Mat_PID",
+  unit_converter = to_ng_per_mL
+)
+
+mat_analytes <- sort(unique(Mat_Data_Targeted$Analyte_Code))
+
+mat_list_Targeted <- build_censored_targeted_list(
+  panel_df = Mat_Data_Targeted,
+  id_var = "Mat_PID",
+  analytes = mat_analytes
+)
+
+
+```
+
+```{r}
+# Split SDOH into child and maternal panels -------------------------------
+Child_SDOH <- ExWAS_SDOH_Exposures %>%
+  filter(!is.na(Child_PID)) %>%
+  select(Study, Child_PID, Mat_PID, dplyr::everything())
+
+Mat_SDOH <- ExWAS_SDOH_Exposures %>%
+  filter(!is.na(Mat_PID)) %>%                      # keep likely maternal rows
+  select(Study, Child_PID, Mat_PID, dplyr::everything())
+
+unique(Child_SDOH$Location)
+```
+
+
+
+Match Based on Age and Sex so Location is the difference 
+----------------
+```{r}
+
+
+
+
+```
+
+
+```{r}
+# BOOTSTRAP REPLICATES FOR INFERENCE (pinned 2026-08-11).
+# CODE_AUDIT_2026-08-11.md section 1.5.
+#
+# This wrapper did not pass summary_R, so run_censored_quantile_reg() used its
+# default of 2. That is below fit_censored_quantile_models()'s min_boot_R = 25,
+# so inference fell back to fallback_crq_summary() and EVERY Standard_Error,
+# T_Value, P_Value, Lower and Upper came back NA. Downstream that failed
+# silently rather than loudly: p.adjust(NA) is NA, and
+# ifelse(NA <= 0.10, 1, 0) is NA, so significance-filtered figures emptied
+# instead of erroring.
+#
+# RUNTIME: 200 replicates is materially slower than the old no-op default,
+# because the bootstrap now actually runs. Lower it for exploratory sweeps, but
+# anything below 25 silently disables inference entirely -- do not treat values
+# in that range as "a bit less precise".
+# FAST-REGENERATION SETTING (2026-08-11): 50 bootstrap replicates, not 200.
+# Enough for point estimates and an indicative CI, NOT enough for a publication
+# standard error -- raise to 200+ for the final run. Below 25 inference silently
+# becomes NA (see the note above), so do not lower this further.
+SUMMARY_R <- 50
+
+Quantile_Reg <- function(exp_var = NULL,
+                         dataset,
+                         my_outcome,
+                         Reg_Type,
+                         my_covariates,
+                         join_var,
+                         summary_R = SUMMARY_R) {
+  stopifnot(summary_R >= 25)
+  run_censored_quantile_reg(
+    exp_var = exp_var,
+    dataset = dataset,
+    my_outcome = my_outcome,
+    my_covariates = my_covariates,
+    join_var = join_var,
+    summary_R = summary_R
+  )
+}
+
+```
+
+
+```{r}
+ExWAS_Function_Metab <- function(Exposure_Data, myexposures,myoutcomes, Outcome_Data,mycovars,join_var,Reg_Type){
+  
+  all_pheno_unadjusted <- list()
+  all_pheno_adjusted <- list()
+  
+  #Run Regression for all outcomes
+  for(j in seq_along(myoutcomes)){
+    
+    
+    pheno <- myoutcomes[j]
+    adjusted_results <- list()
+    unadjusted_results <- list()
+    
+    if(is.null(myexposures)){
+      loop_n <- "CovOnly"
+    }else(
+      loop_n = myexposures
+    )
+    
+    for(i in seq_along(loop_n)){
+      #print(i)
+      my_covariates <- mycovars
+      
+      if(join_var == "Child_PID"){
+      curr_exposure <- Exposure_Data %>% 
+        mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+        dplyr::select(join_var,Study,myexposures[i],all_of(my_covariates),Child_Age,Child_Sex) %>% 
+        #dplyr::filter(Study == "CEHC") %>% 
+        distinct()
+      
+      curr_pheno <- Outcome_Data[[j]] %>% 
+        mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+        select_outcome_data(join_var = join_var, outcome_col = pheno) %>% 
+        dplyr::filter(!is.na(.data[[pheno]]))
+      
+      curr_outcome_pheno <- left_join(curr_pheno,curr_exposure,by = c(join_var,'Study')) %>%
+        mutate(!! pheno := as.numeric(!! rlang::sym(pheno))) %>%
+        distinct(.keep_all = T) %>% 
+        dplyr::filter(!is.na(Location)) %>% 
+        dplyr::filter(!is.na(Child_Age)) 
+
+      
+      n_locs <- length(unique(curr_outcome_pheno$Location))
+      
+      if(n_locs == 1){
+        next
+      }
+      
+      band_yrs <- max(curr_outcome_pheno$Child_Age,na.rm = T)/4
+
+         
+      if(nrow(curr_outcome_pheno) == 0){
+        next
+      }
+      
+      if(band_yrs == 0){
+        band_yrs <- 1
+      }
+         
+
+      
+      Matched_Data <- curr_outcome_pheno %>%
+          mutate(age_band = cut(
+            Child_Age,
+            breaks = seq(0, 100, by = band_yrs),   # <-- 5-year matching window
+            include.lowest = TRUE)) %>% 
+          dplyr::select(Child_PID,Location,age_band,Child_Sex) %>% 
+          dplyr::filter(!is.na(Child_Sex)) %>% 
+          group_by(age_band, Child_Sex) %>%
+            # keep only groups where we actually have >1 location represented
+          filter(n_distinct(Location) > 1) %>%
+            # create a stratum id for each covariate profile
+          mutate(stratum_id = cur_group_id()) %>%
+          ungroup() %>% 
+        left_join(.,curr_pheno, by = join_var)
+
+      if(nrow(Matched_Data) == 0){
+        next
+      }
+      }else{
+        
+        curr_exposure <- Exposure_Data %>% 
+        mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+        dplyr::select(join_var,Study,myexposures[i],all_of(my_covariates),Mat_Age) %>% 
+        #dplyr::filter(Study == "CEHC") %>% 
+        distinct()
+      
+      curr_pheno <- Outcome_Data[[j]] %>% 
+        mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+        select_outcome_data(join_var = join_var, outcome_col = pheno) %>% 
+        dplyr::filter(!is.na(.data[[pheno]]))
+      
+      curr_outcome_pheno <- left_join(curr_pheno,curr_exposure,by = c(join_var,'Study')) %>%
+        mutate(!! pheno := as.numeric(!! rlang::sym(pheno))) %>%
+        distinct(.keep_all = T) %>% 
+        dplyr::filter(!is.na(Location)) %>% 
+        dplyr::filter(!is.na(Mat_Age)) 
+
+      
+      n_locs <- length(unique(curr_outcome_pheno$Location))
+      
+      if(n_locs == 1){
+        next
+      }
+      
+      
+      band_yrs <- (max(curr_outcome_pheno$Mat_Age,na.rm = T) - min(curr_outcome_pheno$Mat_Age,na.rm = T))/10
+      
+
+         
+      if(nrow(curr_outcome_pheno) == 0){
+        next
+      }
+      
+      if(band_yrs == 0){
+        band_yrs <- 1
+      }
+         
+
+      
+      Matched_Data <- curr_outcome_pheno %>%
+          mutate(age_band = cut(
+            Mat_Age,
+            breaks = seq(0, 100, by = band_yrs),   # <-- 5-year matching window
+            include.lowest = TRUE)) %>% 
+          dplyr::select(Mat_PID,Location,age_band) %>% 
+          group_by(age_band) %>%
+            # keep only groups where we actually have >1 location represented
+          filter(n_distinct(Location) > 1) %>%
+            # create a stratum id for each covariate profile
+          mutate(stratum_id = cur_group_id()) %>%
+          ungroup() %>% 
+        left_join(.,curr_pheno, by = join_var)
+
+      if(nrow(Matched_Data) == 0){
+        next
+      }
+        
+        
+        
+      }
+      
+      
+      strata_n <- length(unique(Matched_Data$stratum_id))
+      curr_exp <- myexposures[i]
+      Strata_res <- list()
+      for(z in seq_along(1:strata_n)){
+        
+        curr_match <- Matched_Data %>% 
+          dplyr::filter(stratum_id == z)
+        
+        Age_Band <- as.character(unique(curr_match$age_band))
+        all_locs <- paste0(unique(curr_match$Location),collapse = ":")
+        Sex <- as.character(unique(curr_match$Child_Sex))
+      Curr_Unadjusted_Results <- try(Quantile_Reg(exp_var = curr_exp,
+                                                  dataset = curr_match,
+                                                  my_outcome = pheno,
+                                                  Reg_Type = Reg_Type,
+                                                  my_covariates = my_covariates,
+                                                  join_var = join_var))
+      
+      try(Curr_Unadjusted_Results[["Regression_Results"]]$Model_N <- nrow(curr_match))
+      try(Curr_Unadjusted_Results[["Regression_Results"]]$Locations <- all_locs)
+      try(Curr_Unadjusted_Results[["Regression_Results"]]$Match_Age <- Age_Band)
+      try(Curr_Unadjusted_Results[["Regression_Results"]]$Match_Sex <- Sex)
+
+
+      Strata_res[[z]] <- Curr_Unadjusted_Results
+      }
+      
+
+      
+      unadjusted_results[[i]] <- Strata_res
+      
+      names(unadjusted_results)[i] <- curr_exp
+      
+      #})
+    }
+    
+    all_pheno_unadjusted[[j]] <- unadjusted_results
+    
+    names(all_pheno_unadjusted)[j] <- myoutcomes[j]
+    
+  }
+  
+  
+  return(all_pheno_unadjusted)
+  
+  
+}
+
+```
+
+```{r}
+suppress_all_output <- function(expr) {
+  temp_file <- tempfile()
+  con <- file(temp_file, open = "wt")
+  
+  # Redirect stdout and messages
+  sink(con)
+  sink(con, type = "message")
+  
+  # Suppress warnings and messages globally
+  old_warn <- getOption("warn")
+  options(warn = -1)
+  
+  # Evaluate expression quietly
+  result <- suppressWarnings(
+    suppressMessages(
+      tryCatch(
+        eval(expr),
+        error = function(e) NULL  # suppress error output
+      )
+    )
+  )
+  
+  # Restore options and sinks
+  options(warn = old_warn)
+  sink(NULL)
+  sink(NULL, type = "message")
+  close(con)
+  
+  invisible(result)
+}
+
+
+
+```
+
+
+
+Run Analysis Child
+----
+```{r}
+
+
+
+
+  #Run Quantile ExWAS
+Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = Child_SDOH,
+                                                                                      Outcome_Data = child_list_Targeted,
+                                                                                      myexposures = NULL,
+                                                                                      myoutcomes = child_analytes,mycovars = "Location",
+                                                                 join_var = "Child_PID",
+                                                                                      Reg_Type = "Quantile")))
+
+
+
+Age_Sex_Child_Match <- Filter(function(x) length(x) > 0, Curr_Results)
+
+output_dir <- "../../Output/Paper1_Output_Submission2"
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+save(Age_Sex_Child_Match, file = file.path(output_dir, "Age_Sex_Child_Match.RData"))
+
+
+```
+
+Run Analysis Mat
+----
+```{r}
+
+
+
+
+  #Run Quantile ExWAS
+Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = Mat_SDOH,
+                                                                                      Outcome_Data = mat_list_Targeted,
+                                                                                      myexposures = NULL,
+                                                                                      myoutcomes = mat_analytes,mycovars = "Location",
+                                                                 join_var = "Mat_PID",
+                                                                                      Reg_Type = "Quantile")))
+
+
+
+Age_Mat_Match <- Filter(function(x) length(x) > 0, Curr_Results)
+
+save(Age_Mat_Match, file = file.path(output_dir, "Age_Sex_Mat_Match.RData"))
+
+
+```
+
+```{r}
+
+```

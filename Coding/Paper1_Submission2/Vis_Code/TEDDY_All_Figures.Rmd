@@ -1,0 +1,1018 @@
+---
+title: "Quant_Reg_Results_Plots"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r view-shim}
+# View() opens an interactive viewer and ERRORS under rmarkdown::render(). These
+# documents were written to be run chunk-by-chunk in RStudio, so View() scratch is
+# scattered through them. Shim to a no-op so a headless render works. (2026-08-11)
+View <- function(x, ...) invisible(x)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(paletteer)
+library(data.table)
+library(ggdist)
+library(ggrepel)
+library(missMDA)
+library(FactoMineR)
+library(factoextra)
+library(patchwork)
+library(ggpubr)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+
+```
+
+```{r harmonization-helpers}
+# apply_scan_fdr(), assert_has_inference(), std_study(), to_ng_per_mL().
+# Added 2026-08-11 -- see CODE_AUDIT_2026-08-11.md.
+local({
+  cands <- c("../harmonization_helpers.R",
+             "harmonization_helpers.R",
+             "Coding/Paper1_Submission2/harmonization_helpers.R")
+  hit <- cands[file.exists(cands)]
+  if (length(hit) == 0) stop("Cannot locate harmonization_helpers.R")
+  source(hit[[1]], local = FALSE)
+})
+```
+
+
+
+
+Input Data
+------------
+
+```{r}
+ 
+
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+load("../../../Input/Harmonized_Datasets/TEDDY_SDOH_Clean.RData")
+
+output_dir <- "../../../Output/Paper1_Output_Submission2"
+plots_output_dir <- file.path(output_dir, "Plots")
+dir.create(plots_output_dir, recursive = TRUE, showWarnings = FALSE)
+
+load(file.path(output_dir, "TEDDY_Single_Exp.RData"))
+load(file.path(output_dir, "TEDDY_Full_Model.RData"))
+load(file.path(output_dir, "TEDDY_Age_Sex.RData"))
+load(file.path(output_dir, "TEDDY_Age_Sex_Edu.RData"))
+load(file.path(output_dir, "TEDDY_Age_Sex_Location.RData"))
+load(file.path(output_dir, "TEDDY_Age_Sex_Site.RData"))
+
+
+```
+
+```{r}
+ExWAS_SDOH_Exposures <- TEDDY_SDOH %>% 
+  dplyr::mutate(Child_Race = relevel(as.factor(Child_Race), ref = "White")) %>% 
+  dplyr::mutate(Mat_Edu = relevel(as.factor(Mat_Edu), ref = "Four_Year_College_Degree")) %>% 
+  mutate(Child_Age = as.numeric(Child_Age)) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+    Mat_Edu %in% c("No_Education",
+                   "Primary_Education",
+                   "Primary_School",
+                   "High_School") ~ "No_College",
+    Mat_Edu %in% c("Some_College",
+                   "Four_Year_College_Degree",
+                   "Some_Grad_School") ~ "Some_College",
+    Mat_Edu == "Not_Reported" ~ NA
+  )) %>% 
+  mutate(Study = "TEDDY_SDOH") %>% 
+  dplyr::mutate(Site_Location = relevel(as.factor(Site_Location), ref = "Sweden")) %>%  
+  dplyr::mutate(Location = relevel(as.factor(Location), ref = "United_States"))  
+
+
+table(ExWAS_SDOH_Exposures$Site_Location)
+```
+
+
+Results Parse Function
+-----
+```{r}
+Parse_Results <- function(Results_List = Child_SDOH_Metab_Quantile_Results_SexByStudy,Cohort_Meta = Cohort_Meta){
+  
+  
+  if(Cohort_Meta == T){
+    
+    All_Res <- list()
+  
+  for(i in seq_along(Results_List)){
+    
+    curr_study <- Results_List[[i]]
+    
+             #print(i)
+      
+         curr_results <- try(curr_study[[1]][["Regression_Results"]] %>% 
+             dplyr::filter(Variable != "(Intercept)") %>% 
+             mutate(
+            Study = names(Results_List[i])) )
+
+         if(is.character(curr_results)){
+           next
+         }
+         
+         All_Res[[i]] <- curr_results
+        
+  }
+  Final_Res <- bind_rows(All_Res)
+    
+  }else{
+  
+  
+  All_Res <- list()
+  
+  for(i in seq_along(Results_List)){
+    
+    curr_study <- Results_List[[i]]
+    
+    curr_study_all_res <- list() 
+             #print(i)
+
+    for(j in seq_along(curr_study)){
+      
+         curr_results <- try(curr_study[[j]][["Regression_Results"]] %>% 
+             dplyr::filter(Variable != "(Intercept)") %>% 
+             mutate(
+            Study = names(Results_List[i])) )
+
+         if(is.character(curr_results)){
+           next
+         }
+         
+         curr_study_all_res[[j]] <- curr_results
+        
+      }
+      
+      curr_study_all_res <-  curr_study_all_res[lengths(curr_study_all_res) != 0]
+
+    Results <- bind_rows(curr_study_all_res)
+    
+      All_Res[[i]] <- Results
+
+  }
+  Final_Res <- bind_rows(All_Res)
+  }
+# FDR SCOPE (fixed 2026-08-11, CODE_AUDIT_2026-08-11.md section 2.8).
+# p.adjust() used to run INSIDE the loop above, correcting across the handful of
+# coefficients in a single model rather than across the whole scan. It now runs
+# once, on the bound results, via apply_scan_fdr() in harmonization_helpers.R.
+# That helper also asserts the p-values are not all NA, which is what happens
+# when the upstream fit was run with summary_R < 25 (see audit section 1.5).
+  return(apply_scan_fdr(Final_Res, what = "TEDDY_All_Figures / Final_Res"))
+}
+```
+
+
+Process Results
+----------
+
+```{r}
+Process_Quant_Results <- function(Mat_Quant_Results) {
+  All_Outcome_Results_Mat <- list()
+  
+  for (i in seq_along(Mat_Quant_Results)) {
+    Curr_Reg_Results <- Mat_Quant_Results[[i]]
+    Curr_Reg_Results <- Filter(is.list, Curr_Reg_Results)
+    
+    All_Reg_Results <- list()
+    for (j in seq_along(Curr_Reg_Results)) {
+      Res <- Curr_Reg_Results[[j]][["Regression_Results"]]
+      if (is.null(Res) || !is.data.frame(Res)) {
+        next
+      }
+      All_Reg_Results[[j]] <- Res
+    }
+    
+    if (length(All_Reg_Results) == 0) {
+      next
+    }
+    
+    All_Reg_Results <- bind_rows(All_Reg_Results) %>%
+      filter(!str_detect(Variable, "(Intercept)"))
+    
+    All_Outcome_Results_Mat[[i]] <- All_Reg_Results
+    names(All_Outcome_Results_Mat)[i] <- unique(All_Reg_Results$Outcome)
+  }
+  
+  All_Outcome_Results_Mat_Df <- bind_rows(All_Outcome_Results_Mat)
+# FDR SCOPE (fixed 2026-08-11, CODE_AUDIT_2026-08-11.md section 2.8).
+# p.adjust() used to run INSIDE the loop above, correcting across the handful of
+# coefficients in a single model rather than across the whole scan. It now runs
+# once, on the bound results, via apply_scan_fdr() in harmonization_helpers.R.
+# That helper also asserts the p-values are not all NA, which is what happens
+# when the upstream fit was run with summary_R < 25 (see audit section 1.5).
+  return(apply_scan_fdr(All_Outcome_Results_Mat_Df, what = "TEDDY_All_Figures / All_Outcome_Results_Mat_Df"))
+}
+
+```
+
+```{r}
+expected_taus <- c("Tau05", "Tau25", "Tau50", "Tau75", "Tau95")
+tau_name_map <- c(
+  "0.05" = "Tau05",
+  "0.25" = "Tau25",
+  "0.5" = "Tau50",
+  "0.50" = "Tau50",
+  "0.75" = "Tau75",
+  "0.95" = "Tau95",
+  "Tau05" = "Tau05",
+  "Tau25" = "Tau25",
+  "Tau50" = "Tau50",
+  "Tau75" = "Tau75",
+  "Tau95" = "Tau95"
+)
+
+extract_predicted_quantiles <- function(result_obj) {
+  if (is.null(result_obj) || !"Quantile_Results" %in% names(result_obj)) return(NULL)
+  if (length(result_obj[["Quantile_Results"]]) < 2) return(NULL)
+  result_obj[["Quantile_Results"]][[2]]
+}
+
+calc_weighted_taus <- function(quant_table) {
+  out <- c(Tau05 = NA_real_, Tau25 = NA_real_, Tau50 = NA_real_, Tau75 = NA_real_, Tau95 = NA_real_)
+  if (is.null(quant_table)) return(out)
+
+  Tau_Data <- as.data.frame(quant_table)
+  if (ncol(Tau_Data) == 0) return(out)
+
+  if (is.null(names(Tau_Data))) {
+    if (ncol(Tau_Data) == 4) {
+      names(Tau_Data) <- c("Tau25", "Tau50", "Tau75", "Tau95")
+    } else if (ncol(Tau_Data) == 5) {
+      names(Tau_Data) <- expected_taus
+    }
+  }
+
+  mapped_names <- unname(tau_name_map[names(Tau_Data)])
+  valid_cols <- !is.na(mapped_names)
+  Tau_Data <- Tau_Data[, valid_cols, drop = FALSE]
+  if (ncol(Tau_Data) == 0) return(out)
+
+  names(Tau_Data) <- mapped_names[valid_cols]
+  Tau_Data <- Tau_Data[, !duplicated(names(Tau_Data)), drop = FALSE]
+
+  for (tau in intersect(names(out), names(Tau_Data))) {
+    curr_values <- suppressWarnings(as.numeric(Tau_Data[[tau]]))
+    curr_values <- curr_values[!is.na(curr_values)]
+    if (length(curr_values) > 0) {
+      out[tau] <- mean(curr_values)
+    }
+  }
+
+  out
+}
+
+safe_interval_width <- function(upper, lower) {
+  ifelse(is.na(upper) | is.na(lower), NA_real_, upper - lower)
+}
+
+cap_with_na <- function(x, upper) {
+  ifelse(is.na(x), NA_real_, pmin(x, upper))
+}
+```
+
+```{r}
+make_results_bystudy <- function(results_list,Model_Type,Population) {
+  all_results <- lapply(seq_along(results_list), function(i) {
+    curr_study <- names(results_list)[i]
+    Process_Quant_Results(Mat_Quant_Results = results_list[[i]]) %>%
+      mutate(
+        Model_Type = Model_Type,
+        Study = curr_study,
+        Population = Population
+      )
+  })
+  
+  bind_rows(all_results)
+}
+
+```
+
+```{r}
+Single_Exp <- make_results_bystudy(results_list = TEDDY_Single_Exp,
+                                             Model_Type = "Single_Exposure_Study",Population = "Children")
+
+Full_Model <- make_results_bystudy(results_list = TEDDY_Full_Model,
+                                             Model_Type = "Age_Sex_Edu_Site",Population = "Children")
+
+
+Age_Sex <- make_results_bystudy(results_list = TEDDY_Age_Sex,
+                                             Model_Type = "Age_Sex",Population = "Children")
+
+Age_Sex_Edu <- make_results_bystudy(results_list = TEDDY_Age_Sex_Edu,
+                                             Model_Type = "Age_Sex_Edu",Population = "Children")
+
+
+Age_Sex_Location <- make_results_bystudy(results_list = TEDDY_Age_Sex_Location,
+                                             Model_Type = "Age_Sex_Location",Population = "Children")
+
+Age_Sex_Site <- make_results_bystudy(results_list = TEDDY_Age_Sex_Site,
+                                             Model_Type = "Age_Sex_Site",Population = "Children")
+
+
+```
+
+
+```{r}
+
+TEDDY_Res <- bind_rows(Single_Exp,Full_Model,Age_Sex,Age_Sex_Edu,Age_Sex_Location,Age_Sex_Site)
+
+```
+
+
+
+
+
+Plots
+-------
+
+
+```{r}
+
+All_R2_Data <- TEDDY_Res %>% 
+  # dplyr::filter(str_detect(Exposure,paste0(c("Mat_Age","Mat_Edu","Mat_Income", "Max_Edu",
+  #                        "Child_Age","Mat_Race","Child_Race","Mat_Child_Comb_Race"),collapse = "|"))) %>% 
+  #dplyr::filter(!Exposure %in% c("Mat_Child_Comb_Race")) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  mutate(Category = "Pesticides") %>%
+  #dplyr::filter(!is.na(Sig_10)) %>% 
+  dplyr::filter(!is.na(Category)) %>% 
+  dplyr::filter(Tau == 0.5) %>% 
+  mutate(Demo_Var = case_when(
+    str_detect(Variable, "Study") ~ "Study",
+    str_detect(Variable, "Race") ~ "Race",
+    str_detect(Variable, "Sex") ~ "Sex",
+    str_detect(Variable, "Income") ~ "Income",
+    str_detect(Variable, "Age") ~ "Age",
+    str_detect(Variable, "Edu") ~ "Education",
+    str_detect(Variable, "Site") ~ "Site",
+    str_detect(Variable, "Location") ~ "Country",
+    TRUE ~ "Other"  # fallback value if none match
+  )) %>% 
+  dplyr::filter(!is.na(plot_R2)) 
+```
+
+```{r}
+sum(All_R2_Data$Sig_10)
+
+All_R2_Data %>% 
+  dplyr::filter(Sig_10==1) %>% 
+  View
+```
+
+
+
+
+
+```{r}
+
+Single_Exp_Data <- All_R2_Data %>% 
+  dplyr::filter(Model_Type == "Single_Exposure_Study") %>% 
+  mutate(Model_Type = Demo_Var,
+         All_Vars = Model_Type) %>% 
+  dplyr::select(Outcome,Tau,Study,Population,Model_Type,Category,pseudo_R,All_Vars) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  dplyr::filter(All_Vars == "Age")
+
+
+Full_Model_R2 <- All_R2_Data %>% 
+  dplyr::filter(Model_Type != "Single_Exposure_Study") %>% 
+  group_by(Outcome,Tau,Study,Population,Model_Type,Category,pseudo_R) %>% 
+  summarise(All_Vars = paste(unique(Demo_Var), collapse = ":")) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R))
+
+vars <- c(
+  "Age", "Sex", "Race", "Income",
+  "Sex:Age", "Location", "Race:Age", "Education",
+  "Income:Race", "Age:Race:Sex", "Age:Education", "Age:Sex:Income",
+  "Age:Sex:Education", "Sex:Education:Age", "Education:Race:Age",
+  "Age:Race:Sex:Income", "Sex:Income:Race:Age", "Age:Race:Sex:Education",
+  "Race:Sex:Education:Age", "Sex:Education:Race:Age",
+  "Education:Income:Race:Age", "Age:Race:Sex:Education:Income",
+  "Sex:Education:Income:Race:Age"
+)
+
+# Normalize order of variable names within each string
+vars_normalized <- sapply(vars, function(x) {
+  paste(sort(strsplit(x, ":")[[1]]), collapse = ":")
+})
+
+# Check results
+#data.frame(original = vars, normalized = vars_normalized)
+
+Full_Model_R2 <- Full_Model_R2 %>%
+  mutate(All_Vars = sapply(All_Vars, function(x) paste(sort(strsplit(x, ":")[[1]]), collapse = ":")))
+
+```
+
+
+
+
+```{r}
+
+ALl_R2 <- bind_rows(Full_Model_R2,Single_Exp_Data) 
+
+ unique(ALl_R2$Model_Type)
+# model_seq <- unique(ALl_R2$Model_Type)
+# element_lengths <- nchar(model_seq)
+# 
+# sorted_indices <- order(element_lengths)
+
+# Sort the original vector using these indices
+#model_seq <- model_seq[sorted_indices]
+
+# model_seq <- c("Age","Age_Edu","Age_Race", "Age_State","Age_State_Edu","Age_State_Race" ,
+#                 "Age_Edu_Race_Country" )
+model_seq <- c("Age","Age_Sex","Age_Sex_Edu", "Age_Sex_Site","Age_Sex_Edu_Site" )
+df_f <- ALl_R2 %>% 
+  #group_by(Outcome,Tau,Population,Model_Type,Category,pseudo_R) %>% 
+  #summarise(All_Vars = paste(unique(Demo_Var), collapse = ":")) %>% 
+  mutate(plot_R2 = ifelse(pseudo_R <= 0,0,pseudo_R)) %>% 
+  dplyr::filter(Tau == 0.50) %>%  
+  dplyr::filter(Model_Type %in% model_seq) %>% 
+  filter(Model_Type %in% model_seq) %>% 
+  group_by(Outcome, Model_Type) %>% 
+  #dplyr::filter(Study == "CCREOH") %>% 
+  summarise(mean_R2 =round(mean(plot_R2, na.rm = TRUE),3), .groups = "drop") %>%  
+  arrange(Outcome, match(Model_Type, model_seq)) %>%
+  group_by(Outcome) %>%
+  mutate(
+    # Force baseline to 0 and ensure monotonic increase
+    #mean_R2 = cummax(mean_R2),  
+    total_R2 = max(mean_R2, na.rm = TRUE),
+    contrib = pmax(mean_R2 - lag(mean_R2, default = 0), 0),
+    component = if_else(row_number() == 1,
+                        paste0("Baseline: ", Model_Type),
+                        paste0("+ ", Model_Type))
+  ) %>%
+ # dplyr::filter(!str_detect(Model_Type,"Country")) %>% 
+  ungroup() 
+pool <- c(
+  "#FED439FF", "#709AE1FF", "#8A9197FF", "#D2AF81FF",
+  "#FD7446FF", "#D5E4A2FF", "#197EC0FF", "#F05C3BFF",
+  "#46732EFF", "#71D0F5FF", "#370335FF", "#075149FF",
+  "#C80813FF", "#91331FFF", "#1A9993FF", "#FD8CC1FF"
+)
+
+# The 7 levels you want to color
+comp_levels <- c("Age","Age_Sex","Age_Sex_Edu", "Age_Sex_Site","Age_Sex_Edu_Site" )
+top10_outcomes <- df_f %>%
+  group_by(Outcome) %>%
+  summarise(max_R2 = max(total_R2, na.rm = TRUE)) %>%
+  arrange(desc(max_R2)) %>%
+  slice_head(n = 10) %>%
+  pull(Outcome)  # extract outcome names
+
+mypal <- setNames(pool[seq_along(comp_levels)], comp_levels)
+
+
+top10_full <- df_f %>%
+  filter(Outcome %in% top10_outcomes)
+
+comp_levels <- names(mypal)
+
+# --- export for Hero_Numbers.Rmd (claim G1) ------------------------------
+# Share of the EXPLAINED variance carried by the Site term. Reported at
+# several cut-offs because the manuscript sentence says "among the analytes
+# shown", which is the top-10 panel, not all 44.
+local({
+  .d <- df_f %>%
+    group_by(Outcome) %>%
+    mutate(frac = contrib / sum(contrib, na.rm = TRUE)) %>%
+    ungroup()
+  .rank <- .d %>% group_by(Outcome) %>%
+    summarise(tot = max(total_R2, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(tot)) %>% pull(Outcome)
+  .sf <- function(o) round(100 * mean(
+    .d$frac[.d$Outcome %in% o & .d$Model_Type == "Age_Sex_Site"], na.rm = TRUE), 1)
+  .out <- data.frame(
+    scope = c("top5", "top10", "top15", "all"),
+    n_analytes = c(5, 10, 15, length(.rank)),
+    site_share_pct = c(.sf(.rank[1:5]), .sf(.rank[1:10]),
+                       .sf(.rank[1:15]), .sf(.rank)))
+  .dir <- file.path(output_dir, "..", "..", "Output", "Hero_Numbers")
+  dir.create(.dir, showWarnings = FALSE, recursive = TRUE)
+  write.csv(.out, file.path(.dir, "teddy_site_share.csv"), row.names = FALSE)
+})
+
+df_plot <- df_f%>%
+  mutate(
+    Outcome  = fct_reorder(Outcome, total_R2),
+    component = factor(Model_Type, levels = comp_levels)
+  ) %>% 
+  group_by(Outcome) %>%
+  arrange(Outcome, component, .by_group = TRUE) %>%
+  # compute stack geometry
+  mutate(
+    xmin = cumsum(lag(contrib, default = 0)),
+    xmax = xmin + contrib,
+    xmid = (xmin + xmax) / 2,
+    frac = contrib / sum(contrib, na.rm = TRUE)
+  ) %>%
+  # flag largest slice (break ties deterministically by first factor level)
+  mutate(is_max = contrib == max(contrib, na.rm = TRUE)) %>%
+  ungroup() %>% 
+  mutate(component = factor(component, levels = names(mypal))) %>% 
+  filter(Outcome %in% top10_outcomes)
+
+totals <- df_plot %>%
+  group_by(Outcome) %>%
+  summarise(total = sum(contrib, na.rm = TRUE), .groups = "drop")
+
+
+#mypal <-paletteer_d("ggsci::default_igv")
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+
+r2_barplot <- ggplot(df_plot, aes(x = contrib, y = Outcome, fill = component)) +
+  geom_col(width = 0.7, color = "white", linewidth = 0.2) +
+
+  # Add label only to largest bar in each Category
+  # geom_text(
+  #   data = df_plot %>% dplyr::filter(is_max) %>% dplyr::filter(str_detect(Model_Type,"Site")),
+  #   aes(label = label_percent(accuracy = 1)(frac)),
+  #   position = position_stack(vjust = 0.5),
+  #   color = "black", size = 3, fontface = "bold"
+  # ) +
+
+  scale_fill_manual(values = mypal, drop = FALSE) +
+  scale_x_continuous(
+    expand = expansion(mult = c(0, 0.06)),
+    labels = scales::label_number(accuracy = 0.01)
+  ) +
+  labs(
+    #title = expression("Average Incremental " * R^2 * " by Model Term"),
+    title = "Average Distributional Contribution  by Model",
+    x = expression(Contribution~to~prediction~("(" * mean~R^2 * ")")),
+    y = "Exposure",
+    fill = "Model term"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title      = element_text(size = 16, face = "bold", hjust = 0),
+    axis.title.x    = element_text(size = 18, face = "bold"),
+    axis.title.y    = element_text(size = 16, face = "bold"),
+    axis.text.x     = element_text(size = 18, face = "bold"),
+    axis.text.y     = element_text(size = 18),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor.x = element_blank(),
+    axis.ticks.y    = element_blank(),
+    legend.position = "bottom",
+    legend.title    = element_text(size = 11, face = "bold"),
+    legend.text     = element_text(size = 10)
+  ) +
+  coord_cartesian(xlim = c(0, max(totals$total, na.rm = TRUE) * 1.12))
+
+
+print(r2_barplot)
+r2_barplot_TEDDY <- r2_barplot
+save(r2_barplot_TEDDY, file = file.path(output_dir, "r2_barplot_TEDDY.RData"))
+```
+
+
+
+Make TEDDY Intervals 
+-------------
+```{r}
+Ref_Vars <- c("Child_Age","Child_Sex")
+Mat_Quant_Results <- if (length(TEDDY_Single_Exp) > 0) {
+  TEDDY_Single_Exp[[1]]
+} else if (length(TEDDY_Age_Sex) > 0) {
+  TEDDY_Age_Sex[[1]]
+} else if (length(TEDDY_Full_Model) > 0) {
+  TEDDY_Full_Model[[1]]
+} else {
+  list()
+}
+#names(Mat_Quant_Results[[1]])[names(Mat_Quant_Results[[1]]) %>% str_detect(.,paste0(Ref_Vars,collapse = "|"))]
+Final_Intervals_Mat <- list()
+for(j in seq_along(Mat_Quant_Results)){
+#print(j)
+  Curr_Quant <- Mat_Quant_Results[[j]][c(Ref_Vars)]
+  Curr_Quant <- Filter(is.list, Curr_Quant)
+
+  All_Weighted_Averages <- list()
+  for(i in seq_along(Curr_Quant)){
+    #print(i)
+    #Select quantiles
+    Tau_Data <- extract_predicted_quantiles(Curr_Quant[[i]])
+    weighted_averages <- calc_weighted_taus(Tau_Data)
+    All_Weighted_Averages[[i]] <- weighted_averages
+    names(All_Weighted_Averages)[i] <- names(Curr_Quant[i])
+  }
+
+  W_Avg_Df <- bind_rows(All_Weighted_Averages)
+  if (nrow(W_Avg_Df) == 0) {
+    next
+  }
+
+  column_means <- sapply(W_Avg_Df[, c("Tau05","Tau25","Tau50","Tau75","Tau95")], mean, na.rm = TRUE) %>%
+    t(.) %>% 
+    as.data.frame(.) %>% 
+    mutate(Outcome = names(Mat_Quant_Results)[j] ) %>% 
+    dplyr::select(Outcome,everything())
+
+  Final_Intervals_Mat[[j]] <- column_means
+  names(Final_Intervals_Mat)[j] <- names(Mat_Quant_Results)[j]
+}
+
+```
+
+```{r, eval=FALSE, purl=FALSE}   # scratch: curr_data is a loop-local from the previous chunk; View() only, nothing saved (disabled 2026-08-11)
+curr_data %>% 
+  group_by(Location) %>% 
+  summarise(mean_tcs = mean(TCS,na.rm = T)) %>% 
+  View
+```
+
+
+```{r}
+
+TEDDY_Intervals <- bind_rows(Final_Intervals_Mat) %>%
+    mutate(across(where(is.numeric), ~ round(., 3)))%>% 
+  mutate(
+    IQR = safe_interval_width(Tau75, Tau25),
+    Max_Min = safe_interval_width(Tau95, Tau05)
+  ) %>% 
+  mutate(Category ="Pesticides") %>% 
+  dplyr::filter(!is.na(Category)) %>% 
+  mutate(
+      IQR_unadj = IQR,
+      IQR = cap_with_na(IQR, 20),
+      Max_Min_unadj = Max_Min,
+      Max_Min = cap_with_na(Max_Min, 50),
+      Flag = as.factor(ifelse(!is.na(IQR_unadj) & IQR_unadj >= 20, 1, 0))
+    ) %>% 
+  filter(!is.na(Category)) %>% 
+    mutate(Max_Min_Log = log10(Max_Min + 1),
+           IQR_Log = log10(IQR+ 1)) 
+
+```
+
+```{r}
+Child_Data_Targeted <- Targeted_Data_All %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  # Shared converter (2026-08-11, audit 1.1). The case_when here fell through to
+  # `TRUE ~ Concentration`, silently treating mg/dL, ug/mL, ng/g, pmol/mL, nM and
+  # kg/m3 as ng/mL. to_ng_per_mL() returns NA for non-convertible units.
+  mutate(
+    Concentration = to_ng_per_mL(Concentration, Units)
+  ) %>% 
+  dplyr::select(-Mat_PID) %>% 
+  group_by(Study,Child_PID,Analyte_Code) %>% 
+  summarise(Concentration = mean(Concentration,na.rm = T)) %>% 
+  ungroup()
+
+
+
+myanalytes <- unique(Child_Data_Targeted$Analyte_Code)
+child_analytes <- myanalytes
+
+child_list_Targeted <- list()
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[i]
+  mycols <- c("Child_PID","Study",curr_analyte)
+  
+  curr_data <- Child_Data_Targeted %>% 
+    rownames_to_column("RN") %>% 
+    dplyr::filter(Analyte_Code == curr_analyte) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+    pivot_wider(names_from = Analyte_Code,values_from = Concentration) %>% 
+    dplyr::select(all_of(mycols))
+  
+  child_list_Targeted[[i]] <- curr_data
+  names(child_list_Targeted)[i] <- curr_analyte
+  
+}
+
+
+```
+
+```{r}
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+mystudies  <- unique(ExWAS_SDOH_Exposures$State)
+myanalytes <- top10_outcomes
+myanalytes <- c( "BDCPP", "Tl","Cs", "TCS" )
+```
+
+
+
+Using Site Location As Cohort Proxy
+-------
+
+```{r}
+plot_data_list <- list()
+interval_data_list <- list()
+
+#table(curr_data$Site_Location)
+
+for(i in seq_along(myanalytes)){
+  
+  curr_analyte <- myanalytes[[i]]
+#curr_analyte <- "TCS"
+  curr_interval <- TEDDY_Intervals %>% 
+    filter(Outcome == curr_analyte)
+  if (nrow(curr_interval) == 0) {
+    next
+  }
+
+  tau75_curr <- curr_interval$Tau75[[1]]
+
+  curr_data <- child_list_Targeted[[curr_analyte]] %>% 
+      dplyr::filter(Study == "TEDDY") %>% 
+    mutate(Above_75 = ifelse(!is.na(tau75_curr) & !!sym(curr_analyte) >= tau75_curr * 2, 1, 0)) %>% 
+    left_join(.,ExWAS_SDOH_Exposures,by = "Child_PID") %>% 
+    arrange(Site_Location) %>% 
+    rownames_to_column("ID") %>% 
+    mutate(
+     #plot_value = ifelse(Above_75 == 1, curr_interval$Tau75 * 2 + 1, !!sym(curr_analyte)),
+      plot_value = !!sym(curr_analyte),
+      ID = as.numeric(ID),
+      curr_analyte = curr_analyte
+    ) %>% 
+    dplyr::filter(!is.na(Site_Location))
+
+
+  # Store the data only if there are less than 3 studies
+ 
+    plot_data_list[[curr_analyte]] <- curr_data
+
+    interval_data_list[[curr_analyte]] <- curr_interval %>%
+      mutate(curr_analyte = curr_analyte)
+  
+}
+
+# Combine all data into single dataframes
+all_plot_data <- bind_rows(plot_data_list) %>% 
+    mutate(Site_Location = factor(Site_Location, levels = c("Finland",
+    "Germany","Sweden","Colorado","Georiga" ,"Washington"
+  ))) %>% 
+  mutate(US_Flag = factor(ifelse(str_detect(Site_Location,"Colorado|Georiga|Washington"),1,0)))
+
+all_interval_data <- bind_rows(interval_data_list)
+
+# Compute error_y and bar_height by analyte
+error_df <- all_plot_data %>%
+  group_by(curr_analyte) %>%
+  summarise(
+    error_y = mean(ID, na.rm = TRUE),
+    bar_height = n() + 50,
+    .groups = "drop"
+  )
+
+all_interval_data <- all_interval_data %>%
+  left_join(error_df, by = "curr_analyte")
+
+all_interval_points <- all_interval_data %>%
+  dplyr::filter(!is.na(Tau50))
+
+all_interval_iqr <- all_interval_data %>%
+  dplyr::filter(!is.na(Tau25), !is.na(Tau75))
+
+all_interval_outer <- all_interval_data %>%
+  dplyr::mutate(Outer_Lower = dplyr::coalesce(Tau05, Tau75)) %>%
+  dplyr::filter(!is.na(Outer_Lower), !is.na(Tau95))
+
+
+site_colors <- c(
+  "Finland" = "#8A9197FF",
+  "Sweden"  = "#FED439FF",
+  "Germany" = "#FD7446FF",
+  "Colorado"   = "#709AE1FF",
+  "Georiga"   = "#D2AF81FF",
+  "Washington"   = "#D5E4A2FF"
+
+
+)
+
+
+
+
+
+```
+
+```{r}
+
+label_log1p <- function(breaks) {
+  scales::label_number(
+    accuracy = 0.1,
+    trim = TRUE,
+    scale_cut = scales::cut_si("")   # e.g., 1k, 10k, 1M
+  )(expm1(breaks))
+}
+
+# choose breaks on the log1p scale
+x_breaks <- 0:7  # since you limit x to [0,7]
+pdf(file = file.path(plots_output_dir, "TEDDY_Intervals.pdf"),height = 6,width = 10)
+
+
+teddy_intervals <- ggplot() +
+# geom_rect(
+#   data = rect_df,
+#   inherit.aes = FALSE,
+#   aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+#   fill = NA, color = "black", linewidth = 0.8,aplpha = 0.5
+# ) +
+  # jittered observations
+  geom_jitter(data = all_plot_data, aes(x = log1p(plot_value), y = Site_Location, 
+                                        color = Site_Location, alpha = US_Flag, size = US_Flag)) +
+  geom_point(data = all_interval_points, aes(y = 3, x = log1p(Tau50)), color = "#1A5354", size = 3) +
+  geom_errorbarh(data = all_interval_iqr, aes(y = 3, xmin = log1p(Tau25), xmax = log1p(Tau75)), 
+                 height = 6, color = "#1A5354", linewidth = 1) +
+  geom_errorbarh(data = all_interval_outer, aes(y = 3, xmin = log1p(Outer_Lower), xmax = log1p(Tau95)), 
+                 height = 6 / 2, color = "#1A5354", linewidth = 1, alpha = 0.6) +
+  scale_alpha_manual(values = c("0" = 0.65, "1" = 1)) +
+  scale_size_manual(values = c("0" = 1, "1" = 2)) +
+  scale_color_manual(values = site_colors, guide = "legend", drop = FALSE) +
+  scale_x_continuous(
+    #limits = c(0, 7),
+    breaks = x_breaks,
+    labels = label_log1p(x_breaks),
+    expand = expansion(mult = c(0.06, 0.02))
+  ) +
+ facet_wrap(~ curr_analyte, scales = "free_x", nrow = 1) +
+  labs(
+    title = "Exposure Intervals by Location in the TEDDY Cohort",
+    subtitle = "Points: observations (log1p scale). Dot: median when available. Thick bar: IQR (Tau25-Tau75) when available. Thin bar: 5-95% when available.",
+    x = "Concentration (original scale)",
+    y = NULL,
+    color = "Location"
+  ) +
+  theme_classic(base_size = 12) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0),
+    plot.subtitle = element_text(size = 12),
+    strip.background = element_rect(fill = "#F2F2F2", color = NA),
+    strip.text = element_text(size = 14, face = "bold"),
+    panel.grid.major.x = element_line(color = "grey90", linewidth = 0.4),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 13, face = "bold"),
+    axis.text.x = element_text(size = 8, face = "bold"),
+    axis.text.y = element_blank(),
+    axis.ticks = element_blank(),
+    axis.line.y = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10),
+    legend.box = "vertical",
+    legend.key.height = unit(5, "mm"),
+    legend.key.width  = unit(8, "mm"),
+    panel.spacing = unit(10, "pt")
+  ) +
+  guides(
+    color = guide_legend(
+      nrow = 1,
+      byrow = TRUE,
+      override.aes = list(size = 3.2, alpha = 1)
+    ),
+    size = "none",
+    alpha = "none"
+  ) +
+  coord_cartesian(clip = "off")  # allow left-side labels to breathe
+print(teddy_intervals)
+dev.off()
+
+save(teddy_intervals, file = file.path(output_dir, "teddy_intervals.RData"))
+
+```
+
+
+
+TEDDY Map
+-----
+```{r}
+coords <-tibble::tibble(
+  Site_Location = c("Sweden", "Colorado", "Finland", "Georiga", "Germany", "Washington"),
+  Latitude = c(60.1282, 39.5501, 61.9241, 32.1656, 51.1657, 47.7511),
+  Longitude = c(18.6435, -105.7821, 25.7482, -82.9001, 10.4515, -120.7401)
+)
+
+
+
+TEDDY_Study_Locations <-ExWAS_SDOH_Exposures %>% 
+  # mutate(
+  #     Country = as.character(toupper(Country)),
+  #     State   = as.character(toupper(State)),
+  #     State   = dplyr::coalesce(State, Country)   # replace NA State with Country
+  #   ) %>%
+  group_by(Site_Location) %>% 
+  summarise(n = n()) %>% 
+  dplyr::filter(!is.na(Site_Location)) %>% 
+  left_join(.,coords, by = "Site_Location")
+
+lat_long_df <-TEDDY_Study_Locations 
+
+my_sf <- lat_long_df %>% 
+  st_as_sf(coords = c('Longitude', 'Latitude')) %>%
+  st_set_crs(4326) # using 4326 for lat/lon decimal 
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+site_colors <- c(
+  "Finland" = "#8A9197FF",
+  "Sweden"  = "#FED439FF",
+  "Germany" = "#FD7446FF",
+  "Colorado"   = "#709AE1FF",
+  "Georiga"   = "#D2AF81FF",
+  "Washington"   = "#D5E4A2FF"
+
+
+)
+
+
+TEDDY_map <- ggplot() +  
+  geom_sf(data = world, fill = "lightyellow") +
+  geom_sf(data = my_sf, size = 5, aes(color = Site_Location,size = n)) +
+  ggtitle("Map of TEDDY Study Sites") + 
+  coord_sf(
+    xlim = c(-140, 60),   # longitude range (west to east)
+    ylim = c(30, 90),       # latitude range (south to north)
+    expand = FALSE          # removes extra space around plot
+  ) +
+  scale_color_manual(values = site_colors) +
+  theme_void() +
+  theme(legend.position = "bottom"
+)
+
+save(TEDDY_map, file = file.path(output_dir, "TEDDY_map.RData"))
+
+```
+
+```{r}
+r2_barplot_patch <- r2_barplot +
+  theme(axis.text.y = element_text(size = 20,face = "bold"),
+        axis.text.x = element_text(size = 20,face = "bold"),
+        axis.title.x = element_text(size = 20,face = "bold"),
+        axis.title.y = element_text(size = 20,face = "bold"))
+
+```
+
+
+```{r}
+
+design <- "
+AB
+CC
+"
+
+#pdf(file = "../../../Output/Final_Paper1_Output/Plots/TEDDY_Figure.pdf",height = 15,width =14)
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Final_Patchplots/TEDDY_Figure.pdf",height = 15,width =14)
+patch_plot <- (TEDDY_map + r2_barplot_patch)  / teddy_intervals 
+patch_plot + 
+  # #plot_layout(design = design) +   # collect legends to avoid extra gaps
+  # plot_annotation(
+  #   title = "TEDDY Exposure Intervals By Country",
+  #   tag_levels = "A",
+  #   theme = theme(plot.margin = ggplot2::margin(0, 0, 0, 0))
+  # ) &
+  # theme(
+  #   legend.position = "bottom",
+  #   plot.tag = element_text(size = 20),
+  #   plot.title = element_text(size = 15),
+  #   plot.margin = ggplot2::margin(4, 4, 4, 4)                   # keep margins small and consistent
+  # )
+  plot_annotation(
+  title = 'TEDDY Study Analysis',
+  tag_levels = "A"
+) &
+  theme(plot.tag = element_text(size = 20),
+        plot.title = element_text(size = 15))+
+  plot_layout(design = design, widths = c(2, 1),heights = c(1,2))
+
+
+dev.off()
+
+```
+
+```{r}
+patch_plot +
+  plot_layout(design = design, guides = "collect") +   # collect legends to avoid extra gaps
+  plot_annotation(
+    title = "TEDDY Exposure Intervals By Country",
+    tag_levels = "A",
+    theme = theme(plot.margin = ggplot2::margin(0, 0, 0, 0))
+  ) &
+  theme(
+    legend.position = "bottom",
+    plot.tag = element_text(size = 20),
+    plot.title = element_text(size = 15),
+    plot.margin = ggplot2::margin(4, 4, 4, 4)                   # keep margins small and consistent
+  )
+```
+
+
+```{r}
+
+```

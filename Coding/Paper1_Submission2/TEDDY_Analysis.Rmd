@@ -1,0 +1,554 @@
+---
+title: "PXS_Voter"
+output: html_document
+date: "2024-04-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(quantreg)
+library(survival)
+source("censored_quantile_helpers.R")
+```
+
+
+Input Data
+------------
+
+```{r}
+
+#load("../../Input/Harmonized_Datasets/Harmonized_Outcomes.RData")
+load("../../Input/Harmonized_Datasets/TEDDY_SDOH_Clean.RData")
+load("../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+
+```
+
+```{r}
+
+ExWAS_SDOH_Exposures <- TEDDY_SDOH %>% 
+  dplyr::mutate(Child_Race = relevel(as.factor(Child_Race), ref = "White")) %>% 
+  dplyr::mutate(Mat_Edu = relevel(as.factor(Mat_Edu), ref = "Four_Year_College_Degree")) %>% 
+  mutate(Child_Age = as.numeric(Child_Age)) %>% 
+  mutate(Mat_Edu_Binary = case_when(
+    Mat_Edu %in% c("No_Education",
+                   "Primary_Education",
+                   "Primary_School",
+                   "High_School") ~ "No_College",
+    Mat_Edu %in% c("Some_College",
+                   "Four_Year_College_Degree",
+                   "Some_Grad_School") ~ "Some_College",
+    Mat_Edu == "Not_Reported" ~ NA
+  )) %>% 
+  mutate(Study = "TEDDY_SDOH") %>% 
+  dplyr::mutate(Site_Location = relevel(as.factor(Site_Location), ref = "Sweden")) %>%  
+  dplyr::mutate(Location = relevel(as.factor(Location), ref = "United_States"))  
+
+```
+
+
+
+```{r}
+std_study <- function(x) {
+  stringr::str_remove(x, '[_]\\w+|:')
+}
+
+# UNIT CONVERSION (2026-08-11, CODE_AUDIT_2026-08-11.md section 1.1).
+# The local to_ng_per_mL() removed here ended in `TRUE ~ value`, so mg/dL,
+# ug/mL, ng/g, pmol/mL, nM and kg/m3 fell through UNCONVERTED and were treated
+# as ng/mL -- 39,475 rows (5.9%), wrong by factors of 10^3 to 10^6.
+local({
+  cands <- c("harmonization_helpers.R", "harmonization_helpers.R",
+             "Coding/Paper1_Submission2/harmonization_helpers.R")
+  hit <- cands[file.exists(cands)]
+  if (length(hit) == 0) stop("Cannot locate harmonization_helpers.R")
+  source(hit[[1]], local = FALSE)
+})
+```
+
+```{r}
+Child_Data_Targeted <- build_censored_targeted_panel(
+  targeted_df = Targeted_Data_All,
+  id_var = "Child_PID",
+  unit_converter = to_ng_per_mL
+)
+
+child_analytes <- sort(unique(Child_Data_Targeted$Analyte_Code))
+
+child_list_Targeted <- build_censored_targeted_list(
+  panel_df = Child_Data_Targeted,
+  id_var = "Child_PID",
+  analytes = child_analytes
+)
+
+```
+
+
+```{r}
+
+
+Child_SDOH <- ExWAS_SDOH_Exposures %>% 
+  dplyr::filter(!is.na(Child_PID) ) %>% 
+  dplyr::select(Study,Child_PID,everything(),-Pat_Edu,-Child_BMI) 
+
+```
+
+```{r}
+# BOOTSTRAP REPLICATES FOR INFERENCE (pinned 2026-08-11).
+# CODE_AUDIT_2026-08-11.md section 1.5.
+#
+# This wrapper did not pass summary_R, so run_censored_quantile_reg() used its
+# default of 2. That is below fit_censored_quantile_models()'s min_boot_R = 25,
+# so inference fell back to fallback_crq_summary() and EVERY Standard_Error,
+# T_Value, P_Value, Lower and Upper came back NA. Downstream that failed
+# silently rather than loudly: p.adjust(NA) is NA, and
+# ifelse(NA <= 0.10, 1, 0) is NA, so significance-filtered figures emptied
+# instead of erroring.
+#
+# RUNTIME: 200 replicates is materially slower than the old no-op default,
+# because the bootstrap now actually runs. Lower it for exploratory sweeps, but
+# anything below 25 silently disables inference entirely -- do not treat values
+# in that range as "a bit less precise".
+# FAST-REGENERATION SETTING (2026-08-11): 50 bootstrap replicates, not 200.
+# Enough for point estimates and an indicative CI, NOT enough for a publication
+# standard error -- raise to 200+ for the final run. Below 25 inference silently
+# becomes NA (see the note above), so do not lower this further.
+SUMMARY_R <- 50
+
+Quantile_Reg <- function(exp_var = NULL,
+                         dataset,
+                         my_outcome,
+                         Reg_Type,
+                         my_covariates,
+                         join_var,
+                         summary_R = SUMMARY_R) {
+  stopifnot(summary_R >= 25)
+  run_censored_quantile_reg(
+    exp_var = exp_var,
+    dataset = dataset,
+    my_outcome = my_outcome,
+    my_covariates = my_covariates,
+    join_var = join_var,
+    summary_R = summary_R
+  )
+}
+
+```
+
+
+```{r}
+ExWAS_Function_Metab <- function(Exposure_Data, myexposures,myoutcomes, Outcome_Data,mycovars,join_var,Reg_Type,curr_study){
+  
+  all_pheno_unadjusted <- list()
+  all_pheno_adjusted <- list()
+  
+  #Run Regression for all outcomes
+  for(j in seq_along(myoutcomes)){
+    
+     # pheno <- myoutcomes[97]
+
+    pheno <- myoutcomes[j]
+    adjusted_results <- list()
+    unadjusted_results <- list()
+    
+    if(is.null(myexposures)){
+      loop_n <- "CovOnly"
+    }else(
+      loop_n = myexposures
+    )
+    
+    for(i in seq_along(loop_n)){
+      print(i)
+      my_covariates <- mycovars
+      
+      
+      #curr_metab <- child_list_Targeted[[i]]
+      # curr_pheno <- Child_Outcomes %>% 
+      #   dplyr::select(Child_PID,all_of(pheno))
+      
+      
+      if (is.null(myexposures)) {
+        curr_exposure <- Exposure_Data %>% 
+          mutate(Study = str_remove(Study, '[_]\\w+|:')) %>% 
+          dplyr::select(join_var, Study, all_of(my_covariates)) %>% 
+          distinct()
+      } else {
+        curr_exposure <- Exposure_Data %>% 
+          mutate(Study = str_remove(Study, '[_]\\w+|:')) %>% 
+          dplyr::select(join_var, Study, all_of(myexposures[i]), all_of(my_covariates)) %>% 
+          distinct()
+      }
+      
+      curr_pheno <- Outcome_Data[[j]] %>% 
+        mutate(Study =  str_remove(Study, '[_]\\w+|:')) %>% 
+        select_outcome_data(join_var = join_var, outcome_col = pheno) %>% 
+        dplyr::filter(Study == curr_study) %>% 
+        dplyr::filter(!is.na(.data[[pheno]]))
+      
+      curr_outcome_pheno <- left_join(curr_pheno,curr_exposure,by = c(join_var,'Study')) %>%
+        mutate(!! pheno := as.numeric(!! rlang::sym(pheno))) %>%
+        distinct(.keep_all = T)
+      
+
+      if(nrow(curr_outcome_pheno) == 0){
+        next
+      }
+      
+      # curr_outcome_pheno <- left_join(curr_pheno,curr_exposure,by = c(join_var,'Study')) %>% 
+      #   mutate(!! pheno := scale(as.numeric(!! rlang::sym(pheno)))) %>% 
+      #   distinct(.keep_all = T)
+      
+      
+      
+      #  curr_outcome_pheno <- curr_outcome_pheno
+      
+      
+      curr_exp <- if (is.null(myexposures)) NULL else myexposures[i]
+      
+      
+      
+      #             in_silence(
+      # {
+      
+      Curr_Unadjusted_Results <- try(Quantile_Reg(exp_var = curr_exp,
+                                                  dataset = curr_outcome_pheno,
+                                                  my_outcome = pheno,
+                                                  Reg_Type = Reg_Type,
+                                                  my_covariates = my_covariates,
+                                                  join_var = join_var))
+      
+      unadjusted_results[i] <- list(Curr_Unadjusted_Results)
+      
+      names(unadjusted_results)[i] <- curr_exp
+      
+      #})
+    }
+    
+    
+    #filtered_unadjusted_list <- lapply(unadjusted_results, function(df) if (nrow(df) >= 2) df else NULL)
+    
+    
+    #unadjusted_df <- bind_rows(filtered_unadjusted_list)
+    
+    
+    
+    
+    all_pheno_unadjusted[[j]] <- unadjusted_results
+    
+    names(all_pheno_unadjusted)[j] <- myoutcomes[j]
+    
+  }
+  
+  
+  return(all_pheno_unadjusted)
+  
+  
+}
+
+```
+
+```{r}
+suppress_all_output <- function(expr) {
+  temp_file <- tempfile()
+  con <- file(temp_file, open = "wt")
+  
+  # Redirect stdout and messages
+  sink(con)
+  sink(con, type = "message")
+  
+  # Suppress warnings and messages globally
+  old_warn <- getOption("warn")
+  options(warn = -1)
+  
+  # Evaluate expression quietly
+  result <- suppressWarnings(
+    suppressMessages(
+      tryCatch(
+        eval(expr),
+        error = function(e) NULL  # suppress error output
+      )
+    )
+  )
+  
+  # Restore options and sinks
+  options(warn = old_warn)
+  sink(NULL)
+  sink(NULL, type = "message")
+  close(con)
+  
+  invisible(result)
+}
+
+
+
+```
+
+```{r}
+Run_ExWAS_By_Study <- function(to_keep, child_sdoh, mystudies,join_var,analytes_touse,targeted_list ) {
+  All_Study_Single_Exp_Results <- list()
+  
+  for (i in seq_along(mystudies)) {
+    print(i)
+    curr_sdoh <- child_sdoh %>%
+      dplyr::filter(Study == mystudies[[i]]) %>%
+      dplyr::select_if(~ !all(is.na(.))) %>%
+      dplyr::select(where(~ n_distinct(.) > 1), Study) %>%
+      dplyr::mutate(Study = stringr::str_remove(Study, '[_]\\w+|:'))
+    
+    # keep only the specified social exposures
+    #curr_social_exps <- names(curr_sdoh)[-1]
+   # curr_social_exps <- curr_social_exps[curr_social_exps %in% to_keep]
+    curr_social_exps <- to_keep
+
+    curr_study <- unique(curr_sdoh$Study)
+    #curr_study <- unique(curr_sdoh %>% pull(Study))
+    
+    # run the Quantile ExWAS
+    Curr_Results <- try(ExWAS_Function_Metab(
+        Exposure_Data = curr_sdoh,
+        Outcome_Data = targeted_list,
+        myexposures = NULL,
+        myoutcomes = analytes_touse,
+        mycovars = curr_social_exps,
+        join_var = join_var,
+        Reg_Type = "Quantile",
+        curr_study = curr_study
+      ))
+    
+    Final_Res <- Curr_Results[lapply(Curr_Results, length) > 0]
+    All_Study_Single_Exp_Results[i] <- list(Final_Res)
+    names(All_Study_Single_Exp_Results)[i] <- paste(curr_study, collapse = ":")
+  }
+  
+  # filter to non-empty results
+  By_Study_AllSDOH_Child <- All_Study_Single_Exp_Results[
+    lapply(All_Study_Single_Exp_Results, length) > 0
+  ]
+  is_char <- sapply(By_Study_AllSDOH_Child, is.character)
+
+  # Remove character elements
+  By_Study_AllSDOH_Child <- By_Study_AllSDOH_Child[!is_char]
+
+  
+  return(By_Study_AllSDOH_Child)
+}
+```
+
+
+
+
+Run Analysis Mat
+----
+
+
+```{r}
+mystudies <- unique(Child_SDOH$Study)
+All_Study_Single_Exp_Results <- list()
+for(i in seq_along(mystudies)){
+  
+  curr_sdoh <- Child_SDOH %>% 
+    dplyr::filter(Study == mystudies[[i]]) %>% 
+    select_if(~ !all(is.na(.))) %>% 
+    select(where(~n_distinct(.) > 1),Study) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) 
+  
+  tokeep <- c("Child_Sex","Child_Race","Mat_Edu", "Child_Age" ,"Location" ,"Site_Location" ,"Mat_Edu_Binary")    
+  curr_social_exps <- names(curr_sdoh)[-1]
+  curr_social_exps <- curr_social_exps[curr_social_exps %in% tokeep]
+  curr_study <- unique(curr_sdoh$Study)
+  #Run Quantile ExWAS
+  Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = curr_sdoh,
+                                                                 Outcome_Data = child_list_Targeted,
+                                                                 myexposures = curr_social_exps,
+                                                                 myoutcomes = child_analytes,mycovars = "Study",join_var = "Child_PID",
+                                                                 Reg_Type = "Quantile",
+                                                                 curr_study = curr_study)))
+  
+  Final_Res <- Curr_Results[lapply(Curr_Results, length) > 0]
+  All_Study_Single_Exp_Results[i] <- list(Final_Res)
+  names(All_Study_Single_Exp_Results)[i] <- paste(curr_study, collapse = ":")
+  
+}
+
+
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+TEDDY_Single_Exp <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
+
+output_dir <- "../../Output/Paper1_Output_Submission2"
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+save(TEDDY_Single_Exp, file = file.path(output_dir, "TEDDY_Single_Exp.RData"))
+
+
+
+```
+
+```{r}
+
+check_singular <- function(df, cols) {
+  X <- model.matrix(~ . , data = df[cols])
+  qrX <- qr(X)
+  rankX <- qrX$rank
+  ncolX <- ncol(X)
+  
+  tibble(
+    columns_checked = paste(cols, collapse = ", "),
+    full_rank = rankX == ncolX,
+    rank = rankX,
+    ncol = ncolX,
+    singular = rankX < ncolX
+  )
+}
+
+check_singular(Child_SDOH,tokeep)
+
+mystudies <- unique(Child_SDOH$Study)
+
+All_Study_Single_Exp_Results <- list()
+for(i in seq_along(mystudies)){
+  
+  curr_sdoh <- Child_SDOH %>% 
+    dplyr::filter(Study == mystudies[[i]]) %>% 
+    select_if(~ !all(is.na(.))) %>% 
+    select(where(~n_distinct(.) > 1),Study) %>% 
+    mutate(Study =  str_remove(Study, '[_]\\w+|:')) 
+  
+  tokeep <- c("Child_Sex","Mat_Edu", "Child_Age" ,"Site_Location" )    
+  curr_social_exps <- names(curr_sdoh)[-1]
+  curr_social_exps <- curr_social_exps[curr_social_exps %in% tokeep]
+  curr_study <- unique(curr_sdoh$Study)
+  #Run Quantile ExWAS
+  Curr_Results <- suppress_all_output(quote(ExWAS_Function_Metab(Exposure_Data = curr_sdoh,
+                                                                                      Outcome_Data = child_list_Targeted,
+                                                                                      myexposures = NULL,
+                                                                                      myoutcomes = child_analytes,
+                                                                                      mycovars = curr_social_exps,
+                                                                                      join_var = "Child_PID",
+                                                                                      Reg_Type = "Quantile",
+                                                                                      curr_study = curr_study)))
+
+  Final_Res <- Curr_Results[lapply(Curr_Results, length) > 0]
+  All_Study_Single_Exp_Results[i] <- list(Final_Res)
+  names(All_Study_Single_Exp_Results)[i] <- paste(curr_study, collapse = ":")
+  
+  }
+
+
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+TEDDY_Full_Model <- All_Study_Single_Exp_Results[lapply(All_Study_Single_Exp_Results, length) > 0]
+
+save(TEDDY_Full_Model, file = file.path(output_dir, "TEDDY_Full_Model.RData"))
+
+
+```
+
+```{r}
+
+#Age   Race
+
+mystudies <- unique(Child_SDOH$Study)
+to_keep <- c("Child_Age","Child_Sex")
+
+By_Study_AgeRace_Mat<- suppress_all_output(quote( Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Child_SDOH,
+  mystudies = mystudies,
+  join_var = "Child_PID",
+  analytes_touse = child_analytes,
+  targeted_list = child_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+TEDDY_Age_Sex <- By_Study_AgeRace_Mat[lapply(By_Study_AgeRace_Mat, length) > 0]
+
+save(TEDDY_Age_Sex, file = file.path(output_dir, "TEDDY_Age_Sex.RData"))
+
+
+```
+
+
+
+```{r}
+
+#Age   Race
+
+mystudies <- unique(Child_SDOH$Study)
+to_keep <- c("Child_Age","Child_Sex","Mat_Edu")
+
+By_Study_AgeRace_Mat<- suppress_all_output(quote( Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Child_SDOH,
+  mystudies = mystudies,
+  join_var = "Child_PID",
+  analytes_touse = child_analytes,
+  targeted_list = child_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+TEDDY_Age_Sex_Edu <- By_Study_AgeRace_Mat[lapply(By_Study_AgeRace_Mat, length) > 0]
+
+save(TEDDY_Age_Sex_Edu, file = file.path(output_dir, "TEDDY_Age_Sex_Edu.RData"))
+
+
+```
+
+```{r}
+
+#Age   Race
+
+mystudies <- unique(Child_SDOH$Study)
+to_keep <- c("Child_Age","Child_Sex","Site_Location")
+
+By_Study_AgeRace_Mat<- suppress_all_output(quote( Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Child_SDOH,
+  mystudies = mystudies,
+  join_var = "Child_PID",
+  analytes_touse = child_analytes,
+  targeted_list = child_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+TEDDY_Age_Sex_Site <- By_Study_AgeRace_Mat[lapply(By_Study_AgeRace_Mat, length) > 0]
+
+save(TEDDY_Age_Sex_Site, file = file.path(output_dir, "TEDDY_Age_Sex_Site.RData"))
+
+
+```
+
+```{r}
+mystudies <- unique(Child_SDOH$Study)
+to_keep <- c("Child_Age","Child_Sex","Location")
+
+By_Study_AgeRace_Mat<- suppress_all_output(quote( Run_ExWAS_By_Study(
+  to_keep = to_keep,
+  child_sdoh = Child_SDOH,
+  mystudies = mystudies,
+  join_var = "Child_PID",
+  analytes_touse = child_analytes,
+  targeted_list = child_list_Targeted
+)))
+
+
+#Child_All_Exposure_Quantile_Results <- Child_SDOH_Metab_Quantile_Results
+TEDDY_Age_Sex_Location <- By_Study_AgeRace_Mat[lapply(By_Study_AgeRace_Mat, length) > 0]
+
+save(TEDDY_Age_Sex_Location, file = file.path(output_dir, "TEDDY_Age_Sex_Location.RData"))
+
+```
+
+```{r}
+
+```

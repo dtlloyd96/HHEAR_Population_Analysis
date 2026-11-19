@@ -1,0 +1,1180 @@
+---
+title: "HHEAR_Explore"
+author: "Dillon Lloyd"
+date: "2024-10-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+All Exposure Download
+-----------------------------------
+```{r}
+#AllExp <- read_csv("../Datasets/AllExposures.csv")
+```
+
+
+Load EPI Files for Datasets
+---------------
+
+```{r}
+# epi_files = list.files(
+#   path = "../Datasets/",        # directory to search within
+#   pattern = "EPI.*csv$", # regex pattern, some explanation below
+#   recursive = TRUE,          # search subdirectories
+#   full.names = TRUE          # return the full path
+# )
+```
+
+```{r}
+# data_list <- lapply(epi_files, read_csv)
+# 
+# names(data_list) <- epi_files
+
+```
+
+Create Study RData Files and Give Info
+---------------------------
+
+
+1407 - Pediatric Inner-City Environmental Exposures at School and Home and Asthma Study - SICAS 
+-----------------------------------
+
+Asthma affects 25 million Americans, particularly urban minority children. Children spend nearly all day in school, yet little is known about the role of a child’s exposure to widely disseminated industrial chemicals on asthma morbidity. Early animal models and population studies have begun to identify an association between phenolic chemical exposure and asthma development through proposed increased regulation of an individual’s allergic immune response. The study population consists of urban school children with physician diagnosis of asthma ages 4 through 13 from the Northeastern United States. In a cross sectional study, we hypothesize that exposure to environmental exposures (e.g. phenols, phthalates, and environmental tobacco smoke) in urban school children and higher urinary biomarkers will preliminarily be associated with higher asthma morbidity. This study, nested within a school-based environmental intervention trial, (School Inner-City Asthma Intervention Study, SICAS2 U01 AI 110397), will evaluate the impact of environmental and personal care product use exposures on these biomarker levels and the impact that these exposures have on asthma morbidity, controlling comprehensively for other personal, home, and school environmental factors associated with asthma outcomes.
+
+
+```{r}
+
+files_1407 = list.files(
+  path = "../Datasets/1407",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+SICAS_data_list <- lapply(files_1407, read_csv)
+names(SICAS_data_list) <- c('SICAS_Epi',"SICAS_Harmonized","SICAS_CodeBook","SICAS_META_HILIC_POS",
+                            "META_Map","SICAS_META_REV_NEG","SICAS_Targeted")
+
+
+save(SICAS_data_list, file = "../Input/SICAS_1407_Data_All.RData")
+rm(files_1407,SICAS_data_list)
+```
+
+
+
+1431 - Sex-Specific Omics Profiles Related to Toxicant Exposures in Children - ELEMENT
+----------------------------------------------------------------------------
+
+The objective of this project is to examine effects of toxicant exposures during three sensitive developmental timeframes – the prenatal period (during 1997-2004), early adolescence (8-14 years), and late adolescence (13-19 years) – on adiposity and metabolic risk in adolescence among participants of the Early Life Exposure to ENvironmental Toxicants (ELEMENT) Project, a Mexican birth cohort in Mexico City. We leverage existing data on toxicant exposure during all three timeframes, including bisphenol A (BPA), metals and phthalates, and propose to measure polycyclic aromatic hydrocarbon (PAH) metabolites in archived urine samples from the mothers and children. Additionally, we will carry out genome-wide DNA methylation analysis in peripheral leukocytes at all three timeframes, and untargeted metabolomics analyses in fasting serum during late adolescence to gain insight into molecular pathways linking exposure to each of these toxicants singly and as mixtures to health outcomes during adolescence. 
+
+
+
+```{r}
+
+files = list.files(
+  path = "../Datasets/1431",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+ELEMENT_data_list <- lapply(files, read_csv)
+names(ELEMENT_data_list) <- c('ELEMENT_Epi',"ELEMENT_Harmonized","ELEMENT_CodeBook","ELEMENT_Targeted")
+
+
+save(ELEMENT_data_list, file = "../Input/ELEMENT_1431_Data_All.RData")
+rm(files,ELEMENT_data_list)
+
+```
+
+
+1432 - Micronutrient deficiencies, environmental exposures and severe malaria: Risk factors for adverse neurodevelopmental outcomes in Ugandan children - MDUC
+-----------------------------------
+The primary hypotheses is that zinc deficiency or exposure to heavy metals can influence short and long term neurocognitive outcomes in healthy community children and in children with severe malaria, and that children with cerebral malaria have specific metabolomic changes that relate to longterm neurocognitive impairment.The original study is a longitudinal cohort study of Ugandan children on the relationship between cerebral malaria (CM) and severe malarial anemia (SMA) on mortality (in hospital and during follow up) ( 2 yrs) and longterm neurodevelopment and behavior ( >5yrs). The CHEAR study will examine the effects of micronutrient deficiency, metal exposure, and inflammation or mortality and longterm neurodevelopment ( >5 yrs) and behavior in children with severe malaria (CM or SMA) and in community children (CC). There are measured levels of zinc, and heavy metals (lead, mercury, copper, manganese etc.) in children with severe malaria and community controls.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1432",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+MDUC_data_list <- lapply(files, read_csv)
+names(MDUC_data_list) <- c('MDUC_Epi',"MDUC_Harmonized","MDUC_CodeBook","MDUC_Meta_Map","MDUC_Targeted")
+
+
+save(MDUC_data_list, file = "../Input/MDUC_1432_Data_All.RData")
+rm(files,MDUC_data_list)
+
+```
+
+
+
+1438 - Internal Metabolomic Biomarker Exposome and Developmental Disorders - IMBEDD
+----------------------
+The MARBLES (Markers of Autism Risk in Babies: Learning Early Signs) prospective study of over 450 high-risk pregnancies recruits mothers who have a child with confirmed ASD and are either planning a pregnancy or are pregnant with another child, in order to understand what influences the outcome of the younger sibling and to identify early markers of ASD. These younger siblings are at 13-fold higher risk for developing ASD (1:5), than children in the general population (1:68).MARBLES recruits Northern California families from lists of children receiving services through the California Department of Developmental Services, typically within two hours driving distance to the University of California Davis MIND Institute in Sacramento where clinical assessments are administered. The resulting study populations are racially, ethnically, and socioeconomically diverse. Children are followed until the child is three years old, at which time they receive a diagnosis of typically developing, autism, or other developmental concerns. Medical, nutritional, lifestyle, and contaminant exposure data, developmental assessments, and biologic specimens are collected periodically throughout pregnancy and the child’s first years. For this CHEAR study, metabolomic markers in child umbilical cord and maternal pregnancy EDTA plasma will be measured and compared across diagnostic outcomes to allow a comprehensive screen of compounds and/or pathways potentially associated with ASD.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1438",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+IMBEDD_data_list <- lapply(files, read_csv)
+names(IMBEDD_data_list) <- c('IMBEDD_Epi',"IMBEDD_Harmonized","IMBEDD_CodeBook","IMBEDD_Meta_Map","IMBEDD_Meta_Neg_CordBlood",
+                             "IMBEDD_Meta_NEG_Plasma3rdtri","IMBEDD_Meta_Pos_CordBlood","IMBEDD_Meta_Pos_Plasma3irdtri")
+
+
+save(IMBEDD_data_list, file = "../Input/IMBEDD_1438_Data_All.RData")
+rm(files,IMBEDD_data_list)
+
+
+```
+
+
+2121 - The Dynamics of Exposure, Phthalates and Asthma in a Randomized Trial - DEPART
+---------------------
+
+The Dynamics of Exposure, Phthalates, and Asthma project (DEPART) utilizes data and samples collected within the Home Air in Agriculture Pediatric Intervention Trial (HAPI, NIEHS R01 ES023510). The participants are 70 Latino children with asthma aged 6-12 years who reside in rural, agricultural central WA State. They were recruited from 2015-2017 for a one-year follow up period of their asthma morbidity following randomization into a control group (education) or intervention (education plus 2 in home portable HEPA air cleaners). Follow assessments include 2 time points prior to randomization and 2 post randomization and includes collection of urine specimens. DEPART’s objective is to examine associations between urinary biomarkers for emerging contaminants of concern – phthalates, pesticides, and phenols and biomarkers of oxidative stress and inflammation in this population. DEPART also includes metabolomic profiling to investigate potential additional biological mechanisms of toxicity associated with these exposures.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/2121",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+DEPART_data_list <- lapply(files, read_csv)
+names(DEPART_data_list) <- c('DEPART_Epi',"DEPART_Harmonized","DEPART_CodeBook","DEPART_Meta_Map","DEPART_OXID_Inflam",
+                             "DEPART_Targeted")
+
+
+save(DEPART_data_list, file = "../Input/DEPART_2121_Data_All.RData")
+rm(files,DEPART_data_list)
+
+
+```
+
+
+1977 - Microbial and metabolic variations mediate the influence of childhood and adolescent EDC and trace element exposure on breast density. - GOC
+----------------
+
+Our CHEAR project builds on the longitudinal Growth and Obesity Cohort Study in Santiago, Chile, which includes approximately 500 girls born in 2002-2003. Participants were recruited in 2006 from public nursery schools of six counties in Santiago representative of low to middle income families. Children were included if they were singletons with birthweight between 2500 and 4500g, and had no physical, medical or endocrine diseases that may alter the growth and/or onset of puberty. Semi-annual collection of participant anthropometric and pubertal development data by trained dietitians has continued since 2009. The overall objectives of our CHEAR study are to assess how exposure to endocrine-disrupting chemicals (phenols and phthalates), and trace elements (metals) measured in urine samples at Tanner stages 1 and 4 and 1 year post-menarche influence the pubertal microbiome and metabolome, and the potential impact on adolescent breast composition measured by DXA at Tanner stage 4 and 2 years post-menarche.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1977",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+GOC_data_list <- lapply(files, read_csv)
+names(GOC_data_list) <- c('GOC_Epi',"GOC_Harmonized","GOC_CodeBook","GOC_HILIC_Pos","GOC_Meta_REV_Neg",
+                             "GOC_Targeted")
+
+
+save(GOC_data_list, file = "../Input/GOC_1977_Data_All.RData")
+rm(files,GOC_data_list)
+
+
+```
+
+1762 - Biological Responses to Tobacco Smoke Exposure in Ill Children: Inflammatory Processes and Oral Metabolomic Profiles - TSIC
+----------------
+This CHEAR project will leverage an ongoing, two-group randomized controlled trial (R01HD083354) that compares the efficacy of a tobacco cessation intervention to an active control condition on smoking caregivers who bring their children to the pediatric emergency department.  Participants are 0-17 years of age, nonsmokers, and have a potentially tobacco smoke related illness at baseline. All participants have varying levels of smoke exposure and live in the tristate area of southern Ohio, Indiana, or Kentucky. The sample is approximately 56% African American, 33% White, and 11% other races; sex is equally distributed. Recruitment began in April 2016. The CHEAR project will use sensitive LCMS techniques to analyze cotinine, a measure of tobacco smoke exposure, in child saliva samples collected from ill children at baseline and six-weeks after baseline. Investigators will explore the associations between different levels of tobacco smoke exposure and a broad range of biological outcomes associated with immune system dysregulation based on biomarkers of inflammatory responses and findings from targeted and untargeted metabolomics.
+
+```{r}
+files = list.files(
+  path = "../Datasets/1762",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+TSIC_data_list <- lapply(files, read_csv)
+names(TSIC_data_list) <- c("TSIC_Cotine","TSIC_Repeated_Cotine","TSIC_Data_Dic","TSIC_Epi","TSIC_Harmonized","TSIC_Codebook","TSIC_Inflam","TSIC_Meta_Map")
+
+
+save(TSIC_data_list, file = "../Input/TSIC_1762_Data_All.RData")
+rm(files,TSIC_data_list)
+
+```
+
+1593 - Role of environmental toxicants in modulating disease severity in children with NAFLD - NASH
+--------------
+Nonalcoholic fatty liver disease (NAFLD) is a global health problem, with prevalence estimated at 20% to 30% of the general population. There is not a good understanding of why some children progress to severe disease more rapidly. While it has been shown that genetic factors are contributors, there appears to be a strong modulation of the disease by environmental influences. Evidence exists demonstrating that toxins like perfluoroalkyl sulfonate (PFAS) surfactants may modulate lipoprotein metabolism and in mouse models, bisphenol A (BPA) induces epigenetic changes predisposing to NAFLD. We will use Children’s Health Exposure Analysis Resource (CHEAR) to further our understanding about how environmental toxicants modulate disease severity in children with NAFLD. The NASH Clinical Research Network (NASH CRN) was established in 2002 and has the largest, well characterized cohort of children with NAFLD who have blood samples acquired near in time to a liver biopsy, which is the most accurate way to assess NAFLD. Participants are at least 2 years of age and less than 18 years of age with liver biopsy proven NAFLD or NASH and collection of serum sample up to 90 days before or after the standard of care liver biopsy obtained.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1593",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+NASH_data_list <- lapply(files, read_csv)
+names(NASH_data_list) <- c("NASH_Epi","NASH_Harmonized","NASH_Codebook","NASH_Meta_HILIC_Pos","NASH_Meta_REV_Neg","NASH_Targeted")
+
+
+save(NASH_data_list, file = "../Input/NASH_1593_Data_All.RData")
+rm(files,NASH_data_list)
+
+```
+
+1967 - Perfluoroalkyl and Polyfluroalkyl Substances (PFAS), Protein Biomarkers, Adiposity and Cardiometabolic Risk Factors in a 3-year Cohort of Low-Income Latino Children with Overweight and Obesity from the Stanford GOALS Randomized Controlled Trial - GOALS
+-----------------------
+This project will investigate the relationships between plasma perfluoroalkyl and polyfluoroalkyl substances (PFAS), protein biomarkers and adiposity and cardiometabolic risk factors among low-income primarily Latino children from the Stanford GOALS trial. Stanford GOALS was a randomized controlled trial of a community-based, multi-level, multi-component, multi-setting weight control intervention versus health education for body mass index change. The participants were 7-11 year old children living in the San Francisco Bay Area, California at baseline with overweight and obesity (BMI=85th percentile for age and sex on the 2000 CDC growth references). Enrollment occurred in 2012-13 and participants were followed annually for 3-4 years with extremely high follow-up rates. We will examine cross-sectional and longitudinal associations of PFAS concentrations and protein biomarkers with cross-sectional and longitudinal measures of adiposity and risks for cardiovascular disease and type 2 diabetes mellitus.
+
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1967",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+GOALS_data_list <- lapply(files, read_csv)
+names(GOALS_data_list) <- c("GOALS_Epi","GOALS_Targeted")
+
+
+save(GOALS_data_list, file = "../Input/GOALS_1967_Data_All.RData")
+rm(files,GOALS_data_list)
+
+```
+
+
+1729 - Air Pollution, Placenta Function, and Birth Outcomes in Los Angeles - PARENTs
+---------------------
+
+The PARENTs study enrolled women early in pregnancy to develop novel magnetic resonance imaging (MRI) tools and study the impact of environmental factors on the placenta. Since 2016, ~ 150 pregnant women ages 20-50 years who utilize prenatal care at the University of California, Los Angeles (UCLA) hospital were recruited and participated in Doppler and MRI imaging, blood and urine sampling, and interviews up to three times in pregnancy and also in particulate matter (PM) monitoring/modelling. For most women, cord blood and placenta was collected at delivery and infant health assessed through medical chart abstraction. Participation in the CHEAR program will generate biomarkers and allow us (1) to analyze relations between monitored environmental exposures (PM air pollution) and biomarkers of PAHs, (2) between environmental exposures and oxidative stress, inflammatory responses and metabolomic profiles; and (3) between bio-markers and traditional indicators of placental insufficiency or adverse pregnancy outcomes. 
+
+```{r}
+files = list.files(
+  path = "../Datasets/1729",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+PARENTs_data_list <- lapply(files, read_csv)
+names(PARENTs_data_list) <- c("PARENTs_Epi","PARENTs_Harmonized","PARENTs_Codebook","PARENTs_Targeted")
+
+
+save(PARENTs_data_list, file = "../Input/PARENTs_1729_Data_All.RData")
+rm(files,PARENTs_data_list)
+
+```
+
+1945 - Maternal and Developmental Risks from Environmental and Social Stressors - MADRES
+------------------
+The approved CHEAR project focuses on 250 participants from the Maternal and Developmental Risks from Environmental and Social Stressors (MADRES) study, which is a low-income predominately Hispanic pregnancy cohort in Los Angeles that was designed to evaluate the impacts of early life exposures to stress and environmental contaminants on obesity risk. The MADRES study began in 2015. Women and their infants are followed from early pregnancy through the first year of life. The objective of the approved CHEAR project is to investigate the impacts of prenatal metal mixture exposures on newborn methylation patterns and birth weight, an important risk factor for long-term health. The University of Michigan CHEAR Lab Hub will measure a panel of 21 metals in 1st and 3rd trimester urine samples and will additionally measure the cord blood CD4+ methylome, using whole genome bisulfite sequencing, in a smaller subset of participants (N = 30).
+
+```{r}
+files = list.files(
+  path = "../Datasets/1945",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+MADRES_data_list <- lapply(files, read_csv)
+names(MADRES_data_list) <- c("MADRES_Epi","MADRES_Harmonized","MADRES_Codebook","MADRES_Targeted")
+
+
+save(MADRES_data_list, file = "../Input/MADRES_1945_Data_All.RData")
+rm(files,MADRES_data_list)
+
+```
+
+
+
+1598 - Evaluation of Environmental Exposures in TEDDY - TEDDY
+
+--------------------
+The Environmental Determinants of Diabetes in the Young (TEDDY) is a multicenter prospective cohort study that started in 2004 and is following 8,676 children at increased genetic risk enrolled before 3 months of age and followed to 15 years of age in order to identify genetic and environmental triggers of type 1 diabetes (T1D) including infectious agents, dietary, and psychosocial factors. The TEDDY study is comprised of six clinical center in the United States, Germany, Finland, and Sweden. TEDDY designed two nested case-control studies, which include children who have developed islet autoantibodies or have been diagnosed with T1D, and their age-matched controls. TEDDY seeks to test the hypothesis that there are differences between cases and controls in trace elements, cytokine and chemokine levels, urinary phthalate metabolite concentrations, and urinary phenols.
+
+```{r}
+files = list.files(
+  path = "../Datasets/1598",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+TEDDY_data_list <- lapply(files, read_csv)
+names(TEDDY_data_list) <- c("TEDDY_Epi","TEDDY_Codebook","TEDDY_Harmonized","TEDDY_Olink","TEDDY_Targeted")
+
+
+save(TEDDY_data_list, file = "../Input/TEDDY_1598_Data_All.RData")
+rm(files,TEDDY_data_list)
+
+```
+
+
+
+2539 Perfluoroalkyl substances and lipid composition in human milk - NHBCS
+--------------
+As part of the ECHO Pediatric Cohorts, we are working with the NIEHS/EPA-supported New Hampshire Birth Cohort Study (NHBCS): an ongoing prospective cohort study that has accrued over 1,500 maternal-infant dyads since 2009 with planned expansion to include 3,000 maternal-infant pairs across New Hampshire and Vermont. The goal of the study is to examine how early life exposures to environmental toxicants via the placenta, breast milk, early foods, home environment, and medical exposures relate to child health outcomes including growth and obesity, immune responses, and neurodevelopment. Participants’ ages ranged from 18 to 46 at the time of enrollment, and they comprise mostly white, rural women and children with wide sociodemographic variation. Currently children are followed-up to approximately 5 years of age. As a part of the NHBCS, this CHEAR study will characterize perfluoroalkyl substances (PFAS) in breast milk and examine how PFAS exposure may affect breast milk composition.
+
+```{r}
+files = list.files(
+  path = "../Datasets/2539",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+NHBCS_data_list <- lapply(files, read_csv)
+names(NHBCS_data_list) <- c("NHBCS_Epi","NHBCS_Harmonized","NHBCS_Codebook","NHBCS_Meta_Map","NHBCS_Targeted")
+
+
+save(NHBCS_data_list, file = "../Input/NHBCS_2539_Data_All.RData")
+rm(files,NHBCS_data_list)
+
+```
+
+
+
+2532 - Environmental Toxins in Early Life: Shaping Health and Disease in Childhood - VDAART
+--------------
+This project will investigate whether a possible increased risk of asthma, allergy and neurodevelopment is mediated via toxin exposure-associated alterations of the child metabolome using a longitudinal birth cohort from US (VDAART) with deep prospective phenotyping and multiomics data. We will utilize the clinical phenotyping data to investigate, whether environmental chemical exposures in early life and through childhood are associated with development of asthma, allergy and eczema as well as growth and neurodevelopment during childhood. It is of utmost importance to focus such study on early childhood, which is a vulnerable period for the child’s developing brain and immune system. Previous studies have clearly shown the impact on childhood asthma and neurodevelopment of early environmental exposures such as maternal infections, antibiotic use and smoking during pregnancy, cesarean section, the airway and gut microbiome, and, importantly, prenatal micronutrient status. Adding environmental chemical exposures will enrich our possibility to understand the mechanisms leading to childhood asthma and related diseases, which is the focus of the original study, but will also provide important information regarding other health traits related to growth and neurodevelopment.
+
+
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/2532",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+VDAART_data_list <- lapply(files, read_csv)
+names(VDAART_data_list) <- c("VDAART_Epi","VDAART_Harmonized","VDAART_Codebook","VDAART_Targeted")
+
+
+save(VDAART_data_list, file = "../Input/VDAART_2532_Data_All.RData")
+rm(files,VDAART_data_list)
+
+```
+
+
+1449 - Environmental phenols and pesticide levels in relationship to autism - MARBLES
+-----------------------------
+The MARBLES Study is a cohort of high risk pregnancies for development of autism, typically a second child in a family that already has a child with autism. If there is already a child with autism in the family, the risk of another child with autism increases to approximately 20. Participating families reside in Northern California, specifically within a 2-hour drive of Sacramento. Mothers are enrolled either pre-conception or anytime during pregnancy. Children are followed until the child is three years old, at which time they receive a diagnosis of typically developing autism, or other developmental concerns. The study has been ongoing since 2006. In this Study, maternal urine samples from all three trimesters will be analyzed to determine concentrations of a suite of environmental phenols, including triclosan, triclocarbon, and BPA. Concentrations will be compared by diagnosis. First trimester samples will also be analyzed for metabolites of pesticides and phthalates.
+
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1449",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+MARBLES_data_list <- lapply(files, read_csv)
+names(MARBLES_data_list) <- c("MARBLES_ADOS","MARBLES_Analytic_Averages","MARBLES_Avg_Trim1","MARBLES_AvgTri2_3",
+                              "MARBLES_Covars","MARBLES_Demo_Data","MARBLES_Epi","MARBLES_Harmonized","MARBLES_Mullens","MARBLES_Outcome",
+                              "MARBLES_SpecimunCharacter","MARBLES_Targeted","MARBLES_UEP_Tri1","MARBLES_UEP_Tri2_3", "MARBLES_UPEST_Tri1", "MARBLES_UPHTH_Trim1")
+
+
+save(MARBLES_data_list, file = "../Input/MARBLES_1449_Data_All.RData")
+rm(files,MARBLES_data_list)
+
+```
+
+3131 - Childhood Exposures, Epigenetic and Transcriptomic Responses in the Syracuse Lead Study - SLC
+----------------
+In the original study, the Syracuse Lead Study, which started in 2013, investigators tested the hypothesis that racial/ethnic (R/E) differences in blood lead Pb exposure might account for R/E differences in cardiovascular patterns of response to acute stress and R/E differences in left ventricular mass and arterial stiffness in a 50-50 African American-European American population of 300 nine- to eleven- year old children in Syracuse NY. Twenty children were followed up four years after the original study. In the approved CHEAR project, the investigators will expand the environmental exposure measures in the cohort to include measurements of urinary metals, including mercury, cadmium, and lead. In the HHEAR project we will add measurements of PBDEs and PAH. Using this data from both projects, we will assess differences in exposure biomarker levels by race and assess associations between various environmental exposures and cardiovascular outcomes.
+
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/3131",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+SLC_data_list <- lapply(files, read_csv)
+names(SLC_data_list) <- c("SLC_Epi","SLC_2517_Targeted","SLC_3131_Targeted")
+
+
+save(SLC_data_list, file = "../Input/SLC_3131_Data_All.RData")
+rm(files,SLC_data_list)
+
+```
+
+
+1448 - Metabolomics Linking Air Pollution, Obesity and Type 2 Diabetes - USCEHC
+---------------
+Over the past 20 years, we have examined relationships between air pollution exposure and health outcomes in children in our longitudinal Children’s Health Study (CHS) starting in year 1993. Results from the CHS cohort have shown that near-roadway air pollution (NRAP) exposure is associated with increased risk of childhood obesity. Based on these findings, we are currently examining a subset of CHS participants (N=200) that represent extremes of NRAP exposure occurring in Southern California in the Southern California Children’s Environmental Health Center (SC-CEHC) Project 1 (the parent project), which capitalizes on CHS resources and extensive pollutant measurements to investigate the impact of lifetime air pollution exposures on obesity, fat distribution, glucose homeostasis, lipid profile, systemic inflammation and the metabolic syndrome at age 17-18 years. These participants are being extensively phenotyped for obesity using dual-energy X-ray absorptiometry (DXA) and magnetic resonance imaging (MRI). Glucose homeostasis is being assessed using an oral glucose tolerance test (OGTT). The proposed CHEAR project will support an innovative collaboration between the CHS and Emory’s CHEAR Laboratory Hub to perform non-targeted high resolution metabolomics (HRM) on 200 CHS fasting serum samples. The ultimate goal of this CHEAR project is to investigate the hypothesis that environmental chemicals, regional air pollutant (i.e. PM2.5) and traffic-related air pollution exposures (CALINE model-predicted NOx) can alter key metabolic pathway(s) and that these alterations are associated with obesity and type 2 diabetes-related traits during the important developmental period of adolescence.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1448",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+USCEHC_data_list <- lapply(files, read_csv)
+names(USCEHC_data_list) <- c("USCEHC_Epi","USCEHC_Harmonized","USCEHC_Codebook","USCEHC_Meta_Map")
+
+
+save(USCEHC_data_list, file = "../Input/USCEHC_1448_Data_All.RData")
+rm(files,USCEHC_data_list)
+
+```
+
+
+1982 - Domestic Indoor PM and Childhood Asthma Morbidity - DISCOVER  
+------------------
+The overall objectives of our CHEAR project are to assess pediatric exposures of non-persistent endocrine disrupting chemicals, including environmental phenols, phthalates, and organophosphate flame retardants, and their effects on respiratory health. We will address our aims using data from two prospective studies enriched with low-income African American children in Baltimore, MD. DISCOVER is a panel study of 180 children aged 5-12 years (100 atopic asthmatic, 50 non-atopic asthmatic, 30 non-asthmatic) enrolled from 2009 to 2013. We conducted daily assessments for each participant during four separate, 7-day home visits spaced approximately 3 months apart. Biospecimens were collected twice during each of the home visits. AIRWEIGHS is an ongoing randomized controlled trial of 200 children aged 5-17 years with persistent asthma (approximately half normal weight, half overweight/obese) that began enrollment in 2016. Children participate in a baseline clinic visit, a 7-day home visit before randomization to a 12-week air purifier intervention, and two additional clinic visits where urine samples are being collected.
+
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1982",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+DISCOVER_data_list <- lapply(files, read_csv)
+names(DISCOVER_data_list) <- c("DISCOVER_Epi_Airweighs","DISCOVER_EPI","DISCOVER_Harmonized","DISCOVER_Codebook","DISCOVER_Targeted")
+
+
+save(DISCOVER_data_list, file = "../Input/DISCOVER_1982_Data_All.RData")
+rm(files,DISCOVER_data_list)
+
+```
+
+
+2273 - First Trimester Exposures: Influence on Birth Outcomes and Markers of Biological Response - CEHC
+
+-----------------------
+Utilizing samples from the MMIP birth cohort, our overall objectives are to identify toxicants that influence birth outcomes (birth weight, gestational age, birth length), and to examine the epigenome, transcriptome, and metabolome as physiological processes altered by these exposures that may influence child health at birth and beyond. The Specific Aims are as follows: Aim 1: Examine associations between first trimester exposures and birth outcomes. Phenols, phthalates, organophosphorus flame retardants (OPFRs), and trace elements will be analyzed in maternal urine collected between 8 and 14 weeks of gestation. Aim 2: Identify metabolite profiles from untargeted analyses that are associated with first trimester exposures. Aim 3: Identify genes in umbilical cord blood leukocyte DNA that are differentially methylated, hydroxymethylated, and/or expressed by first trimester exposures. Aim 4: Evaluate metabolites and differentially regulated genes as mediators of relationships between first trimester exposures and birth outcomes.
+
+```{r}
+files = list.files(
+  path = "../Datasets/2273",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+CEHC_data_list <- lapply(files, read_csv)
+names(CEHC_data_list) <- c("CEHC_Epi","CEHC_Harmonized","CEHC_Codebook","CEHC_Targeted")
+
+
+save(CEHC_data_list, file = "../Input/CEHC_2273_Data_All.RData")
+rm(files,CEHC_data_list)
+
+```
+
+1599 - Pesticides, Perfluorinated compounds and the development of adolescents in agricultural communities. - ESPINA
+--------------------------------
+Children living in agricultural communities are regularly exposed to pesticides from para-occupational sources. Evidence suggests that there are both short- and long-lasting alterations on mental health processes in children associated with insecticide exposures. The objectives of this study are to assess the associations of mental health, neurobehavior and anthropometric measures with exposure to agricultural chemicals in adolescents, and to identify metabolic pathways that are affected by these exposures. We will measure neonicotinoids (insecticides), glyphosate (herbicides), and dithiocarbamates, ethylenethiourea (fungicides) and PFASs in biospecimens (urine, plasma) collected from 520 adolescent participants of the study of Secondary Exposures to Pesticides among Children and Adolescents (ESPINA) Study examined in 2016. Participants were 12-17 years of age and have grown up in the agricultural county of Pedro Moncayo, Ecuador, one of the main exporters of roses globally.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1599",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+ESPINA_data_list <- lapply(files, read_csv)
+names(ESPINA_data_list) <- c("ESPINA_Codebook","ESPINA_Epi","ESPINA_Harmonized","ESPINA_Targeted")
+
+
+save(ESPINA_data_list, file = "../Input/ESPINA_1599_Data_All.RData")
+rm(files,ESPINA_data_list)
+
+```
+
+1450 - Denver Asthma Panel Study-CHEAR Ancillary Study - DAPS
+-----------
+Urban environments are a poorly understood toxic environment for children with asthma. In order to develop effective therapies and interventions, improved characterization of exposures and exposure-health outcome relationships is needed. The Denver Asthma Panel Study (DAPS), which began in 2014, is the parent study for this CHEAR project. The goal of DAPS was to investigate the relationships between asthma-relevant environmental exposures and asthma severity in an urban cohort of children, ages 8-16 years, with exacerbation-prone asthma. Personal and bedroom environmental exposures (particulate matter < 10 µm in diameter, ozone, and nitrogen dioxide) and asthma severity outcomes (lung function, exacerbations, inflammation, and control) were measured seasonally over the course of one year in the Denver metro area. A total of 68 participants were enrolled: 56 exacerbation-prone asthmatics and 12 control participants without allergies or asthma. Combined, the participants were 35 female, 69 Latino/Hispanic, 10 American Indian/Alaskan Native, 1 Asian, 19 Black/African American, 46 white, and 13 more than one race. The median age and annual household income was 11 years and $20,000–$24,999, respectively. The goal of our proposed CHEAR study is to expand our investigation of how asthma-relevant exposures (tobacco smoke, polycyclic aromatic hydrocarbons, phthalates, volatile organic compounds, and other exposure-related metabolites) impact asthma severity and biological responses (oxidative stress, cytokines, inflammatory markers, and other related metabolites).
+
+```{r}
+files = list.files(
+  path = "../Datasets/1450",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+DAPS_data_list <- lapply(files, read_csv)
+names(DAPS_data_list) <- c("DAPS_Epi","DAPS_Harmonized","DAPS_Codebook","DAPS_Meta_MAP","DAPS_Targeted")
+
+
+save(DAPS_data_list, file = "../Input/DAPS_1450_Data_All.RData")
+rm(files,DAPS_data_list)
+
+```
+
+
+1534 - A Nested Case-Control Study of Prenatal Exposure to Phthalates and Psychosocial Stress: Adverse Pregnancy Outcomes and the Mediating Role of Placental Function - nuMoM2b
+
+-----------------
+This study utilizes the Nulliparous Mothers to Be (nuMOM2be) cohort study, a nationally representative group of approximately 10,000 nulliparous women with detailed assessments, and biomarkers of urinary phthalates, inflammation and placental function during each trimester of pregnancy and at delivery. The CHEAR study will be a nested case control study of 1020 cases of Adverse Pregnancy Outcomes (APO’s). We examined associations between two classes of prenatal environmental exposures (phthalates and maternal stress) and APOs (spontaneous preterm birth and maternal hypertensive disorders of pregnancy). The overarching goals are (1) to provide more definitive data regarding the associations between prenatal phthalates, psychosocial stress and the APOs; (2) to provide mechanistic data (i.e. markers of inflammation and placental function) between these exposures and outcomes; (3) to provide an additional avenue to explore associations between these exposures and fetal growth, and determine whether APOs may mediate those relationships.
+
+```{r}
+files = list.files(
+  path = "../Datasets/1534",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+nuMoM2b_data_list <- lapply(files, read_csv)
+names(nuMoM2b_data_list) <- c("nuMoM2b_Epi","nuMoM2b_Harmonized","nuMoM2b_Codebook","nuMoM2b_Targeted")
+
+
+save(nuMoM2b_data_list, file = "../Input/nuMoM2b_1534_Data_All.RData")
+rm(files,nuMoM2b_data_list)
+
+```
+
+
+34 - Relating Metals Exposure to Birth and Early Childhood Outcomes via the Metabotype of Cord Blood - MEBCO
+----------------
+The Proposed CHEAR study will study metals exposure in pregnant mothers to birth and early chidlhood outcomes in a Bangladeshi birth cohort. We will assess differences in anthropomorphic birth outcomes based on cord blood metabolite profiles acquired using a targeted 1H NMR-based platform. We will utilize established as well as novel analytic approaches in the field of metabolomics.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/34",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+MEBCO_data_list <- lapply(files, read_csv)
+names(MEBCO_data_list) <- c("MEBCO_Epi","MEBCO_Epi_Meta","MEBCO_Harmonized","MEBCO_Codebook","MEBCO_Targeted")
+
+
+save(MEBCO_data_list, file = "../Input/MEBCO_34_Data_All.RData")
+rm(files,MEBCO_data_list)
+
+```
+
+
+1461 - ECHO ReCHARGE Study - Environmental Exposures - CHARGE
+----------------------
+The CHARGE (CHildhood Autism Risks from Genes and Environment) Study is a case-control investigation, initiated in 2003, of children with autism spectrum disorder (ASD), non-autistic developmental delay (DD), and typical development among population controls (TD). The ReCHARGE Study will follow-up CHARGE children who were recruited from areas surrounding the UC Davis MIND Institute in Sacramento. All children were born in California, living with a biologic parent who spoke English or Spanish, and enrolled in CHARGE at ages 2-5 years, at which time they were examined for neurodevelopmental status once. Over 80 of the ASD cases and their matched TD controls, and about 2/3 of the DD children are males. Approximately 30 were Hispanic; 16 black, Asian, or mixed race; and 54 white non-Hispanic. The CHEAR objective is to evaluate metals, pesticides, phthalates, phenols and perfluorinated concentrations for associations with ASD or DD diagnosis and cognitive function. Chemical-gene interactions will also be explored.
+```{r}
+files = list.files(
+  path = "../Datasets/1461",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+CHARGE_data_list <- lapply(files, read_csv)
+names(CHARGE_data_list) <- c("CHARGE_Epi","CHARGE_Harmonized","CHARGE_Codebook","CHARGE_Targeted")
+
+
+save(CHARGE_data_list, file = "../Input/CHARGE_1461_Data_All.RData")
+rm(files,CHARGE_data_list)
+
+```
+
+
+1523 - Validation of Detailed Maternal Cigarette Smoke Exposure Self Reporting by Cotinine Analysis - NHBCS_Cot
+-----------
+
+The CHARGE (CHildhood Autism Risks from Genes and Environment) Study is a case-control investigation, initiated in 2003, of children with autism spectrum disorder (ASD), non-autistic developmental delay (DD), and typical development among population controls (TD). The ReCHARGE Study will follow-up CHARGE children who were recruited from areas surrounding the UC Davis MIND Institute in Sacramento. All children were born in California, living with a biologic parent who spoke English or Spanish, and enrolled in CHARGE at ages 2-5 years, at which time they were examined for neurodevelopmental status once. Over 80 of the ASD cases and their matched TD controls, and about 2/3 of the DD children are males. Approximately 30 were Hispanic; 16 black, Asian, or mixed race; and 54 white non-Hispanic. The CHEAR objective is to evaluate metals, pesticides, phthalates, phenols and perfluorinated concentrations for associations with ASD or DD diagnosis and cognitive function. Chemical-gene interactions will also be explored.
+
+```{r}
+files = list.files(
+  path = "../Datasets/1523",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+NHBCS_Cot_data_list <- lapply(files, read_csv)
+names(NHBCS_Cot_data_list) <- c("NHBCS_Cot_Epi","NHBCS_Cot_Codebook","NHBCS_Cot_Harmonized","NHBCS_Cot_Targeted")
+
+
+save(NHBCS_Cot_data_list, file = "../Input/NHBCS_Cot_1523_Data_All.RData")
+rm(files,NHBCS_Cot_data_list)
+
+```
+
+
+2254 - Exposure to metals in pregnant women and the impact on fetal development and birth outcomes in Suriname - CCREOH
+--------------
+The Caribbean Consortium for Environmental and Occupational Health, a NIH-funded integrated research and research training program, started in 2015. The research component is a population-based prospective longitudinal environmental epidemiologic cohort study addressing the potential adverse impact of chemical and non-chemical environmental exposures in mother/child dyads in Suriname. The study determines associations between exposures to neurotoxicants (metals and pesticides) and essential elements and non-chemical stressors in pregnant women and the impact on birth and neurodevelopmental outcomes. The study population consists of culturally diverse pregnant women (n=1143; ages: 16-49 years) and their babies/children (n=1069). Data collection takes place twice prenatally, at birth, 12, 36, and 48 months. Through HHEAR, targeted and untargeted (metabolomic) analyses will characterize exposure to metals in a sub-cohort of pregnant women for whom exposure data are not yet available. This expanded exposure analysis will enable a more comprehensive cumulative risk assessment of adverse birth and neurodevelopmental outcomes in the overall cohort.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/2254",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+CCREOH_data_list <- lapply(files, read_csv)
+names(CCREOH_data_list) <- c("CCREOH_Epi","CCREOH_Harmonized","CCREOH_Codebook","CCREOH_Meta_Map","CCREOH_Targeted")
+
+
+save(CCREOH_data_list, file = "../Input/CCREOH_2254_Data_All.RData")
+rm(files,CCREOH_data_list)
+
+```
+
+
+
+2512 - The Role of Environmental Endocrine Disruptors on the Health of Inner City Children - EEICC
+-----------
+
+Low-income, inner-city African American children suffer a disproportionate asthma burden and results from animal and limited human studies indicate that endocrine disrupting compounds (EDCs) could play a role in modulating immune and allergic response. Still, data on exposures to most EDCs is critically lacking in this population. Moreover, data on the role that EDCs may play in minority children’s health, including in asthma morbidity, is scarce, and identifying modifiable asthma triggers in an overburdened population could have significant public health impacts. This project seeks to characterize exposures to select EDCs using repeated biomarker measures among 143 inner-city children aged 5-17 years who participated in a 12-month prospective study between 2007-2010. We will also examine associations between EDC exposures and concurrent measures of respiratory outcomes; examine metabolic phenotypic variability in children’s urine and and assess whether metabolic profiles differ based on exposure status to target EDCs using untargeted metabolomics.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/2512",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+EEICC_data_list <- lapply(files, read_csv)
+names(EEICC_data_list) <- c("EEICC_Epi","EEICC_Harmonized","EEICC_Codebook","EEICC_Targeted")
+
+
+save(EEICC_data_list, file = "../Input/EEICC_2512_Data_All.RData")
+rm(files,EEICC_data_list)
+
+```
+
+
+
+1740 - Mitochondrial DNA biomarkers of prenatal metal mixture exposure: intergenerational inheritance and infant growth - VIVA
+
+------------
+
+Project Viva is a prospective pre-birth cohort of mother-infant pairs, recruited in Eastern Massachusetts between 1999 and 2002 during the first prenatal visit at Atrius Harvard Vanguard Medical Associates. In-person visits with mothers were completed during the first (median 9.9 weeks of gestation) and second trimesters (median 27.9 weeks). We saw mothers and children in the hospital during the delivery admission and during infancy (median age 6.3 months). Follow-up visits have been completed in early childhood (median 3.2 years), mid-childhood (median 7.7 years), early adolescence (median 12.9 years) and currently a teenage follow-up visit is underway. Information was collected from mothers via interviews and questionnaires, performed anthropometric and neurodevelopmental assessments in children and collected bio-specimens in pregnancy and at each study visit. Our objective for this CHEAR project is to evaluate whether maternal prenatal exposure to metal mixtures in early pregnancy can disrupt molecular markers of mitochondrial DNA damage and abundance in mothers and children as a key mediator of metabolism and infant growth. Project Viva website: https://www.hms.harvard.edu/viva/
+
+```{r}
+files = list.files(
+  path = "../Datasets/1740",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+VIVA_data_list <- lapply(files, read_csv)
+names(VIVA_data_list) <- c("VIVA_Epi","VIVA_Harmonized","VIVA_Codebook","VIVAC_Targeted")
+
+
+save(VIVA_data_list, file = "../Input/VIVA_1740_Data_All.RData")
+rm(files,VIVA_data_list)
+
+```
+
+
+2537 - Phthalates and childhood obesity in a racially, ethnically and geographically diverse cohort. - NFGS
+------------
+
+We propose a cross-sectional analysis of 630 children ages 4-8 years who previously (2009-2013) participated in the NICHD National Fetal Growth Studies, a longitudinal study of fetal growth, and recently completed a child study visit (2017-2019). Aim 1 is to evaluate associations between levels of urinary phthalates and childhood obesity/adiposity measures. Aim 2 is to characterize how levels of phthalates vary by race-ethnic group and whether race-ethnic group modifies associations between phthalates and child obesity/adiposity outcomes. Both aims will be conducted as cross-sectional analyses. Of the 630 children, 303 are female, 199 are non-Hispanic black, 167 are non-Hispanic white, 175 are Hispanic and 89 are Asian/Pacific Islander. Moreover, children participated at one of nine study clinics across the United States; hence, our population represents a geographically diverse cohort. In summary, we propose to examine the association between phthalates and childhood obesity in a racially, ethnically and geographically diverse cohort.
+
+```{r}
+files = list.files(
+  path = "../Datasets/2537",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+NFGS_data_list <- lapply(files, read_csv)
+names(NFGS_data_list) <- c("NFGS_Epi","NFGS_Harmonized","NFGS_Codebook","NFGS_Targeted")
+
+
+save(NFGS_data_list, file = "../Input/NFGS_2537_Data_All.RData")
+rm(files,NFGS_data_list)
+
+```
+
+
+1839 - Zika Virus Congenital Health Outcomes and the Impact of Maternal Environmental Exposures - ZIP
+-------------
+The Zika in Infants and Pregnancy (ZIP) study is a multi-site international observational cohort study that began in 2016. There are ten ZIP study sites in Puerto Rico, Central and South America. The overall objective of the ZIP study is to assess the strength of the association of ZIKV infection during pregnancy with adverse maternal/fetal health outcomes. The ZIP study recruits pregnant women (15 years old and older) early in pregnancy, follows them until birth, and recruits and follows their infants for one year. Participants are encountered monthly for study data collection, clinical examinations, and biologic sample collection. The overarching goal of the CHEAR analysis is to assess the impact of pesticide exposure on pregnancy outcomes, including deleterious interaction with maternal ZIKV infection. Between 1-3 urine samples from approximately 1500 pregnant women from Puerto Rico, Nicaragua, Guatemala, and Brazil will be analyzed for metabolites of organophoshate pesticides.
+```{r}
+files = list.files(
+  path = "../Datasets/1839",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+ZIP_data_list <- lapply(files, read_csv)
+names(ZIP_data_list) <- c("ZIP_EPI_1","ZIP_EPI_2","ZIP_EPI_3","ZIP_Harmonized","ZIP_Codebook","ZIP_Targeted")
+
+
+save(ZIP_data_list, file = "../Input/ZIP_1839_Data_All.RData")
+rm(files,ZIP_data_list)
+
+```
+
+2120 - The impact of tobacco smoke exposure and environmental exposures on the pulmonary microbiome and outcomes of critically ill children - VAPS
+------------------
+Ventilator-associated pneumonia (VAP) is a serious complication in mechanically ventilated children, increasing risk of mortality and morbidities including prolonged intubation and intensive care unit stays. Limited understanding of the microbial and host factors associated with VAP has precluded development of truly effective prevention and treatment strategies. We hypothesized that specific ecological patterns of the airway microbiome precede VAP and that the interaction of viral infection, bacterial populations, and the balance between host immune activation and immune suppression play crucial roles in determining whether a given patient develops VAP. We investigated this hypothesis with a prospective observational study with longitudinal (daily) examination of the airway microbiome in high risk mechanically ventilated children together with simultaneous proteomic assessments of the host immune response. Study participants were enrolled from 2015-2017 from participating sites in the NICHD Collaborative Pediatric Critical Care Research Network (CPCCRN), including UCD/Children’s Hospital Colorado (Aurora, CO), UCSF Benioff Children’s Hospital (San Francisco, CA), UCLA Mattel Children’s Hospital (Los Angeles, CA), Children’s Hospital of Michigan (Detroit), Children’s Hospital of Philadelphia (Philadelphia, PA), Nationwide Children’s Hospital (Columbus, OH), Children’s National Medical Center (Washington, DC), University of Pittsburgh Children’s Hospital (Pittsburgh, PA). 455 subjects were enrolled between the ages of 31 days and 18 years. Subjects were followed throughout the hospital admission of their incident mechanical ventilation episode. The overall objective of the CHEAR project is to evaluate the effect of tobacco smoke exposure (TSE) and other environmental pollutant exposures on the composition and diversity of the bacteria in the lower airways in critically-ill, mechanically ventilated pediatric patients as well as the outcomes of these children.
+
+```{r}
+files = list.files(
+  path = "../Datasets/2120",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+VAPS_data_list <- lapply(files, read_csv)
+names(VAPS_data_list) <- c("VAPS_Epi","VAPS_Harmonized", "VAPS_CodeBook", "VAPS_Meta_HILIC_Pos", "VAPS_Meta_Map","VAPS_Meta_Rev_NEG","VAPS_Targeted")
+
+
+save(VAPS_data_list, file = "../Input/VAPS_2120_Data_All.RData")
+rm(files,VAPS_data_list)
+
+```
+
+
+1962 - SEARCH for Diabetes in Youth - SEARCH 
+------------
+SEARCH for Diabetes in Youth (SEARCH) is an on-going, large, culturally diverse, multi-center and population-based epidemiological study of youth (ages 0-19) with diabetes. Initiated in 2000, SEARCH was designed to estimate the prevalence, incidence and clinical presentation of diabetes in youth age < 20 years. Beginning in 2002, SEARCH recruited a series of incident cohorts. Cohort study participants complete longitudinal surveys, physical and laboratory assessments. SEARCH includes 5 clinical sites, including geographic-based sites located in Ohio (8 counties), the state of Colorado, Washington (5 counties), the state of South Carolina, and a health plan site in California (enrollees from 7 counties). The CHEAR-supported ancillary study in SEARCH builds on previously collected phenotype data, assayed samples, and the availability of stored serum for evaluating the association between PFCs and metabolomic changes in youth diagnosed with diabetes. Metabolites identified will be evaluated in association with known cardiovascular disease risk factors.
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1962",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+SEARCH_data_list <- lapply(files, read_csv)
+names(SEARCH_data_list) <- c("SEARCH_Epi","SEARCH_Harmonized", "SEARCH_CodeBook",  "SEARCH_Meta_Map","SEARCH_Targeted")
+
+
+save(SEARCH_data_list, file = "../Input/SEARCH_1962_Data_All.RData")
+rm(files,SEARCH_data_list)
+
+```
+
+
+1863 - Investigating Overweight/Obesity and Poor Diet as Susceptibility Factors for Secondhand Smoke in Childhood Asthma - AIRWEIGHS
+-------------------
+Low-income minority children in urban areas often inhabit an environment that has excessive pollution and these children are at risk for obesity and poor diet.   Secondhand smoke (SHS) is a common exposure in homes of children in Baltimore City and approximately 50-80% of households have a smoker. Secondhand smoke has been associated with worse asthma outcomes.  We hypothesize that secondhand smoke exposure will be associated with increases in asthma morbidity and increases in systemic markers of inflammation and oxidative stress and that these responses will be exaggerated among overweight and obese children compared with normal weight and among those with poor diets compared to better diets among children with asthma.   Aim 1:  To investigate the effect of SHS exposure on asthma morbidity, systemic inflammation and oxidative stress among inner-city children with asthma. Hypotheses 1.Increasing SHS exposure will be associated with increases in asthma morbidity, systemic inflammation and oxidative stress. Aim 2: To determine if being overweight/obese modifies the effect of SHS exposure on respiratory symptoms, inflammation and oxidative stress responses among inner-city children with asthma.Hypothesis 2. SHS exposure will be associated with a worsened asthma and increases in systemic inflammation and oxidative stress among overweight/obese children compared to normal weight children. Aim 3: To determine if diet quality modifies the effect of SHS exposure on respiratory symptoms, inflammation and oxidative stress responses among inner-city children with asthma. Hypothesis 3. SHS smoke exposure will associated with worsened respiratory symptoms and increases in inflammation and oxidative stress among children with poor quality diet compared those with better quality diet inner-city children with asthma. (Diet will be assessed by dietary inflammatory index, healthy eating index, and additional serum markers proposed in this application).
+
+
+
+```{r}
+files = list.files(
+  path = "../Datasets/1863",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+AIRWEIGHS_data_list <- lapply(files, read_csv)
+names(AIRWEIGHS_data_list) <- c("AIRWEIGHS_Targeted", "AIRWEIGHS_Epi")
+
+
+save(AIRWEIGHS_data_list, file = "../Input/AIRWEIGHS_1863_Data_All.RData")
+rm(files,AIRWEIGHS_data_list)
+```
+
+Environmental links to immune disruption and chronic disease
+PI(s): Peggy Reynolds, PhD, MPH, University of California, San Francisco
+
+Lab Hub(s): Mount Sinai HHEAR Targeted Lab Hub
+
+The objective of this study is to evaluate whether serum levels of brominated flame retardants (BFRs) and perfluoroalkyl and polyfluoroalkyl substances (PFAS) are related to immune and inflammatory responses. Experimental studies strongly support altered immune responses associated with these compounds and there is growing evidence linking them to a broad range of human health conditions (e.g., cancer, cardiovascular disease, diabetes) in which immune dysregulation and/or chronic inflammation play a central role. This study will be nested within the California Teachers Study cohort where serum from 822 women have already been assayed for circulating immune markers using validated high-sensitivity multiplex assays. Cross-sectional analyses will be conducted to evaluate the relationship between PFAS/BFRs with immune markers in concurrently collected serum and with self-reported immune-related health conditions. Tree-based ensemble methods and Bayesian Kernel Machine Regressions will be used to estimate exposure-response relationships, accounting for the high-dimensionality and complex correlation structure of the data.
+
+--------------
+```{r}
+files = list.files(
+  path = "../Datasets/00496",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+CTS_data_list <- lapply(files, read_csv)
+names(CTS_data_list) <- c("CTS_EPI", "CTS_Targeted")
+
+
+save(CTS_data_list, file = "../Input/CTS_00496_Data_All.RData")
+rm(files,CTS_data_list)
+```
+
+Early environmental determinants of child lung health in a South African birth cohort study.
+PI(s): Heather Zar, MD, PhD, University of Cape Town
+
+Lab Hub(s): Mount Sinai HHEAR Targeted Lab Hub
+
+We propose to leverage a unique South African birth cohort, the Drakenstein Child Health Study (DCHS) to investigate the impact of early-life exposures on chronic respiratory disease in children, and potential mediating underlying inflammatory processes. We will utilise this well phenotyped cohort with longitudinal measures antenatally through childhood and the associated biorepository. We hypothesise that early life environmental exposures increase susceptibility to develop chronic respiratory disease in childhood, which is mediated by systemic inflammation. Specific hypotheses: Hypothesis 1: Early-life environmental exposures to polycyclic aromatic hydrocarbons (PAHs), phenols, or pesticides are associated with chronic respiratory disease in children. Hypothesis 2: Early-life environmental exposures are associated with systemic inflammation, which mediates impairment in respiratory health.
+
+---------
+```{r}
+files = list.files(
+  path = "../Datasets/00652",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+DCHS_data_list <- lapply(files, read_csv)
+names(DCHS_data_list) <- c("DCHS_EPI", "DCHS_Targeted")
+
+
+save(DCHS_data_list, file = "../Input/DCHS_00496_Data_All.RData")
+rm(files,DCHS_data_list)
+```
+
+
+Role of environmental toxicants in obesity-related cardiovascular disease
+PI(s): Noyan Gokce, MD, Boston Medical Center
+
+Lab Hub(s): Mount Sinai HHEAR Untargeted Lab Hub,Wadsworth HHEAR Targeted Analysis Laboratory
+
+Lipophilic pollutants, particularly persistent organic pollutants (POPs), bioaccumulate in adipose tissue. We hypothesize that sequestration of pollutants in adipose tissues is detrimental to cardiometabolic health and disproportionately impacts obese individuals. Our funded NIH parent grant examines mechanisms of vascular dysfunction in obesity. Adipose tissue dysfunction, inflammation, and insulin resistance are essential hallmarks linking obesity to the pathogenesis of cardiovascular disease. We hypothesize that pollutants that accumulate in fat depots promote adipose tissue dysfunction, in part, by activating inflammatory and pro-atherogenic signaling pathways implicated in the pathogenesis of cardiovascular disease. We propose to use both targeted and untargeted analyses of pollutants in adipose tissues and blood from lean individuals and obese subjects at the time of bariatric surgery, with repeat measures 6-months after marked (20-30%) weight loss. We will relate POP and novel pollutant measures to clinical and vascular parameters of cardiometabolic risk and study the impact of weight loss.
+
+-------
+```{r}
+files = list.files(
+  path = "../Datasets/00605",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+OBSS_data_list <- lapply(files, read_csv)
+names(OBSS_data_list) <- c("OBSS_EPI","OBSS_META_MAP", "OBSS_Targeted")
+
+
+save(OBSS_data_list, file = "../Input/OBSS_00605_Data_All.RData")
+rm(files,OBSS_data_list)
+```
+
+
+
+Environmental exposure driven myosteatosis and associated metabolic disease
+PI(s): Iva Miljkovic, MD, PhD, University of Pittsburgh
+
+Lab Hub(s): Wadsworth Center's Children's Health Exposure Assessment Resource (WCCHEAR)
+
+We have shown that skeletal muscle fat infiltration (i.e. myosteatosis) is greater among African Caribbeans compared to Whites, and might play a key role in T2D risk. There is a need for better understanding of the environmental risk factors for myosteatosis and T2D among African ancestry populations. Low to moderate arsenic exposures are known to increase risk or severity of T2D. Our preliminary data indicates that mice exposed to human-relevant arsenic levels in their drinking water have increased myosteatosis. The main research goal of our parent project is to identify novel factors contributing to accumulation of myosteatosis and T2D among African ancestry individuals. Based on the existing body of literature and our preliminary findings, we propose to test if arsenic exposure, and exposure to other metals and phthalates, is related to T2D and myosteatosis, and may, in part, explain the association between myosteatosis and T2D risk among 1000 African Caribbeans.
+
+------------------
+```{r}
+files = list.files(
+  path = "../Datasets/00606",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+THS_data_list <- lapply(files, read_csv)
+names(THS_data_list) <- c("THS_EPI", "THS_Targeted")
+
+
+save(THS_data_list, file = "../Input/THS_00606_Data_All.RData")
+rm(files,THS_data_list)
+```
+
+A prospective study of per- and poly-fluorinated substances (PFAS) and risk of pancreatic cancer in the NYU Women's Health Study
+PI(s): Fen Wu, PhD, NYU School of Medicine
+
+Lab Hub(s): Mount Sinai HHEAR Targeted Lab Hub
+
+Pancreatic cancer is the fourth deadliest cancer in the US. The role of environmental exposure to chemicals in the etiology of pancreatic cancer remains unclear. Emerging animal studies and mechanistic data demonstrated that perfluorooctanoic acid (PFOA) exposure significantly increased the incidence of pancreatic cancer, accompanied by oxidative stress and inflammation. However, epidemiologic evidence of PFOA and other PFAS with pancreatic cancer risk is limited. Our pilot study using two yearly serum samples from 19 women in the NYUWHS indicated that the long-term reproducibility was sufficient for several long-chain PFAS. We aim to assess the association between circulating PFAS levels in pre-diagnostic serum samples and pancreatic cancer risk in 116 incident cases and 348 matched controls from the parent study. This study is novel and cost efficient (leveraging existing data and samples from the NYUWHS), and has the potential to advance our understanding of the carcinogenicity of PFOA and other PFAS.
+
+Related website and publications:
+The NYU Women's Health Study (NYUWHS)
+------
+```{r}
+files = list.files(
+  path = "../Datasets/01103",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+NYUWHS_data_list <- lapply(files, read_csv)
+names(NYUWHS_data_list) <- c("NYUWHS_EPI", "NYUWHS_Targeted")
+
+
+save(NYUWHS_data_list, file = "../Input/NYUWHS_01103_Data_All.RData")
+rm(files,NYUWHS_data_list)
+```
+
+Exposure to household dust toxins, urinary biomarkers and childhood lung function
+PI(s): Maria Jose Rosa, Mount Sinai School of Medicine
+
+Lab Hub(s): Duke HHEAR Environmental Analysis Laboratory,Minnesota HHEAR Targeted Analysis Laboratory
+
+Indoor environmental risk factors for the development and exacerbation of childhood respiratory disease in Latin America remain understudied. Exposure to airborne pollutants in childhood are an important risk factor for respiratory disease, however, the impact of non-allergen exposures like phthalates, polycyclic aromatic hydrocarbons, organophosphate and pyrethroid pesticide exposure in settled dust has not been fully elucidated. This project will leverage our pregnancy cohort (PROGRESS)’s environmental and respiratory data in order to investigate the influence of household dust exposure and corresponding urinary biomarkers of these exposure on childhood lung function and respiratory disease. We aim to perform targeted analysis of a panel of compounds including phthalates, pesticides, and PAHs in both house dust and urine.
+
+-------
+```{r}
+files = list.files(
+  path = "../Datasets/00862",        # directory to search within
+  pattern = "*csv$", # regex pattern, some explanation below
+  recursive = TRUE,          # search subdirectories
+  full.names = TRUE          # return the full path
+)
+
+PROGRESS_data_list <- lapply(files, read_csv)
+names(PROGRESS_data_list) <- c("PROGRESS_EPI", "PROGRESS_Targeted")
+
+
+save(PROGRESS_data_list, file = "../Input/PROGRESS_00862_Data_All.RData")
+rm(files,PROGRESS_data_list)
+```
+
+
+=========================================================================
+NEW COHORTS (added 2026-08): GRAPHS, ATLAA, SWSD, IMHRD
+=========================================================================
+These four cohorts do NOT ship in the standard <ID>_TARGETED_DATA.csv /
+<ID>_EPI_DATA.csv CSV layout used above, so each gets a bespoke reader that
+reshapes the source into the canonical targeted table (Mat_PID/Child_PID,
+Chemical_Group, Analyte_Code, Concentration, Units, LOD/LOQ, sample_collection
+year) plus an epi/demographic table, then saves <COHORT>_data_list to
+../Input/<COHORT>_Data_All.RData (auto-loaded downstream by the *All.RData glob
+in HHEAR_Data_Clean_Targeted_V3.Rmd and HHEAR_Data_Clean_V2.Rmd).
+
+GRAPHS - Ghana Research on Air Pollution and Health (maternal urine: PAH, VOC, creatinine)
+-----------------------
+Single multi-sheet Excel workbook; the three long measurement sheets are stacked
+into one canonical targeted table. Maternal urinary cohort (300 pregnant women,
+2013-2015). NOTE: VOC concentrations are reported in pmol/mL, which the
+downstream to_ng_per_mL() unit converter does NOT handle (molar -> mass needs
+per-analyte MW); flag for review.
+
+```{r}
+library(readxl)
+graphs_path <- "../Datasets/GRAPHS/GRAPHS_PAH_VOC_Creatinine_Export_07292026.xlsx"
+
+# Comment_code is numeric in PAHs_Data but character (whitespace-padded) in
+# VOCs_Data; coerce to a common character type so the sheets can be stacked.
+graphs_pah <- read_excel(graphs_path, sheet = "PAHs_Data") %>%
+  mutate(Comment_code = trimws(as.character(Comment_code)))
+graphs_voc <- read_excel(graphs_path, sheet = "VOCs_Data") %>%
+  mutate(Comment_code = trimws(as.character(Comment_code)))
+graphs_cre <- read_excel(graphs_path, sheet = "Creatinine_Data") %>%
+  mutate(Chemical_Group_code = "UDILUTE",           # creatinine sheet has no group column
+         Comment_code = trimws(as.character(Comment_code)))
+
+GRAPHS_Targeted <- bind_rows(graphs_pah, graphs_voc, graphs_cre) %>%
+  transmute(
+    PID, SID, Sample_matrix,
+    Chemical_Group         = Chemical_Group_code,
+    Analyte_Code,
+    Concentration          = suppressWarnings(as.numeric(Concentration)),
+    Units,
+    LOD                    = suppressWarnings(as.numeric(LOD)),
+    LOQ                    = suppressWarnings(as.numeric(LOQ)),
+    Comment_code,
+    sample_collection_year = suppressWarnings(as.numeric(sample_collection_year))
+  ) %>%
+  # QC per the workbook's Comment_Codes sheet: code 129 = "Irregular result, no
+  # concentration reported". Those rows carry no usable measurement, and if left
+  # in, censor_to_limit() downstream would turn the missing value into a
+  # FABRICATED non-detect sitting exactly at the LOQ. Drop them explicitly.
+  # (0 = valid, 37 = below LOD, 200 = valid//below reporting limit are all kept.)
+  filter(!(Comment_code %in% c("129")))
+
+GRAPHS_Epi <- read_excel(graphs_path, sheet = "Participant_Metadata")
+
+GRAPHS_data_list <- list(GRAPHS_Epi = GRAPHS_Epi, GRAPHS_Targeted = GRAPHS_Targeted)
+save(GRAPHS_data_list, file = "../Input/GRAPHS_Data_All.RData")
+rm(graphs_path, graphs_pah, graphs_voc, graphs_cre, GRAPHS_Epi, GRAPHS_Targeted, GRAPHS_data_list)
+```
+
+
+ATLAA - Atlanta African-American maternal PFAS
+-----------------------
+Single Excel sheet, WIDE (one row per subject). Four PFAS analytes measured in
+three biospecimen/timepoint variants each: maternal serum timepoint 1 (suffix
+"1"), maternal serum timepoint 2 (suffix "2"), and dried blood spot (suffix
+"_DBS"). Melted to long, keeping canonical Analyte_Code (PFHXS/PFOS/PFOA/PFNA)
+plus descriptive Sample_Matrix / Timepoint columns. Values are already
+<LOD/sqrt(2)-imputed upstream and NO LOD is provided.
+
+```{r}
+library(readxl)
+atlaa_path <- "../Datasets/ATLAA/ATL_AA_HHEAR_PFAS.xlsx"
+atlaa_raw  <- read_excel(atlaa_path, sheet = "ATL_AA_HHEAR requested var")
+
+atlaa_meas_cols <- c("PFHXS1","PFOS1","PFOA1","PFNA1",
+                     "PFHXS_DBS","PFOS_DBS","PFOA_DBS","PFNA_DBS",
+                     "PFHXS2","PFOS2","PFOA2","PFNA2")
+
+ATLAA_Targeted <- atlaa_raw %>%
+  select(Subjectid, all_of(atlaa_meas_cols)) %>%
+  pivot_longer(all_of(atlaa_meas_cols), names_to = "Variable", values_to = "Concentration") %>%
+  mutate(Concentration = suppressWarnings(as.numeric(Concentration))) %>%
+  # RECONSTRUCTED LOD: below-LOD values were imputed to LOD/sqrt(2), so a
+  # *repeated* minimum in each measurement column = LOD/sqrt(2) -> LOD = min*sqrt(2).
+  # LOD differs by analyte AND matrix/timepoint, so recover per source Variable.
+  # GUARD: only infer an LOD when the minimum actually REPEATS. A unique minimum
+  # is more likely a genuine low measurement (e.g. PFHXS1, min occurs once), and
+  # inferring an LOD from it would mislabel real values as non-detects.
+  # This remains an ESTIMATE; verify against lab documentation if available.
+  group_by(Variable) %>%
+  mutate(
+    .min_conc = suppressWarnings(min(Concentration, na.rm = TRUE)),
+    .n_at_min = sum(Concentration == .min_conc, na.rm = TRUE),
+    LOD = if_else(is.finite(.min_conc) & .n_at_min >= 2, .min_conc * sqrt(2), NA_real_)
+  ) %>%
+  ungroup() %>%
+  select(-.min_conc, -.n_at_min) %>%
+  mutate(
+    Analyte_Code   = str_extract(Variable, "^PF[A-Z]+"),            # base: PFHXS/PFOS/PFOA/PFNA
+    Sample_Matrix  = if_else(str_detect(Variable, "_DBS$"), "DBS", "maternal serum"),
+    Timepoint      = case_when(str_detect(Variable, "_DBS$") ~ "DBS",
+                               str_detect(Variable, "1$")    ~ "1",
+                               str_detect(Variable, "2$")    ~ "2"),
+    # Serum decision (2026-08): the two SERUM timepoints keep the canonical code
+    # (PFHXS/PFOS/PFOA/PFNA) so the quantile pipeline averages the two serum draws
+    # per mother; DBS gets a distinct <code>_DBS code so it is preserved in the
+    # data but NEVER pooled with serum (different matrix, much lower detection).
+    # The _DBS codes are intentionally NOT in the crosswalk/themes, so they are
+    # excluded from category-level analyses (serum is the canonical PFAS value).
+    Analyte_Code   = if_else(Sample_Matrix == "DBS", paste0(Analyte_Code, "_DBS"), Analyte_Code),
+    Chemical_Group = "SPFAS",
+    Units          = "ng/mL",
+    PID            = as.character(Subjectid)
+  ) %>%
+  select(PID, Chemical_Group, Analyte_Code, Concentration, Units, LOD, Sample_Matrix, Timepoint)
+
+ATLAA_Epi <- atlaa_raw %>%
+  select(Subjectid, age_enrollment, Sex, `Education_4.level`, birthga, FirstPretalBMI, birth_weight)
+
+ATLAA_data_list <- list(ATLAA_Epi = ATLAA_Epi, ATLAA_Targeted = ATLAA_Targeted)
+save(ATLAA_data_list, file = "../Input/ATLAA_Data_All.RData")
+rm(atlaa_path, atlaa_raw, atlaa_meas_cols, ATLAA_Epi, ATLAA_Targeted, ATLAA_data_list)
+```
+
+
+SWSD - Thailand neonicotinoid pesticides (maternal urine, repeated by trimester)
+-----------------------
+Single Excel sheet, WIDE (one row per subject x trimester). Ten neonicotinoid
+analytes + creatinine; melted to long keyed by subject + trimester. All maternal
+urine. Values already <LOD/sqrt(2)-imputed upstream; NO LOD provided. Creatinine
+("creat") is renamed to the canonical CRE marker so the downstream urine
+creatinine-correction can use it. NO sample-collection year is provided.
+
+```{r}
+library(readxl)
+swsd_path <- "../Datasets/SWSD/SWSD_HHEAR_Neonics.xlsx"
+swsd_raw  <- read_excel(swsd_path, sheet = "Data")
+
+swsd_analyte_cols <- c("ACE","CINA6","CLO","DINF","DMCLO","IMI","NDMA","OFIMI","OHIMI","THX","creat")
+
+# Harmonize SWSD's provider-specific analyte codes to canonical HHEAR codes.
+# CRITICAL: SWSD "ACE" = acetamiprid, but the canonical code ACE is already
+# assigned to Acetochlor mercapturate, so SWSD acetamiprid must NOT reuse "ACE".
+# THX (thiamethoxam) and OHIMI (5-hydroxy-imidacloprid) already have canonical
+# codes (THI, IMI5OH). The rest (DMCLO, IMI, NDMA, OFIMI) are genuinely new.
+swsd_code_map <- c(
+  ACE   = "ACMP",     # acetamiprid (NEW code; ACE reserved for Acetochlor mercapturate)
+  OHIMI = "IMI5OH",   # 5-hydroxy-imidacloprid (existing canonical code)
+  THX   = "THI",      # thiamethoxam (existing canonical code)
+  creat = "CRE"       # creatinine marker
+  # CINA6, CLO, DINF (match canonical); DMCLO, IMI, NDMA, OFIMI (new) -> unchanged
+)
+
+SWSD_Targeted <- swsd_raw %>%
+  select(subjectid, trimester, all_of(swsd_analyte_cols)) %>%
+  pivot_longer(all_of(swsd_analyte_cols), names_to = "Analyte_Code", values_to = "Concentration") %>%
+  mutate(Concentration = suppressWarnings(as.numeric(Concentration))) %>%
+  # RECONSTRUCTED LOD: analyte values were imputed below LOD to LOD/sqrt(2), so a
+  # *repeated* per-analyte min = LOD/sqrt(2) -> LOD = min*sqrt(2). creatinine
+  # (creat) is a dilution marker, not censored, so it gets no LOD.
+  # GUARD: only infer an LOD when the minimum REPEATS (see ATLAA note above);
+  # e.g. SWSD CLO/DMCLO/NDMA have a unique minimum and would otherwise have real
+  # measurements relabelled as non-detects. ESTIMATE; verify if possible.
+  group_by(Analyte_Code) %>%
+  mutate(
+    .min_conc = suppressWarnings(min(Concentration, na.rm = TRUE)),
+    .n_at_min = sum(Concentration == .min_conc, na.rm = TRUE),
+    LOD = if_else(Analyte_Code != "creat" & is.finite(.min_conc) & .n_at_min >= 2,
+                  .min_conc * sqrt(2), NA_real_)
+  ) %>%
+  ungroup() %>%
+  select(-.min_conc, -.n_at_min) %>%
+  mutate(
+    Analyte_Code   = dplyr::recode(Analyte_Code, !!!swsd_code_map),           # -> canonical codes
+    Chemical_Group = if_else(Analyte_Code == "CRE", "UDILUTE", "UPEST2"),
+    Units          = if_else(Analyte_Code == "CRE", "mg/dL", "ng/mL"),
+    PID            = as.character(subjectid)
+  ) %>%
+  select(PID, trimester, Chemical_Group, Analyte_Code, Concentration, Units, LOD)
+
+# One demographic row per subject (values are constant across trimester rows)
+SWSD_Epi <- swsd_raw %>%
+  select(subjectid, location, age, education, BMI_v1, GA_wks, GA_day, infant_sex, birthwt) %>%
+  distinct()
+
+SWSD_data_list <- list(SWSD_Epi = SWSD_Epi, SWSD_Targeted = SWSD_Targeted)
+save(SWSD_data_list, file = "../Input/SWSD_Data_All.RData")
+rm(swsd_path, swsd_raw, swsd_analyte_cols, swsd_code_map, SWSD_Epi, SWSD_Targeted, SWSD_data_list)
+```
+
+
+IMHRD - PFAS (REFERENCE ONLY: aggregated year-level summary statistics)
+-----------------------
+Cohort location: Charleston, SC (documentation only -- IMHRD has no participant
+rows and no SDOH block, so there is no Location field in the pipeline to set).
+IMHRD provides ONLY year x analyte SUMMARY tables (median / IQR / LOQ / n) with
+NO participant identifiers and NO per-sample measurements, so it CANNOT enter the
+participant-level Harmonized_Targeted pipeline (no Mat_PID/Child_PID, no per-row
+Concentration). It is loaded here into a standalone reference object and saved
+OUTSIDE the ../Input/*All.RData glob (in ../Input/Reference/, non-"All" filename)
+so it is never auto-loaded into or bound onto Targeted_Data_All. To integrate
+IMHRD into the analysis, the underlying participant-level PFAS data is required.
+
+```{r}
+imhrd_dir <- "../Datasets/IMHRD"
+IMHRD_PFAS_YearSummary <- list(
+  median = readr::read_csv(file.path(imhrd_dir, "pfas.yr.median.csv"), show_col_types = FALSE),
+  iqr    = readr::read_csv(file.path(imhrd_dir, "pfas.yr.iqr.csv"),    show_col_types = FALSE),
+  loq    = readr::read_csv(file.path(imhrd_dir, "pfas.yr.loq.csv"),    show_col_types = FALSE),
+  n      = readr::read_csv(file.path(imhrd_dir, "pfas.yr.n.csv"),      show_col_types = FALSE)
+)
+dir.create("../Input/Reference", recursive = TRUE, showWarnings = FALSE)
+save(IMHRD_PFAS_YearSummary, file = "../Input/Reference/IMHRD_PFAS_YearSummary.RData")
+rm(imhrd_dir, IMHRD_PFAS_YearSummary)
+```

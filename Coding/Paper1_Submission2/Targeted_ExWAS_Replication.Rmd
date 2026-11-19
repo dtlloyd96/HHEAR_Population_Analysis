@@ -1,0 +1,1365 @@
+---
+title: "Targeted ExWAS Replication"
+output: html_document
+date: "2026-05-04"
+params:
+  project_root: "Health_Outcome_Analysis"
+  out_root: "Health_Outcome_Analysis/Output_Targeted_ExWAS_R"
+  panel: null
+  study: null
+  outcome: null
+  run_all_tasks: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+## Packages
+
+```{r packages}
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(readr)
+library(stringr)
+library(tibble)
+library(jsonlite)
+```
+
+## Overview
+
+This notebook reproduces the logic in `Health_Outcome_Analysis/Coding/Targeted_ExWAS/targeted_exwas_core.py` in R and is set up to run locally in a regular sequential loop rather than through a SLURM array. It:
+
+- reads the harmonized targeted, outcome, and SDOH CSV files
+- standardizes `Study` names by stripping suffixes such as `_Targeted`, `_Outcomes`, and `_SDOH`
+- removes the targeted markers excluded in the Python workflow
+- converts targeted concentrations to `ng/mL`, applies `log1p()`, and pivots to wide study-specific exposure matrices
+- builds child and maternal task lists across all study-specific outcomes
+- runs one unadjusted and one adjusted model per outcome-exposure pair
+- executes matching tasks sequentially on the local machine
+- writes per-task result tables into the same `panel=.../study=.../outcome=...` folder structure
+
+## Parameters
+
+```{r params}
+params
+```
+
+## Helper Functions
+
+```{r helpers}
+IL_MARKERS <- c(
+  "IL10", "IL17A", "IL1B", "IL5", "IL6", "IL8", "IL12P70", "IL13", "IL15",
+  "IL17EIL25", "IL17F", "IL2", "IL21", "IL22", "IL23", "IL27", "IL28A",
+  "IL31", "IL33", "IL4", "IL9", "MIP3A", "MMP1", "MMP10", "MMP2", "MMP7",
+  "MMP9", "TIMP1", "TIMP2", "TCHL", "TNON", "CHOL", "TG", "HAPTOGLOBIN",
+  "FLT3L", "GMCSF", "nan", "TNFB"
+)
+
+FORCED_SDOH_CANDIDATES <- c(
+  "Mat_Age",
+  "Child_Age",
+  "Child_Sex",
+  "Mat_Edu",
+  "Mat_Race",
+  "Child_Race",
+  "Sample_Collection_Year"
+)
+
+safe_slug <- function(x) {
+  out <- x %>%
+    as.character() %>%
+    str_replace_all("[^A-Za-z0-9_]+", "_") %>%
+    str_replace_all("_+", "_") %>%
+    str_replace_all("^_|_$", "")
+  ifelse(out == "", "value", out)
+}
+
+resolve_path <- function(path, doc_dir = NULL) {
+  candidates <- c(
+    path,
+    if (!is.null(doc_dir)) file.path(doc_dir, path) else NULL,
+    if (!is.null(doc_dir)) file.path(doc_dir, "..", path) else NULL,
+    if (!is.null(doc_dir)) file.path(doc_dir, "..", "..", path) else NULL,
+    file.path(getwd(), path),
+    file.path(getwd(), "..", path),
+    file.path(getwd(), "..", "..", path)
+  )
+  candidates <- unique(candidates[!is.na(candidates)])
+  for (candidate in candidates) {
+    if (file.exists(candidate) || dir.exists(candidate)) {
+      return(normalizePath(candidate, winslash = "/", mustWork = FALSE))
+    }
+  }
+  normalizePath(candidates[[1]], winslash = "/", mustWork = FALSE)
+}
+
+current_doc_dir <- function() {
+  doc_input <- tryCatch(knitr::current_input(dir = TRUE), error = function(e) character(0))
+  if (length(doc_input) == 0 || !nzchar(doc_input)) {
+    return(NULL)
+  }
+  dirname(doc_input)
+}
+
+# std_study(), to_ng_per_mL() and standardize_binary_outcome() now live in
+# harmonization_helpers.R (added 2026-08-11). The local copies were removed:
+#   - to_ng_per_mL passed mg/dL, ug/mL, ng/g, pmol/mL, nM and kg/m3 through
+#     UNCONVERTED, silently treating them as ng/mL (5.9% of rows, mis-scaled by
+#     10^3-10^6).
+#   - standardize_binary_outcome picked the case level alphabetically, which
+#     inverted CCREOH's Preterm_Birth relative to CEHC and PARENTs.
+# See CODE_AUDIT_2026-08-11.md sections 1.1 and 1.4.
+source(resolve_path("Coding/Paper1_Submission2/harmonization_helpers.R",
+                    doc_dir = current_doc_dir()))
+
+coerce_outcome_numeric <- function(y) {
+  if (is.numeric(y)) {
+    return(suppressWarnings(as.numeric(y)))
+  }
+  y2 <- trimws(as.character(y))
+  bad <- c("", "nan", "na", "n/a", "none", "null", ".", "missing")
+  y2[tolower(y2) %in% bad] <- NA_character_
+  y2 <- gsub(",", "", y2, fixed = TRUE)
+  y2 <- gsub("^[<>]=?\\s*", "", y2)
+  suppressWarnings(as.numeric(y2))
+}
+
+detect_outcome_type <- function(y) {
+  y_non_na <- y[!is.na(y)]
+  n_unique <- dplyr::n_distinct(y_non_na)
+  if (n_unique == 2) {
+    return("binary")
+  }
+  if (n_unique > 2) {
+    return("continuous")
+  }
+  stop(sprintf("Outcome has %s unique non-missing value(s); cannot model.", n_unique))
+}
+
+# standardize_binary_outcome() moved to harmonization_helpers.R (sourced above).
+
+split_by_study_drop_na <- function(df, study_col = "Study", pid_col) {
+  studies <- sort(unique(df[[study_col]]))
+  out <- vector("list", length(studies))
+  names(out) <- studies
+
+  for (study in studies) {
+    group <- df[df[[study_col]] == study, , drop = FALSE]
+    keep <- colSums(!is.na(group)) > 0
+    group <- group[, keep, drop = FALSE]
+    if (pid_col %in% names(df) && !(pid_col %in% names(group))) {
+      group[[pid_col]] <- df[df[[study_col]] == study, pid_col, drop = TRUE]
+    }
+    out[[study]] <- tibble::as_tibble(group)
+  }
+
+  out
+}
+
+dict_wide_by_study <- function(
+  df,
+  pid_col,
+  analyte_col = "Analyte_Code",
+  value_col = "Concentration",
+  units_col = NULL,
+  study_col = "Study",
+  transform = "log1p"
+) {
+  d <- df %>%
+    filter(
+      !is.na(.data[[study_col]]),
+      !is.na(.data[[pid_col]]),
+      !is.na(.data[[analyte_col]])
+    ) %>%
+    mutate("{value_col}" := suppressWarnings(as.numeric(.data[[value_col]])))
+
+  if (!is.null(units_col) && units_col %in% names(d)) {
+    d[[value_col]] <- to_ng_per_mL(d[[value_col]], d[[units_col]])
+  }
+
+  if (transform == "log1p") {
+    values <- suppressWarnings(as.numeric(d[[value_col]]))
+    d[[value_col]] <- NA_real_
+    valid_mask <- !is.na(values) & values >= 0
+    d[[value_col]][valid_mask] <- log1p(values[valid_mask])
+  }
+
+  out <- list()
+  for (study in sort(unique(d[[study_col]]))) {
+    group <- d %>% filter(.data[[study_col]] == study)
+
+    if (transform == "percentile") {
+      group <- group %>%
+        group_by(.data[[analyte_col]]) %>%
+        mutate(
+          "{value_col}" := {
+            v <- suppressWarnings(as.numeric(.data[[value_col]]))
+            valid <- !is.na(v) & v >= 0
+            result <- rep(NA_real_, length(v))
+            result[valid] <- dplyr::percent_rank(v[valid]) * 100
+            result
+          }
+        ) %>%
+        ungroup()
+    }
+
+    wide <- group %>%
+      group_by(.data[[pid_col]], .data[[analyte_col]]) %>%
+      summarise("{value_col}" := mean(.data[[value_col]], na.rm = TRUE), .groups = "drop") %>%
+      tidyr::pivot_wider(
+        names_from = all_of(analyte_col),
+        values_from = all_of(value_col)
+      ) %>%
+      rename(!!pid_col := 1L) %>%
+      mutate(Study = study, .before = 1)
+
+    fixed <- c("Study", pid_col)
+    analytes <- sort(setdiff(names(wide), fixed))
+    out[[study]] <- wide[, c(fixed, analytes), drop = FALSE]
+  }
+
+  out
+}
+
+resolve_forced_covariates <- function(requested, available) {
+  resolved <- character(0)
+  for (feat in requested) {
+    if (feat %in% available) {
+      resolved <- c(resolved, feat)
+    } else {
+      resolved <- c(resolved, available[startsWith(available, paste0(feat, "_"))])
+    }
+  }
+  unique(resolved)
+}
+
+mcfadden_r2 <- function(y, p_model) {
+  eps <- 1e-12
+  p_model <- pmin(pmax(as.numeric(p_model), eps), 1 - eps)
+  y <- as.integer(y)
+  ll_model <- sum(y * log(p_model) + (1 - y) * log(1 - p_model))
+  p_null <- min(max(mean(y), eps), 1 - eps)
+  ll_null <- sum(y * log(p_null) + (1 - y) * log(1 - p_null))
+  if (!is.finite(ll_model) || !is.finite(ll_null) || ll_null == 0) {
+    return(NA_real_)
+  }
+  1 - (ll_model / ll_null)
+}
+
+build_model_frame <- function(analysis_df, outcome, exposure, covariates, outcome_type) {
+  cols <- unique(c(outcome, exposure, covariates[covariates %in% names(analysis_df)]))
+  d <- analysis_df[, cols, drop = FALSE]
+  d[[exposure]] <- suppressWarnings(as.numeric(d[[exposure]]))
+  if (identical(outcome_type, "continuous")) {
+    d[[outcome]] <- coerce_outcome_numeric(d[[outcome]])
+  }
+  d <- d[stats::complete.cases(d), , drop = FALSE]
+  if (nrow(d) == 0) {
+    return(list(data = d, predictors = character(0)))
+  }
+
+  predictor_df <- d[, unique(c(exposure, covariates[covariates %in% names(d)])), drop = FALSE]
+  for (nm in names(predictor_df)) {
+    if (nm != exposure && !is.numeric(predictor_df[[nm]]) && !is.integer(predictor_df[[nm]])) {
+      predictor_df[[nm]] <- as.factor(predictor_df[[nm]])
+    }
+  }
+
+  keep_cols <- vapply(
+    names(predictor_df),
+    function(nm) {
+      if (nm == exposure) {
+        return(TRUE)
+      }
+      dplyr::n_distinct(predictor_df[[nm]], na.rm = TRUE) > 1
+    },
+    logical(1)
+  )
+  predictor_df <- predictor_df[, keep_cols, drop = FALSE]
+
+  list(data = bind_cols(d[outcome], predictor_df), predictors = names(predictor_df))
+}
+
+fit_linear_with_inference <- function(X, y) {
+  n <- nrow(X)
+  p <- ncol(X)
+  if (n <= p) {
+    stop("Too few rows relative to predictors.")
+  }
+
+  fit <- lm.fit(x = X, y = y)
+  beta <- fit$coefficients
+  if (fit$rank < p || anyNA(beta)) {
+    stop("Design matrix is rank deficient.")
+  }
+
+  resid <- y - drop(X %*% beta)
+  rss <- sum(resid^2)
+  tss <- sum((y - mean(y))^2)
+  sigma2 <- rss / (n - p)
+  xtx_inv <- solve(crossprod(X))
+  se <- sqrt(diag(sigma2 * xtx_inv))
+  t_stat <- beta / se
+  p_value <- 2 * stats::pt(abs(t_stat), df = n - p, lower.tail = FALSE)
+  t_crit <- stats::qt(0.975, df = n - p)
+  ci_low <- beta - t_crit * se
+  ci_high <- beta + t_crit * se
+  r2 <- if (tss > 0) 1 - (rss / tss) else NA_real_
+  adj_r2 <- if (is.finite(r2)) 1 - (1 - r2) * ((n - 1) / (n - p)) else NA_real_
+  fitted <- drop(X %*% beta)
+
+  list(
+    beta = beta,
+    se = se,
+    p_value = p_value,
+    ci_low = ci_low,
+    ci_high = ci_high,
+    r2 = r2,
+    adj_r2 = adj_r2,
+    fitted = fitted
+  )
+}
+
+fit_logistic_with_inference <- function(X, y) {
+  n <- nrow(X)
+  p <- ncol(X)
+  if (n <= p) {
+    stop("Too few rows relative to predictors.")
+  }
+
+  nll <- function(beta) {
+    eta <- drop(X %*% beta)
+    sum(log1p(exp(eta)) - y * eta)
+  }
+
+  grad <- function(beta) {
+    eta <- drop(X %*% beta)
+    p_hat <- plogis(eta)
+    as.vector(crossprod(X, p_hat - y))
+  }
+
+  opt <- optim(
+    par = rep(0, p),
+    fn = nll,
+    gr = grad,
+    method = "BFGS",
+    hessian = FALSE
+  )
+  if (opt$convergence != 0) {
+    stop(opt$message %||% "optim() failed.")
+  }
+
+  beta <- opt$par
+  eta <- drop(X %*% beta)
+  p_hat <- plogis(eta)
+  w <- pmax(p_hat * (1 - p_hat), 1e-8)
+  xtwx <- crossprod(X, X * w)
+  cov_mat <- solve(xtwx)
+  se <- sqrt(diag(cov_mat))
+  z_stat <- beta / se
+  p_value <- 2 * stats::pnorm(abs(z_stat), lower.tail = FALSE)
+  z_crit <- stats::qnorm(0.975)
+  ci_low <- beta - z_crit * se
+  ci_high <- beta + z_crit * se
+
+  list(
+    beta = beta,
+    se = se,
+    p_value = p_value,
+    ci_low = ci_low,
+    ci_high = ci_high,
+    p_hat = p_hat,
+    mcfadden_r2 = mcfadden_r2(y = y, p_model = p_hat)
+  )
+}
+
+`%||%` <- function(x, y) {
+  if (is.null(x) || length(x) == 0 || identical(x, "")) y else x
+}
+
+fit_single_model <- function(
+  analysis_df,
+  panel,
+  study,
+  outcome,
+  exposure,
+  covariates,
+  model_label,
+  outcome_type
+) {
+  built <- build_model_frame(
+    analysis_df = analysis_df,
+    outcome = outcome,
+    exposure = exposure,
+    covariates = covariates,
+    outcome_type = outcome_type
+  )
+  model_df <- built$data
+  predictor_cols <- built$predictors
+  n <- nrow(model_df)
+
+  if (n < 20) {
+    return(tibble(
+      panel = panel,
+      study = study,
+      outcome = outcome,
+      exposure = exposure,
+      model = model_label,
+      status = "skipped",
+      error = "Too few complete-case rows.",
+      outcome_type = outcome_type,
+      model_n = n,
+      model_covars = paste(covariates, collapse = ";")
+    ))
+  }
+
+  if (!(exposure %in% predictor_cols)) {
+    return(tibble(
+      panel = panel,
+      study = study,
+      outcome = outcome,
+      exposure = exposure,
+      model = model_label,
+      status = "failed",
+      error = "Exposure column missing after encoding.",
+      outcome_type = outcome_type,
+      model_n = n,
+      model_covars = paste(covariates, collapse = ";")
+    ))
+  }
+
+  exposure_sd <- stats::sd(suppressWarnings(as.numeric(model_df[[exposure]])), na.rm = TRUE)
+  if (!is.finite(exposure_sd) || exposure_sd == 0) {
+    return(tibble(
+      panel = panel,
+      study = study,
+      outcome = outcome,
+      exposure = exposure,
+      model = model_label,
+      status = "skipped",
+      error = "Exposure has no variation after filtering.",
+      outcome_type = outcome_type,
+      model_n = n,
+      model_covars = paste(covariates, collapse = ";")
+    ))
+  }
+
+  X_pred <- model_df[, predictor_cols, drop = FALSE]
+  for (nm in names(X_pred)) {
+    if (nm != exposure && !is.numeric(X_pred[[nm]]) && !is.integer(X_pred[[nm]])) {
+      X_pred[[nm]] <- as.factor(X_pred[[nm]])
+    }
+  }
+  X <- stats::model.matrix(~ ., data = X_pred)
+  coef_index <- which(colnames(X) == exposure)
+
+  tryCatch({
+    if (identical(outcome_type, "continuous")) {
+      y <- as.numeric(model_df[[outcome]])
+      fit <- fit_linear_with_inference(X = X, y = y)
+      return(tibble(
+        panel = panel,
+        study = study,
+        outcome = outcome,
+        exposure = exposure,
+        variable = exposure,
+        model = model_label,
+        status = "ok",
+        error = "",
+        outcome_type = outcome_type,
+        model_type = "linear",
+        model_n = n,
+        n_predictors = length(predictor_cols),
+        estimate = unname(fit$beta[coef_index]),
+        beta = unname(fit$beta[coef_index]),
+        # se recorded directly (added 2026-08-11). It was previously computed
+        # here and discarded, forcing downstream meta-analysis to reconstruct it
+        # as (ci_high - ci_low)/3.92 -- but these CIs use qt(0.975, n-p), not
+        # 1.96, so the reconstruction overestimated se by ~6% at df=20 and
+        # biased every rma() fit and every z = beta/se in Figure 3 Panel A.
+        se = unname(fit$se[coef_index]),
+        df_resid = nrow(X) - ncol(X),
+        or = NA_real_,
+        ci_low = unname(fit$ci_low[coef_index]),
+        ci_high = unname(fit$ci_high[coef_index]),
+        p_value = unname(fit$p_value[coef_index]),
+        r2 = fit$adj_r2,
+        R2 = fit$adj_r2,
+        mcfadden_r2 = NA_real_,
+        McFadden_R2 = NA_real_,
+        predicted_mean = mean(fit$fitted, na.rm = TRUE),
+        predicted_sd = stats::sd(fit$fitted, na.rm = TRUE),
+        predicted_min = min(fit$fitted, na.rm = TRUE),
+        predicted_max = max(fit$fitted, na.rm = TRUE),
+        prediction_scale = "fitted_outcome",
+        n_case = NA_real_,
+        n_control = NA_real_,
+        model_covars = paste(covariates, collapse = ";")
+      ))
+    }
+
+    y <- standardize_binary_outcome(model_df[[outcome]], name = outcome)
+    n_case <- sum(y)
+    n_control <- length(y) - n_case
+    if (n_case < 5 || n_control < 5) {
+      return(tibble(
+        panel = panel,
+        study = study,
+        outcome = outcome,
+        exposure = exposure,
+        model = model_label,
+        status = "skipped",
+        error = "Too few cases/controls after filtering.",
+        outcome_type = outcome_type,
+        model_type = "logistic",
+        model_n = n,
+        n_case = n_case,
+        n_control = n_control,
+        model_covars = paste(covariates, collapse = ";")
+      ))
+    }
+
+    fit <- fit_logistic_with_inference(X = X, y = y)
+    beta <- unname(fit$beta[coef_index])
+    ci_low <- unname(fit$ci_low[coef_index])
+    ci_high <- unname(fit$ci_high[coef_index])
+
+    tibble(
+      panel = panel,
+      study = study,
+      outcome = outcome,
+      exposure = exposure,
+      variable = exposure,
+      model = model_label,
+      status = "ok",
+      error = "",
+      outcome_type = outcome_type,
+      model_type = "logistic",
+      model_n = n,
+      n_predictors = length(predictor_cols),
+      estimate = beta,
+      beta = beta,
+      # se is on the LOG-ODDS scale (matches `beta`), while ci_low/ci_high below
+      # are exponentiated to the OR scale. Added 2026-08-11; see the linear branch.
+      se = unname(fit$se[coef_index]),
+      df_resid = NA_real_,
+      or = exp(beta),
+      ci_low = exp(ci_low),
+      ci_high = exp(ci_high),
+      p_value = unname(fit$p_value[coef_index]),
+      r2 = NA_real_,
+      R2 = NA_real_,
+      mcfadden_r2 = fit$mcfadden_r2,
+      McFadden_R2 = fit$mcfadden_r2,
+      predicted_mean = mean(fit$p_hat, na.rm = TRUE),
+      predicted_sd = stats::sd(fit$p_hat, na.rm = TRUE),
+      predicted_min = min(fit$p_hat, na.rm = TRUE),
+      predicted_max = max(fit$p_hat, na.rm = TRUE),
+      prediction_scale = "predicted_probability",
+      n_case = n_case,
+      n_control = n_control,
+      model_covars = paste(covariates, collapse = ";")
+    )
+  }, error = function(e) {
+    tibble(
+      panel = panel,
+      study = study,
+      outcome = outcome,
+      exposure = exposure,
+      variable = exposure,
+      model = model_label,
+      status = "failed",
+      error = conditionMessage(e),
+      outcome_type = outcome_type,
+      model_type = ifelse(identical(outcome_type, "continuous"), "linear", "logistic"),
+      model_n = n,
+      n_predictors = length(predictor_cols),
+      R2 = NA_real_,
+      McFadden_R2 = NA_real_,
+      predicted_mean = NA_real_,
+      predicted_sd = NA_real_,
+      predicted_min = NA_real_,
+      predicted_max = NA_real_,
+      prediction_scale = ifelse(identical(outcome_type, "continuous"), "fitted_outcome", "predicted_probability"),
+      model_covars = paste(covariates, collapse = ";")
+    )
+  })
+}
+
+run_one_exposure <- function(
+  analysis_df,
+  panel,
+  study,
+  outcome,
+  exposure,
+  forced_covariates,
+  outcome_type
+) {
+  bind_rows(
+    fit_single_model(
+      analysis_df = analysis_df,
+      panel = panel,
+      study = study,
+      outcome = outcome,
+      exposure = exposure,
+      covariates = character(0),
+      model_label = "Unadjusted",
+      outcome_type = outcome_type
+    ),
+    fit_single_model(
+      analysis_df = analysis_df,
+      panel = panel,
+      study = study,
+      outcome = outcome,
+      exposure = exposure,
+      covariates = forced_covariates,
+      model_label = "Adjusted",
+      outcome_type = outcome_type
+    )
+  )
+}
+
+save_results <- function(results, out_dir) {
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  manifest <- list(tables = names(results), metadata = list())
+
+  has_arrow <- requireNamespace("arrow", quietly = TRUE)
+  manifest$format <- if (has_arrow) "parquet" else "csv"
+
+  for (nm in names(results)) {
+    if (has_arrow) {
+      arrow::write_parquet(results[[nm]], file.path(out_dir, paste0(nm, ".parquet")))
+    } else {
+      readr::write_csv(results[[nm]], file.path(out_dir, paste0(nm, ".csv")))
+    }
+  }
+
+  writeLines(
+    jsonlite::toJSON(manifest, pretty = TRUE, auto_unbox = TRUE),
+    con = file.path(out_dir, "MANIFEST.json")
+  )
+}
+
+read_result_table <- function(path) {
+  if (grepl("\\.parquet$", path, ignore.case = TRUE)) {
+    if (!requireNamespace("arrow", quietly = TRUE)) {
+      stop("The 'arrow' package is required to read parquet outputs.")
+    }
+    return(arrow::read_parquet(path) %>% tibble::as_tibble())
+  }
+  if (grepl("\\.csv$", path, ignore.case = TRUE)) {
+    return(readr::read_csv(path, show_col_types = FALSE))
+  }
+  stop(sprintf("Unsupported result file type: %s", path))
+}
+
+collect_exwas_results <- function(out_root) {
+  out_root <- resolve_path(out_root, doc_dir = current_doc_dir())
+  if (!dir.exists(out_root)) {
+    stop(sprintf("Output directory does not exist: %s", out_root))
+  }
+
+  result_paths <- list.files(
+    out_root,
+    pattern = "^(summary_table|exposure_results_table|forced_covariates_used_table)\\.(parquet|csv)$",
+    recursive = TRUE,
+    full.names = TRUE
+  )
+
+  if (length(result_paths) == 0) {
+    stop(sprintf("No result tables found under: %s", out_root))
+  }
+
+  # STALE-RUN GUARDS (2026-08-11, CODE_AUDIT_2026-08-11.md section 3.6).
+  #
+  # This function globs the output tree recursively with no run identifier, so
+  # results from a previous run silently accumulate alongside the current one.
+  # That has already happened once: a legacy layout without scale= coexisted here
+  # and the figure scripts double-counted it. Two guards:
+  #
+  # (1) Only accept the current layout (panel=/study=/outcome=/scale=). Anything
+  #     else is a leftover from an older run.
+  current_layout <- grepl("scale=", result_paths, fixed = TRUE)
+  if (any(!current_layout)) {
+    warning(sprintf(
+      "collect_exwas_results(): ignoring %d result file(s) not in the current panel=/study=/outcome=/scale= layout. Delete the output tree and re-run to clear them.",
+      sum(!current_layout)), call. = FALSE)
+    result_paths <- result_paths[current_layout]
+  }
+
+  # (2) save_results() writes parquet when arrow is available and csv otherwise.
+  #     A tree that has seen both formats holds two copies of the same table and
+  #     would be read twice. Keep parquet where both exist.
+  key <- sub("\\.(parquet|csv)$", "", result_paths)
+  dup_key <- key %in% key[duplicated(key)]
+  if (any(dup_key)) {
+    drop_csv <- dup_key & grepl("\\.csv$", result_paths)
+    warning(sprintf(
+      "collect_exwas_results(): %d table(s) exist as BOTH .parquet and .csv (a format switch between runs). Using the .parquet copy; delete the tree and re-run for a clean state.",
+      sum(drop_csv)), call. = FALSE)
+    result_paths <- result_paths[!drop_csv]
+  }
+
+  if (length(result_paths) == 0) {
+    stop(sprintf("No result tables in the current layout under: %s", out_root))
+  }
+
+  result_index <- tibble::tibble(path = result_paths) %>%
+    mutate(
+      file_name = basename(path),
+      table_name = sub("\\.(parquet|csv)$", "", file_name),
+      rel_path = dirname(path) %>% sub(paste0("^", out_root, "/?"), "", .),
+      panel = str_match(rel_path, "panel=([^/]+)")[, 2],
+      study = str_match(rel_path, "study=([^/]+)")[, 2],
+      outcome = str_match(rel_path, "outcome=([^/]+)")[, 2],
+      scale = str_match(rel_path, "scale=([^/]+)")[, 2]
+    )
+
+  tables <- split(result_index, result_index$table_name) %>%
+    purrr::imap(function(df, nm) {
+      purrr::map_dfr(seq_len(nrow(df)), function(i) {
+        src <- df[i, , drop = FALSE]
+        tbl <- read_result_table(src$path[[1]])
+
+        if (!("panel" %in% names(tbl))) {
+          tbl$panel <- src$panel[[1]]
+        }
+        if (!("study" %in% names(tbl))) {
+          tbl$study <- src$study[[1]]
+        }
+        if (!("outcome" %in% names(tbl))) {
+          tbl$outcome <- src$outcome[[1]]
+        }
+        if (!("scale" %in% names(tbl))) {
+          tbl$scale <- src$scale[[1]]
+        }
+        tbl$source_file <- src$path[[1]]
+        tbl
+      })
+    })
+
+  list(
+    summary_table = tables[["summary_table"]] %||% tibble::tibble(),
+    exposure_results_table = tables[["exposure_results_table"]] %||% tibble::tibble(),
+    forced_covariates_used_table = tables[["forced_covariates_used_table"]] %||% tibble::tibble()
+  )
+}
+
+failed_result <- function(task, error) {
+  list(
+    summary_table = tibble(
+      panel = task$panel,
+      study = task$study,
+      outcome = task$outcome,
+      scale = task$scale,
+      status = "failed",
+      outcome_type = NA_character_,
+      n_exposures_tested = 0L,
+      n_result_rows = 0L,
+      n_ok = 0L,
+      n_skipped = 0L,
+      n_failed = 0L,
+      forced_covariates_used = "[]",
+      error = error
+    ),
+    exposure_results_table = tibble(),
+    forced_covariates_used_table = tibble(
+      panel = character(),
+      study = character(),
+      outcome = character(),
+      forced_covariate = character()
+    )
+  )
+}
+
+build_shared_pairs <- function(prepared) {
+  all_pairs <- list()
+
+  for (panel in c("child", "mat")) {
+    panel_data <- prepared[[panel]]
+    id_col <- panel_data$id_col
+    exposures_by_study <- panel_data$exposures_by_study$log1p
+    outcomes_by_study <- panel_data$outcomes_by_study
+    sdoh_by_study <- panel_data$sdoh_by_study
+
+    ok_studies <- Reduce(
+      intersect,
+      list(
+        names(exposures_by_study),
+        names(outcomes_by_study),
+        names(sdoh_by_study)
+      )
+    )
+
+    for (study in ok_studies) {
+      outcomes_df <- outcomes_by_study[[study]]
+      exposures_df <- exposures_by_study[[study]]
+
+      outcome_cols <- names(outcomes_df)[
+        !(names(outcomes_df) %in% c("Study", id_col, "Child_PID", "Mat_PID")) &
+          vapply(outcomes_df, function(x) any(!is.na(x)), logical(1))
+      ]
+      exposure_cols <- setdiff(names(exposures_df), c("Study", id_col))
+
+      if (length(outcome_cols) == 0 || length(exposure_cols) == 0) next
+
+      merged <- inner_join(
+        exposures_df[, c(id_col, exposure_cols), drop = FALSE],
+        outcomes_df[, c(id_col, outcome_cols), drop = FALSE],
+        by = id_col
+      )
+      if (nrow(merged) == 0) next
+
+      exp_non_na <- !is.na(as.matrix(merged[, exposure_cols, drop = FALSE]))
+      out_non_na <- !is.na(as.matrix(merged[, outcome_cols, drop = FALSE]))
+
+      co_occur <- t(out_non_na) %*% exp_non_na  # n_outcomes x n_exposures
+
+      hits <- which(co_occur > 0, arr.ind = TRUE)
+      if (nrow(hits) == 0) next
+
+      all_pairs[[length(all_pairs) + 1]] <- tibble(
+        panel    = panel,
+        study    = study,
+        outcome  = outcome_cols[hits[, 1]],
+        exposure = exposure_cols[hits[, 2]]
+      )
+    }
+  }
+
+  if (length(all_pairs) == 0) {
+    return(tibble(panel = character(), outcome = character(), exposure = character()))
+  }
+
+  bind_rows(all_pairs) %>%
+    group_by(panel, outcome, exposure) %>%
+    summarise(n_studies = n_distinct(study), .groups = "drop") %>%
+    filter(n_studies >= 2) %>%
+    select(panel, outcome, exposure)
+}
+
+prepare_inputs <- function(project_root) {
+  doc_dir <- current_doc_dir()
+  project_root <- resolve_path(project_root, doc_dir = doc_dir)
+  input_dir <- file.path(project_root, "Input")
+
+  sdoh <- readr::read_csv(file.path(input_dir, "Harmonized_SDOH.csv"), show_col_types = FALSE)
+  outcomes <- readr::read_csv(file.path(input_dir, "Harmonized_Outcomes.csv"), show_col_types = FALSE)
+  targeted <- readr::read_csv(
+    file.path(input_dir, "Harmonized_Targeted.csv"),
+    show_col_types = FALSE,
+    locale = readr::locale(encoding = "latin1")
+  )
+
+  sdoh$Study <- std_study(sdoh$Study)
+  outcomes$Study <- std_study(outcomes$Study)
+  targeted$Study <- std_study(targeted$Study)
+
+  targeted <- targeted %>%
+    filter(!(Analyte_Code %in% IL_MARKERS))
+
+  unit_col <- c("Concentration_Units", "Concentration_Unit", "Units", "Unit") %>%
+    keep(~ .x %in% names(targeted)) %>%
+    first()
+
+  sdoh_keep <- c(
+    "Study", "Child_PID", "Mat_PID",
+    FORCED_SDOH_CANDIDATES[FORCED_SDOH_CANDIDATES != "Sample_Collection_Year"]
+  )
+  sdoh <- sdoh[, intersect(sdoh_keep, names(sdoh)), drop = FALSE]
+
+  # ROW MULTIPLICATION FIX (2026-08-11, CODE_AUDIT_2026-08-11.md section 1.3).
+  #
+  # These two tables were built with distinct(PID, Sample_Collection_Year), which
+  # keeps ONE ROW PER (PID, year) rather than one row per PID. 2,355 of 8,801
+  # Child_PIDs and 1,569 Mat_PIDs carry more than one collection year (a
+  # participant sampled across visits, or analytes run in different years), so
+  # the left_join below was many-to-many and inflated the child SDOH table from
+  # 11,259 to 17,881 rows -- +58.8% overall, +305% for GOALS.
+  #
+  # Every duplicated participant then entered the Adjusted models 2-4 times:
+  # inflated model_n, understated standard errors, anticonservative p-values,
+  # and unevenly so across cohorts -- which is precisely the axis Figure 3
+  # compares along.
+  #
+  # Fixed by collapsing to one row per PID with the median year, matching what
+  # Targeted_Quantile_Power_Array.R:223-255 already did correctly. Median (not
+  # first/min) so the covariate is not sensitive to row order.
+  collapse_sample_year <- function(df, id_col) {
+    df %>%
+      filter(!is.na(.data[[id_col]])) %>%
+      transmute(
+        !!id_col := .data[[id_col]],
+        Sample_Collection_Year = suppressWarnings(as.numeric(Sample_Collection_Year))
+      ) %>%
+      group_by(.data[[id_col]]) %>%
+      summarise(
+        Sample_Collection_Year = if (all(is.na(Sample_Collection_Year))) {
+          NA_real_
+        } else {
+          stats::median(Sample_Collection_Year, na.rm = TRUE)
+        },
+        .groups = "drop"
+      )
+  }
+
+  child_sample_year <- collapse_sample_year(targeted, "Child_PID")
+  mat_sample_year   <- collapse_sample_year(targeted, "Mat_PID")
+
+  stopifnot(
+    !any(duplicated(child_sample_year$Child_PID)),
+    !any(duplicated(mat_sample_year$Mat_PID))
+  )
+
+  # Harmonized_SDOH is not one row per participant -- GOALS is longitudinal and
+  # stores one row per visit (272 participants have genuinely conflicting
+  # covariate rows, 1,312 of them in GOALS). Left as-is, those participants enter
+  # each model several times. Collapsed here to one row each; see
+  # dedupe_participant_rows() for the policy and its caveat.
+  child_sdoh_pre <- sdoh %>%
+    filter(!is.na(Child_PID)) %>%
+    dedupe_participant_rows("Child_PID", age_col = "Child_Age", label = "child SDOH")
+  child_sdoh <- child_sdoh_pre %>%
+    left_join(child_sample_year, by = "Child_PID") %>%
+    select(-any_of("Mat_PID"))
+  assert_no_row_multiplication(child_sdoh_pre, child_sdoh, "child SDOH x sample-year join")
+
+  mat_sdoh_pre <- sdoh %>%
+    filter(!is.na(Mat_PID)) %>%
+    dedupe_participant_rows("Mat_PID", age_col = "Mat_Age", label = "maternal SDOH")
+  mat_sdoh <- mat_sdoh_pre %>%
+    left_join(mat_sample_year, by = "Mat_PID") %>%
+    select(-any_of("Child_PID"))
+  assert_no_row_multiplication(mat_sdoh_pre, mat_sdoh, "maternal SDOH x sample-year join")
+
+  child_outcomes <- outcomes %>%
+    filter(!is.na(Child_PID)) %>%
+    select(any_of(c("Study", "Child_PID", "Mat_PID")), everything())
+
+  mat_outcomes <- outcomes %>%
+    filter(!is.na(Mat_PID)) %>%
+    select(any_of(c("Study", "Mat_PID", "Child_PID")), everything())
+
+  child_exposures <- list(
+    log1p      = dict_wide_by_study(targeted, pid_col = "Child_PID", units_col = unit_col, transform = "log1p"),
+    percentile = dict_wide_by_study(targeted, pid_col = "Child_PID", units_col = unit_col, transform = "percentile")
+  )
+  mat_exposures <- list(
+    log1p      = dict_wide_by_study(targeted, pid_col = "Mat_PID", units_col = unit_col, transform = "log1p"),
+    percentile = dict_wide_by_study(targeted, pid_col = "Mat_PID", units_col = unit_col, transform = "percentile")
+  )
+
+  list(
+    child = list(
+      id_col = "Child_PID",
+      outcomes_by_study = split_by_study_drop_na(child_outcomes, pid_col = "Child_PID"),
+      sdoh_by_study = split_by_study_drop_na(child_sdoh, pid_col = "Child_PID"),
+      exposures_by_study = child_exposures
+    ),
+    mat = list(
+      id_col = "Mat_PID",
+      outcomes_by_study = split_by_study_drop_na(mat_outcomes, pid_col = "Mat_PID"),
+      sdoh_by_study = split_by_study_drop_na(mat_sdoh, pid_col = "Mat_PID"),
+      exposures_by_study = mat_exposures
+    )
+  )
+}
+
+build_tasks <- function(prepared, shared_pairs, panel_filter = NULL, study_filter = NULL) {
+  panels <- if (is.null(panel_filter)) c("child", "mat") else panel_filter
+  scales <- c("log1p", "percentile")
+  tasks <- vector("list", 0)
+
+  for (panel in panels) {
+    panel_data <- prepared[[panel]]
+    id_col <- panel_data$id_col
+    ok_studies <- Reduce(
+      intersect,
+      list(
+        names(panel_data$outcomes_by_study),
+        names(panel_data$sdoh_by_study),
+        names(panel_data$exposures_by_study$log1p)
+      )
+    )
+    if (!is.null(study_filter)) {
+      ok_studies <- intersect(ok_studies, study_filter)
+    }
+
+    panel_shared <- shared_pairs %>%
+      filter(.data$panel == .env$panel)
+
+    for (study in sort(ok_studies)) {
+      outcomes_df <- panel_data$outcomes_by_study[[study]]
+      outcome_cols <- names(outcomes_df)[
+        !(names(outcomes_df) %in% c("Study", id_col, "Child_PID", "Mat_PID")) &
+          vapply(outcomes_df, function(x) any(!is.na(x)), logical(1))
+      ]
+
+      for (outcome in outcome_cols) {
+        allowed <- panel_shared %>%
+          filter(.data$outcome == .env$outcome) %>%
+          pull(exposure)
+
+        if (length(allowed) == 0) next
+
+        for (scale in scales) {
+          tasks[[length(tasks) + 1]] <- tibble(
+            panel = panel,
+            study = study,
+            outcome = outcome,
+            scale = scale,
+            id_col = id_col,
+            allowed_exposures = list(allowed)
+          )
+        }
+      }
+    }
+  }
+
+  bind_rows(tasks)
+}
+
+run_task <- function(task, prepared) {
+  panel_data <- prepared[[task$panel]]
+  outcomes_df <- panel_data$outcomes_by_study[[task$study]]
+  exposures_df <- panel_data$exposures_by_study[[task$scale]][[task$study]]
+  sdoh_df <- panel_data$sdoh_by_study[[task$study]]
+  id_col <- task$id_col
+
+  # OUTCOME-TABLE PSEUDO-REPLICATION (2026-08-11, second instance of audit 1.3).
+  #
+  # Harmonized_Outcomes is not one row per participant either. DISCOVER repeats
+  # each child's Asthma / Severe_Asthma row up to 14 times, TSIC repeats Asthma,
+  # ZIP repeats Gest_Age_Birth. Every repeat was multiplying that participant
+  # into the analysis frame through the inner_join below -- on top of the
+  # covariate-join inflation fixed in prepare_inputs().
+  #
+  # Checked before collapsing: for every affected study/outcome the repeats are
+  # EXACT (identical outcome value), so distinct() is lossless -- zero
+  # participants have conflicting outcome values. If that ever stops being true
+  # the guard below fires rather than silently picking one.
+  y_df <- outcomes_df[, c(id_col, task$outcome), drop = FALSE] %>% dplyr::distinct()
+  exposure_cols <- intersect(
+    task$allowed_exposures[[1]],
+    setdiff(names(exposures_df), c("Study", id_col))
+  )
+  if (length(exposure_cols) == 0) {
+    stop("No targeted exposure columns found for the task.")
+  }
+
+  forced_covariates <- resolve_forced_covariates(
+    requested = FORCED_SDOH_CANDIDATES,
+    available = setdiff(names(sdoh_df), c("Study", id_col))
+  )
+
+  s_df <- if (length(forced_covariates) > 0) {
+    sdoh_df[, c(id_col, forced_covariates), drop = FALSE]
+  } else {
+    sdoh_df[, id_col, drop = FALSE]
+  }
+
+  # Guard both joins (2026-08-11). The covariate join was the one that actually
+  # multiplied rows (fixed in prepare_inputs), but the outcome join has the same
+  # exposure: nothing upstream guarantees one outcome row per participant.
+  stopifnot(!any(duplicated(exposures_df[[id_col]])))
+  if (any(duplicated(y_df[[id_col]]))) {
+    stop(sprintf("outcome table for study=%s outcome=%s has %d duplicate %s values; aggregate to one row per participant first.",
+                 task$study, task$outcome, sum(duplicated(y_df[[id_col]])), id_col))
+  }
+  if (any(duplicated(s_df[[id_col]]))) {
+    stop(sprintf("covariate table for study=%s has %d duplicate %s values.",
+                 task$study, sum(duplicated(s_df[[id_col]])), id_col))
+  }
+
+  analysis_df <- exposures_df %>%
+    inner_join(y_df, by = id_col) %>%
+    left_join(s_df, by = id_col)
+
+  analysis_df <- analysis_df[, colSums(!is.na(analysis_df)) > 0, drop = FALSE]
+  exposure_cols <- exposure_cols[exposure_cols %in% names(analysis_df)]
+  if (length(exposure_cols) == 0) {
+    stop("No targeted exposure columns remain after merging and dropping all-missing columns.")
+  }
+  outcome_type <- detect_outcome_type(analysis_df[[task$outcome]])
+
+  results_df <- map_dfr(
+    exposure_cols,
+    ~ run_one_exposure(
+      analysis_df = analysis_df,
+      panel = task$panel,
+      study = task$study,
+      outcome = task$outcome,
+      exposure = .x,
+      forced_covariates = forced_covariates,
+      outcome_type = outcome_type
+    )
+  )
+
+  if (nrow(results_df) == 0) {
+    results_df <- tibble(
+      panel = character(),
+      study = character(),
+      outcome = character(),
+      exposure = character(),
+      variable = character(),
+      model = character(),
+      status = character(),
+      error = character(),
+      outcome_type = character(),
+      model_type = character(),
+      model_n = numeric(),
+      n_predictors = numeric(),
+      estimate = numeric(),
+      beta = numeric(),
+      se = numeric(),
+      df_resid = numeric(),
+      or = numeric(),
+      ci_low = numeric(),
+      ci_high = numeric(),
+      p_value = numeric(),
+      r2 = numeric(),
+      R2 = numeric(),
+      mcfadden_r2 = numeric(),
+      McFadden_R2 = numeric(),
+      predicted_mean = numeric(),
+      predicted_sd = numeric(),
+      predicted_min = numeric(),
+      predicted_max = numeric(),
+      prediction_scale = character(),
+      n_case = numeric(),
+      n_control = numeric(),
+      model_covars = character()
+    )
+  }
+
+  results_df[["scale"]] <- task$scale
+
+  summary_tbl <- tibble(
+    panel = task$panel,
+    study = task$study,
+    outcome = task$outcome,
+    scale = task$scale,
+    status = ifelse(any(results_df$status == "ok"), "ok", "failed"),
+    outcome_type = outcome_type,
+    n_exposures_tested = length(exposure_cols),
+    n_result_rows = nrow(results_df),
+    n_ok = sum(results_df$status == "ok"),
+    n_skipped = sum(results_df$status == "skipped"),
+    n_failed = sum(results_df$status == "failed"),
+    forced_covariates_used = as.character(jsonlite::toJSON(forced_covariates, auto_unbox = TRUE)),
+    error = ""
+  )
+
+  cov_tbl <- tibble(
+    panel = task$panel,
+    study = task$study,
+    outcome = task$outcome,
+    scale = task$scale,
+    forced_covariate = forced_covariates
+  )
+
+  if (nrow(cov_tbl) == 0) {
+    cov_tbl <- tibble(
+      panel = character(),
+      study = character(),
+      outcome = character(),
+      scale = character(),
+      forced_covariate = character()
+    )
+  }
+
+  list(
+    summary_table = summary_tbl,
+    exposure_results_table = results_df,
+    forced_covariates_used_table = cov_tbl
+  )
+}
+```
+
+## Load Inputs And Build Tasks
+
+```{r prepare}
+doc_dir <- current_doc_dir()
+project_root <- resolve_path(params$project_root, doc_dir = doc_dir)
+out_root     <- resolve_path(params$out_root,     doc_dir = doc_dir)
+
+prepared <- prepare_inputs(project_root)
+shared_pairs <- build_shared_pairs(prepared)
+tasks <- build_tasks(
+  prepared = prepared,
+  shared_pairs = shared_pairs,
+  panel_filter = params$panel,
+  study_filter = params$study
+)
+
+tasks <- tasks %>%
+  mutate(local_task_id = row_number(), .before = 1)
+
+# params$outcome is applied once, in the select-tasks chunk below, as a regex
+# pattern. The exact-match filter that used to sit here was redundant with it
+# and had different semantics (== vs str_detect), so two different meanings of
+# the same parameter coexisted. Removed 2026-08-11.
+
+tasks
+```
+
+## Select Tasks To Run
+
+```{r select-tasks}
+
+# Outcome restriction (documented 2026-08-11, CODE_AUDIT_2026-08-11.md 3.7).
+#
+# This filter was previously the bare literal `c("Asthma|BMI|Birth")` applied
+# unconditionally, which silently overrode the documented params$outcome
+# interface and was invisible to anyone reading the YAML header. Promoted to a
+# named parameter with an explicit opt-out.
+#
+# Note it is a SUBSTRING match, so "Birth" also selects Birth_Order,
+# birth_due_date, Low_Birthweight and Birth_Weight_Z. Listed exhaustively below
+# rather than relying on the regex so the analysed set is visible.
+# EXPANDED 2026-08-11. Was "Asthma|BMI|Birth".
+#
+# Added the cardiometabolic block, which has real cross-cohort overlap that the
+# old filter excluded. Every one of these resolves to the SAME four legacy PFAS
+# (PFHXS, PFNA, PFOA, PFOS), because the contributing cohorts are PFAS-focused:
+#   GOALS  8 analytes | NASH 7 | SEARCH 4  -> intersection = those four
+# so this is coherently "PFAS x cardiometabolic outcomes", not a scattering of pairs.
+#
+#   Cholesterol_HDL / _LDL / Triglycerides   GOALS, NASH, SEARCH   n ~ 6,330
+#   Cholesterol_Total, Glucose, Insulin,
+#     Insulin_Resistance, ALT                GOALS, NASH           n ~ 2,750
+#   Systolic_BP / Diastolic_BP               GOALS, SEARCH         n ~ 4,560
+#
+# Coding verified consistent across cohorts (mg/dL scales agree). The GOALS-vs-NASH
+# ALT gap (median 22 vs 84) is biological -- NASH is the steatohepatitis cohort --
+# not a unit error.
+#
+# APGAR was considered and REJECTED: ELEMENT codes it on a 1-3 scale rather than
+# 0-10, and CCREOH carries 12 non-integer values. Excluding ELEMENT leaves APGAR_1
+# with zero usable analytes and APGAR_5 with five at K=2.
+OUTCOME_PATTERN <- params$outcome %||% paste(
+  "Asthma|BMI|Birth",
+  "Cholesterol_HDL|Cholesterol_LDL|Cholesterol_Total|Triglycerides",
+  "Glucose|Insulin|Insulin_Resistance|ALT",
+  "Systolic_BP|Diastolic_BP",
+  sep = "|")
+
+selected_tasks <- if (identical(OUTCOME_PATTERN, "ALL")) {
+  tasks
+} else {
+  tasks %>% filter(str_detect(outcome, OUTCOME_PATTERN))
+}
+
+message("Outcome filter: '", OUTCOME_PATTERN, "' selected ",
+        n_distinct(selected_tasks$outcome), " distinct outcomes:\n  ",
+        paste(sort(unique(selected_tasks$outcome)), collapse = ", "))
+
+if (nrow(selected_tasks) == 0) {
+  stop("No tasks matched the selected panel/study/outcome filters.")
+}
+
+if (!isTRUE(params$run_all_tasks) && nrow(selected_tasks) > 1) {
+  stop(
+    paste(
+      "More than one task matched your filters.",
+      "Narrow params$panel / params$study / params$outcome, or set params$run_all_tasks = TRUE."
+    )
+  )
+}
+
+
+
+```
+
+## Run ExWAS
+
+```{r run-exwas}
+all_results <- vector("list", nrow(selected_tasks))
+names(all_results) <- paste0(
+  selected_tasks$panel, "__",
+  selected_tasks$study, "__",
+  selected_tasks$outcome, "__",
+  selected_tasks$scale
+)
+
+for (i in seq_len(nrow(selected_tasks))) {
+  task <- selected_tasks[i, , drop = FALSE]
+  message(
+    sprintf(
+      "[INFO] Running local task %s of %s: panel=%s study=%s outcome=%s",
+      i,
+      nrow(selected_tasks),
+      task$panel,
+      task$study,
+      task$outcome
+    )
+  )
+
+  results <- tryCatch(
+    run_task(task = task, prepared = prepared),
+    error = function(e) failed_result(task = task, error = conditionMessage(e))
+  )
+
+  out_dir <- file.path(
+    out_root,
+    paste0("panel=", safe_slug(task$panel)),
+    paste0("study=", safe_slug(task$study)),
+    paste0("outcome=", safe_slug(task$outcome)),
+    paste0("scale=", safe_slug(task$scale))
+  )
+  save_results(results, out_dir)
+
+  all_results[[i]] <- list(
+    task = task,
+    out_dir = out_dir,
+    results = results
+  )
+}
+```
+
+## Task Summaries
+
+```{r summaries}
+bind_rows(map(all_results, ~ .x$results$summary_table))
+```
+
+## First Result Preview
+
+```{r preview}
+if (length(all_results) > 0) {
+  print(all_results[[1]]$results$exposure_results_table %>% slice_head(n = 20))
+}
+```
+
+## Collect All Results
+
+```{r collect-results}
+collected_results <- collect_exwas_results(out_root)
+
+collected_results$summary_table %>% slice_head(n = 10)
+```
+
+## Combined Exposure Results
+
+```{r combined-exposure-results}
+combined_exposure_results <- collected_results$exposure_results_table
+
+# OUTPUT TREE + PATH (fixed 2026-08-10). Two problems with the old line
+#   save(combined_exposure_results, file = "../../Output/Paper1_OutputV2/Sample_ExWAS_Output.RData")
+#   1. It wrote into Paper1_OutputV2, the PREVIOUS submission's output tree.
+#      Retargeted to Paper1_Output_Submission2 together with its only consumer,
+#      Vis_Code/Toy_ExWAS_Replication_Vis.Rmd (which now loads the new path).
+#   2. The path is relative to THIS document's directory, so it only resolves
+#      when the notebook is knitted from Coding/Paper1_Submission2/. Knitting
+#      from the project root errored here AFTER all the modelling had finished.
+#      Now routed through resolve_path()/out_root like every other output.
+sample_out <- file.path(
+  resolve_path("Output/Paper1_Output_Submission2", doc_dir = current_doc_dir()),
+  "Sample_ExWAS_Output.RData"
+)
+save(combined_exposure_results, file = sample_out)
+cat("Saved combined exposure results to", sample_out, "\n")
+
+```

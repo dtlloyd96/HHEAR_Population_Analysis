@@ -1,0 +1,620 @@
+---
+title: "Quant_Reg_Results_Plots"
+output: html_document
+date: "2025-05-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r view-shim}
+# View() opens an interactive data viewer and ERRORS under rmarkdown::render().
+# These documents were written to be run chunk-by-chunk in RStudio, so View()
+# calls are scattered through them as scratch. Shim it to a no-op so a headless
+# render works; the pipelines still evaluate, they just do not display.
+# (2026-08-11)
+View <- function(x, ...) invisible(x)
+```
+
+Packages
+-----------
+```{r}
+library(tidyverse)
+library(paletteer)
+library(data.table)
+library(ggdist)
+library(ggrepel)
+library(missMDA)
+library(FactoMineR)
+library(factoextra)
+library(patchwork)
+library(ggpubr)
+library(scales)
+source("../../../Coding/targeted_analyte_mapping.R")
+```
+
+
+
+```{r}
+mapping_path <- "../../../Input/Harmonized_Datasets/Targeted_Analyte_Category_Mapping.csv"
+targeted_mapping <- read_targeted_analyte_mapping(mapping_path)
+plot_categories <- c("TraceElements", "Phenols", "Phthalates", "PAH", "PCB", "Parabens", "Smoking", "Pesticides", "VOCs", "FlameRetardants", "PFAS")
+targeted_category_lookup <- targeted_mapping %>% dplyr::filter(Category %in% plot_categories) %>% dplyr::select(Code, Category) %>% dplyr::distinct()
+theme_codes <- targeted_theme_codes(targeted_mapping)
+get_theme <- function(category_name) if (category_name %in% names(theme_codes)) unique(theme_codes[[category_name]]) else character()
+Trace_Elements_Theme <- get_theme("TraceElements")
+Phenols_Theme <- get_theme("Phenols")
+PAH_Theme <- get_theme("PAH")
+Phthalates_Theme <- get_theme("Phthalates")
+Parabens_Theme <- get_theme("Parabens")
+Smoking_Theme <- get_theme("Smoking")
+Inflam_Theme <- get_theme("Inflammation")
+Pesticide_Theme <- get_theme("Pesticides")
+VOC_Theme <- get_theme("VOCs")
+OXID_Theme <- get_theme("OxidativeStress")
+PFAS_Theme <- get_theme("PFAS")
+Flame_Retardant_Theme <- get_theme("FlameRetardants")
+PCB_Theme <- get_theme("PCB")
+Other_Theme <- character()
+add_plot_category <- function(data, code_col = "Outcome") dplyr::left_join(data, targeted_category_lookup, by = stats::setNames("Code", code_col))
+```
+Input Data
+------------
+
+```{r}
+
+
+load("../../../Input/Harmonized_Datasets/DCHS_SDOH_Clean.RData")
+load("../../../Input/Harmonized_Datasets/ELEMENT_SDOH_Clean.RData")
+
+load("../../../Input/Harmonized_Datasets/Harmonized_Targeted.RData")
+
+
+```
+
+```{r}
+std_study <- function(x) {
+  stringr::str_remove(x, '[_]\\w+|:')  # CHECK: ensure this collapse is intended
+}
+# UNIT CONVERSION (2026-08-11, CODE_AUDIT_2026-08-11.md section 1.1).
+# The local to_ng_per_mL() removed here ended in `TRUE ~ value`, so mg/dL,
+# ug/mL, ng/g, pmol/mL, nM and kg/m3 fell through UNCONVERTED and were treated
+# as ng/mL -- 39,475 rows (5.9%), wrong by factors of 10^3 to 10^6.
+local({
+  cands <- c("../harmonization_helpers.R", "harmonization_helpers.R",
+             "Coding/Paper1_Submission2/harmonization_helpers.R")
+  hit <- cands[file.exists(cands)]
+  if (length(hit) == 0) stop("Cannot locate harmonization_helpers.R")
+  source(hit[[1]], local = FALSE)
+})
+Child_Data_Targeted <- Targeted_Data_All %>%
+  filter(!is.na(Child_PID)) %>%                           # keep child samples
+  mutate(
+    Units = if_else(is.na(Units), "ng/mL", Units),        # default units
+    Concentration = to_ng_per_mL(Concentration, Units)    # normalize units
+  ) %>%
+  select(-Mat_PID) %>%                                    # not needed for child
+  filter(!is.na(Analyte_Code)) %>%                        # require analyte code
+  group_by(Study, Child_PID, Analyte_Code) %>%            # average replicates
+  summarise(Concentration = mean(Concentration, na.rm = TRUE), .groups = "drop")
+
+child_analytes <- sort(unique(Child_Data_Targeted$Analyte_Code))  # vector of analytes
+
+# Build a list of per-analyte wide data.frames keyed by Child_PID ---------
+child_list_Targeted <- purrr::map(
+  child_analytes,
+  ~ Child_Data_Targeted %>%
+    filter(Analyte_Code == .x) %>%                         # one analyte
+    mutate(Study = std_study(Study)) %>%                   # standardize label
+    select(Study, Child_PID, Analyte_Code, Concentration) %>%
+    tidyr::pivot_wider(names_from = Analyte_Code, values_from = Concentration) %>%
+    select(Child_PID, Study, all_of(.x))                   # only current analyte col
+) %>%
+  rlang::set_names(child_analytes)
+
+# MATERNAL targeted data: long -> wide per-analyte list -------------------
+Mat_Data_Targeted <- Targeted_Data_All %>%
+  filter(!is.na(Mat_PID)) %>%                              # keep maternal samples
+  select(-Child_PID) %>%
+  mutate(
+    Units = if_else(is.na(Units), "ng/mL", Units),
+    Concentration = to_ng_per_mL(Concentration, Units)
+  ) %>%
+  filter(!is.na(Analyte_Code)) %>%
+  group_by(Study, Mat_PID, Analyte_Code) %>%
+  summarise(Concentration = mean(Concentration, na.rm = TRUE), .groups = "drop") %>%
+  mutate(across(everything(), ~ replace(., is.infinite(.), NA_real_)))  
+
+mat_analytes <- sort(unique(Mat_Data_Targeted$Analyte_Code))
+
+mat_list_Targeted <- purrr::map(
+  mat_analytes,
+  ~ Mat_Data_Targeted %>%
+    filter(Analyte_Code == .x) %>%
+    mutate(Study = std_study(Study)) %>%
+    select(Study, Mat_PID, Analyte_Code, Concentration) %>%
+    tidyr::pivot_wider(names_from = Analyte_Code, values_from = Concentration) %>%
+    select(Mat_PID, Study, all_of(.x))
+) %>%
+  rlang::set_names(mat_analytes)
+
+
+
+Child_Sample_Yr <- Targeted_Data_All %>%
+  filter(!is.na(Child_PID)) %>% 
+  select(-Mat_PID) %>%                                   
+  group_by(Child_PID,Sample_Collection_Year) %>% 
+  summarise(n = n()) 
+
+Mat_Sample_Yr <- Targeted_Data_All %>% 
+  filter(!is.na(Mat_PID)) %>% 
+  select(-Child_PID) %>%                                   
+  group_by(Mat_PID,Sample_Collection_Year) %>% 
+  summarise(n = n())
+# Split SDOH into child and maternal panels -------------------------------
+
+```
+
+```{r}
+
+studies <- paste0(c("DCHS","ELEMENT"),collapse = "|")
+
+Mapping <- bind_rows(DCHS_SDOH %>% dplyr::select(Mat_PID,Child_PID) %>% mutate(Study = "DCHS_Targeted"),
+                     ELEMENT_SDOH %>% dplyr::select(Mat_PID,Child_PID) %>% mutate(Study = "ELEMENT_Targeted"))
+
+
+Child_Data <- Child_Data_Targeted %>% 
+  filter(str_detect(Study, studies)) %>% 
+  rename(Concentration_Child = Concentration)
+
+Mat_Data <- Mat_Data_Targeted %>% 
+  filter(str_detect(Study, studies)) %>% 
+  rename(Concentration_Mat = Concentration) 
+
+child_analytes <- unique(Child_Data$Analyte_Code)
+mat_analytes <- unique(Mat_Data$Analyte_Code)
+
+All_Data <- Mat_Data_Targeted %>% 
+  filter(str_detect(Study, studies)) %>% 
+  rename(Concentration_Mat = Concentration) %>% 
+  left_join(.,Mapping,by = c("Mat_PID","Study")) %>% 
+  left_join(.,Child_Data, by = c("Child_PID","Study","Analyte_Code")) %>% 
+  mutate(Conc_Diff = abs(Concentration_Mat - Concentration_Child)) %>% 
+  left_join(.,Mat_Sample_Yr, by = "Mat_PID")
+
+params <- All_Data %>%
+  #dplyr::filter(Study == "DCHS_Targeted") %>% 
+  summarise(
+    global_mean = mean(c(Concentration_Mat, Concentration_Child), na.rm = TRUE),
+    global_sd   = sd(c(Concentration_Mat, Concentration_Child), na.rm = TRUE)
+  )
+
+
+
+plot_data <- All_Data %>% 
+  #dplyr::filter(Study == "DCHS_Targeted") %>% 
+  bind_cols(params) %>% 
+  mutate(
+    log_ratio = log1p(Concentration_Child) - log1p(Concentration_Mat)
+  ) %>% 
+  mutate( highlight = case_when(
+      log_ratio >= quantile(log_ratio, 0.90,na.rm = T) ~ "High",
+      log_ratio <= quantile(log_ratio, 0.10,na.rm = T) ~ "Low",
+      TRUE                                   ~ "Normal"
+    )
+) %>% 
+    add_plot_category(code_col = "Analyte_Code") %>%
+  dplyr::filter(!is.na(Category))
+
+
+  
+
+
+
+```
+
+```{r}
+# ggplot(plot_data, aes(x = log_ratio)) +
+#   geom_density(fill = "steelblue", alpha = 0.5) +
+#   geom_vline(xintercept = 0, linetype = "dashed") +
+#   labs(
+#     x = "log(Child) - log(Adult)",
+#     title = "Distribution of Child–Adult Log Ratios"
+#   ) +
+#   theme_classic()
+
+```
+
+
+
+
+```{r}
+
+df2 <- plot_data %>%
+  group_by(Analyte_Code) %>%
+  summarise(
+    mean_log_ratio = mean(log_ratio, na.rm = TRUE)
+  )
+
+
+
+
+plot_data_vi <- plot_data %>%
+  left_join(df2, by = "Analyte_Code") %>%
+  mutate(
+    Analyte_Code = reorder(Analyte_Code, mean_log_ratio)
+  )
+
+spread_tbl <- plot_data_vi %>%
+  group_by(Analyte_Code) %>%
+  summarise(
+    spread_IQR = IQR(log_ratio, na.rm = TRUE)
+  )
+
+# plot_data_vi2 <- plot_data_vi %>%
+#   group_by(Analyte_Code) %>%
+#   mutate(med_log = median(log_ratio, na.rm = TRUE)) %>%
+#   ungroup() %>%
+#   mutate(
+#     # order from low → high median log-ratio
+#     Analyte_Code = fct_reorder(Analyte_Code, med_log)
+#   )
+
+# 2. Join back and reorder analytes by spread (largest → smallest)
+plot_data_vi2 <- plot_data_vi %>%
+  left_join(spread_tbl, by = "Analyte_Code") %>%
+  mutate(
+    Analyte_Code = fct_reorder(Analyte_Code, spread_IQR, .desc = F)
+  )
+
+plot_data_vi %>%
+  group_by(Analyte_Code) %>%
+  summarise(
+    n = n(),
+    sd_log = sd(log_ratio, na.rm = TRUE),
+    n_unique = n_distinct(log_ratio)
+  ) %>%
+  arrange(sd_log) %>% 
+  View
+
+plot_data_vi2 %>% 
+  group_by(Analyte_Code) %>% 
+  summarise(mean_diff = mean(Conc_Diff,na.rm = T)) %>% 
+  View
+
+mypal <- paletteer_d("ggsci::springfield_simpsons")
+
+mypal <- c(
+  "FlameRetardants" = "#FED439FF",  # yellow
+  "PAH"             = "#709AE1FF",  # blue
+  "Parabens"        = "#8A9197FF",  # gray
+  "PCBs"            = "#D2AF81FF",  # tan
+  "Pesticide"       = "#FD7446FF",  # orange
+  "PFAS"            = "#D5E4A2FF",  # light green
+  "Phenols"         = "#197EC0FF",  # deep blue
+  "Phthalates"      = "#F05C3BFF",  # red-orange
+  "Smoking"         = "#46732EFF",  # dark green
+  "TraceElements"  = "#71D0F5FF",  # light blue
+  "VOC"             = "#370335FF"   # dark purple
+)
+
+plot_data_vi2 %>% 
+dplyr::filter(Analyte_Code == "PHEN9") %>% 
+  View
+
+## ---------------------------------------------------------------------------
+## Presentation fixes (2026-08):
+##  1. Analytes are ordered by median log ratio instead of by code. Unordered,
+##     the 34 violins read as an undifferentiated picket fence; ordered, the
+##     mother-favouring -> child-favouring gradient is the panel's message.
+##  2. fatten raised from 0.7 so the median line is actually visible -- at 0.7
+##     the central estimate disappeared and only the range registered.
+##  3. The x range moved from scale_x_continuous(limits=) to coord_flip(ylim=).
+##     `limits` DROPS out-of-range rows before the violin and boxplot
+##     statistics are computed; 10 observations across COTT/MEPB/HPMA/HCOTT
+##     were being silently deleted from their own summaries. coord zooms
+##     instead, so the statistics see every point.
+## ---------------------------------------------------------------------------
+plot_data_vi2 <- plot_data_vi2 %>%
+  dplyr::mutate(
+    Analyte_Code = forcats::fct_reorder(Analyte_Code, log_ratio,
+                                        .fun = median, na.rm = TRUE)
+  )
+
+vi_plot <- ggplot(plot_data_vi2, aes(x = log_ratio, y = Analyte_Code, color = Category, fill = Category)) +
+  # smooth, neutral violins
+  geom_violin(
+    #fill = "grey90",
+    #color = "grey70",
+    linewidth = 0.9,
+    alpha = 1
+  ) +
+  geom_boxplot(
+    width = 0.4,
+    outlier.size = 0.5,
+    outlier.alpha = 0.6,
+    fatten = 1.6
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    color = "grey40",
+    linewidth = 0.5
+  ) +
+  labs(
+    x = "log(Child / Mother)",
+    y = NULL,
+    title = "Child–Mother Log Ratios Across Exposures"
+  ) +
+  scale_fill_manual(values = mypal) +
+  scale_color_manual(values = mypal) +
+  coord_cartesian(clip = "off") +
+  #coord_cartesian(xlim = c(-3, 3)) +  # e.g., focus on -3 to +3
+
+  theme_classic(base_size = 16) +
+  scale_x_continuous(
+  breaks = c(-5, -3, -1, 0, 1, 3, 5),
+  labels = c(
+    "148× Mother",
+    "20× Mother",
+    "2.7× Mother",
+    "Equal",
+    "2.7× Child",
+    "20× Child",
+    "148× Child"
+  )
+) +
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      hjust = 0.5,
+      size = 14
+    ),
+    axis.title.x = element_text(
+    ),
+    axis.text.y = element_text(
+      size = 13
+    ),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom",
+    # hjust/vjust anchor the rotated analyte labels at their tick instead of
+    # letting them rotate about their centre -- that overlap is what fused
+    # PHEN2 and PHEN3 into an unreadable "PHEN2PHEN3" in Figure 2D.
+    axis.text.x = element_text(angle = -45, hjust = 0, vjust = 1, size = 11)
+
+  ) +
+  # NB: coord_flip limits are named for the PRE-flip aesthetics, so the log
+  # ratio range belongs in xlim -- passing it as ylim clamps the discrete
+  # analyte axis instead and silently drops most of the violins.
+  coord_flip(xlim = c(-5, 5))
+
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Child_Adult_vi.pdf",height = 6,width = 10)
+print(vi_plot)
+dev.off()
+save(vi_plot, file = "../../../Output/Paper1_Output_Submission2/Plots/vi_plot.RData")
+
+
+# Interactive View() scratch, disabled 2026-08-11: it is a DANGLING pipeline (the
+# verbs below have no data piped in), which aborts rmarkdown::render(). Nothing is saved here.
+# plot_data_vi2 %>% View
+#   group_by(Analyte_Code) %>% 
+#   summarise(n = n()) %>% View
+```
+
+```{r}
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Child_Adult_Scatter.pdf",height = 6,width = 6)
+
+
+fit <- lm(log10(Concentration_Child) ~ log10(Concentration_Mat) + Sample_Collection_Year,
+          data = plot_data_vi2 %>% dplyr::filter(Study == "DCHS_Targeted"))
+
+summary(fit)
+el_data <-  plot_data_vi2 %>% 
+  dplyr::filter(Study == "ELEMENT_Targeted") %>% 
+  #drop_na() %>% 
+  dplyr::filter(Concentration_Mat >0)
+
+fit <- lm(log10(Concentration_Child) ~ log10(Concentration_Mat),
+          data = el_data)
+
+summary(fit)
+
+plot_data_scatter <- plot_data_vi2%>% 
+  dplyr::filter(Concentration_Mat >0)
+# The subtitle's slope and R2 were typed in by hand ("0.66 (R2 = 0.57)") and so
+# never moved when the data did (e.g. the 2026-11-03 ug/g creatinine rebuild,
+# which shifts DCHS relative to ELEMENT). Compute them from the same log-log
+# fit that geom_smooth(method = "lm") draws on the log10 axes below.
+mc_fit <- lm(log10(Concentration_Child) ~ log10(Concentration_Mat),
+             data = dplyr::filter(plot_data_scatter, Concentration_Child > 0))
+mc_slope <- unname(coef(mc_fit)[2])
+mc_r2    <- summary(mc_fit)$r.squared
+mat_child_scatter <- ggplot(plot_data_scatter,
+       aes(x = Concentration_Mat, 
+           y = Concentration_Child)) +
+  
+  # Points, drawn as two layers rather than one.
+  # ELEMENT is 957 observations against DCHS's 22,382 -- 4% of the panel. In a
+  # single layer ggplot draws them in row order, so ELEMENT ended up buried
+  # under the DCHS mass and its colour was effectively never visible. DCHS is
+  # laid down first and kept faint; ELEMENT is painted over it, denser and
+  # slightly larger because it has two orders of magnitude fewer points to
+  # spend on visibility.
+  geom_point(data = function(d) d[d$Study == "DCHS_Targeted", ],
+             aes(color = Study), alpha = 0.16, size = 0.7, stroke = 0) +
+  geom_point(data = function(d) d[d$Study == "ELEMENT_Targeted", ],
+             aes(color = Study), alpha = 0.75, size = 1.3, stroke = 0) +
+
+  # 1:1 Reference Line
+  geom_abline(slope = 1, intercept = 0,
+              linetype = "dashed",
+              linewidth = 0.5,
+              color = "grey40") +
+
+  geom_smooth(
+    method = "lm",
+    formula = y ~ x,
+    se = FALSE,
+    linewidth = 1.4,
+    color = "black"
+  ) +
+
+  # Log scales with cleaner breaks.
+  # label_number(auto = TRUE) was picking its own decimal count per axis, which
+  # printed 0.01 as "0" on x while y showed "100.00", and inserted a thin-space
+  # thousands separator ("10 000"). Fixed formatting on both axes instead.
+  scale_x_log10(
+    labels = function(x) trimws(formatC(x, format = "fg", digits = 3, big.mark = ",")),
+    breaks = scales::log_breaks()
+  ) +
+  scale_y_log10(
+    labels = function(x) trimws(formatC(x, format = "fg", digits = 3, big.mark = ",")),
+    breaks = scales::log_breaks()
+  ) +
+
+  # `mypal` is the exposure-CATEGORY palette; this scale maps Study, so no name
+  # ever matched and every cohort silently fell through to na.value grey --
+  # the "Cohort" legend was labelling a distinction the plot never drew.
+  # Only DCHS and ELEMENT contribute paired mother-child measurements.
+  # Green vs magenta rather than green vs purple: purple sat too close to the
+  # green mass to separate at point size, and the pair has to stay legible
+  # under red-green colour blindness.
+  scale_color_manual(
+    values = c("DCHS_Targeted" = "#1B7837", "ELEMENT_Targeted" = "#E7298A"),
+    labels = c("DCHS_Targeted" = "DCHS (South Africa)",
+               "ELEMENT_Targeted" = "ELEMENT (Mexico City)"),
+    name = "Cohort",
+    na.value = "grey60"
+  ) +
+  guides(color = guide_legend(
+    override.aes = list(size = 5, alpha = 1, linewidth = 0))) +
+
+  labs(
+    title = "Child vs Maternal Exposure",
+    subtitle = paste0(sprintf("Grey dashed: 1:1.  Black: OLS fit, slope %.2f (R2 = %.2f).", mc_slope, mc_r2),
+                      if (mc_slope < 1) "\nSlope < 1: child concentrations rise less than proportionally with maternal."
+                      else "\nSlope >= 1: child concentrations rise at least proportionally with maternal."),
+    x = "Maternal Concentration (ng/mL)",
+    y = "Child Concentration (ng/mL)"
+  ) +
+  
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16),
+    plot.subtitle = element_text(size = 12, colour = "grey30"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    panel.grid.major = element_line(color = "grey90", linewidth = 0.25),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12),
+    legend.text  = element_text(size = 10)
+  )
+print(mat_child_scatter)
+dev.off()
+save(mat_child_scatter, file = "../../../Output/Paper1_Output_Submission2/Plots/mat_child_scatter.RData")
+
+save(plot_data_vi2, file = "../../../HHEAR_Man1_App/Mat_Child_Data.RData")
+```
+
+
+
+```{r}
+Mat_Conc <- plot_data_vi2 %>% 
+  group_by(Analyte_Code) %>% 
+  summarise(mean_mat_conc = mean(Concentration_Mat,na.rm = T)) 
+
+Child_Conc <- plot_data_vi2 %>% 
+  group_by(Analyte_Code) %>% 
+  summarise(mean_child_conc = mean(Concentration_Child,na.rm = T)) 
+
+All_Conc <- left_join(Mat_Conc,Child_Conc,by = "Analyte_Code")  %>%
+  pivot_longer(
+    cols = c(mean_mat_conc, mean_child_conc),
+    names_to = "Group",
+    values_to = "Mean_Conc"
+  ) %>%
+  mutate(
+    Group = recode(Group,
+                   "mean_mat_conc" = "Maternal",
+                   "mean_child_conc" = "Child")
+  )
+
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Child_Adult_Mean_Bar.pdf",height = 6,width = 6)
+child_adult_mean_bar <- ggplot(All_Conc,
+       aes(y = Analyte_Code, x = abs(log(Mean_Conc)), fill = Group)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  scale_fill_manual(values = c("Maternal" = "steelblue",
+                               "Child" = "firebrick")) +
+  labs(
+    x = "log(Mean Concentration)",
+    y = "Exposure",
+    fill = NULL,
+    title = "Mean Maternal vs Child Concentrations"
+  ) +
+  theme_classic(base_size = 16) +
+  theme(legend.position = "bottom")
+print(child_adult_mean_bar)
+dev.off()
+save(child_adult_mean_bar, file = "../../../Output/Paper1_Output_Submission2/Plots/child_adult_mean_bar.RData")
+
+```
+
+```{r}
+All_Conc %>% 
+  View
+
+perc_diff <- All_Conc%>%
+  pivot_wider(
+    names_from  = Group,
+    values_from = Mean_Conc
+  ) %>%
+  mutate(
+    percent_diff = abs(100 * (Maternal - Child) / Child)
+  ) 
+
+mean(perc_diff$percent_diff)
+```
+
+
+```{r}
+result <- plot_data_vi2 %>%
+  mutate(log_ratio = log(Concentration_Child) - log(Concentration_Mat)) %>%
+  group_by(Analyte_Code) %>%
+  summarise(
+    n = n(),
+    median_log_ratio = median(log_ratio, na.rm = TRUE),
+    fold_change = exp(median_log_ratio),
+    p_value = wilcox.test(log_ratio, mu = 0)$p.value
+  ) %>%
+  mutate(
+    p_adj = p.adjust(p_value, method = "fdr")
+  ) %>% 
+  mutate(Sig_10 = ifelse(p_adj <=0.05,1,0))
+```
+
+```{r}
+highlight_tbl <- plot_data_vi %>%
+  group_by(Analyte_Code) %>%
+  summarise(
+    median_lr = median(log_ratio, na.rm = TRUE)
+  ) %>%
+  mutate(
+    highlight = ifelse(abs(median_lr) > 0.05, "Highlight", "Normal")
+  )
+
+```
+
+```{r}
+pdf(file = "../../../Output/Paper1_Output_Submission2/Plots/Child_Adult_Patch.pdf",height = 15,width = 14)
+patch <- (child_adult_mean_bar + mat_child_scatter)/ vi_plot 
+patch <- patch + plot_annotation(tag_levels = "A")
+print(patch)
+dev.off()
+```
+
+```{r}
+
+```
