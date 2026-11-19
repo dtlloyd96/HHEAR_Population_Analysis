@@ -106,16 +106,34 @@ plot_data <- add_tissue(Ridge_Plot_Data)
 # Measure = matrix + unit per point.
 unit_suffix <- function(units) {
   u <- sort(unique(stats::na.omit(as.character(units))))
-  if (length(u) == 1) paste0(" (", u, ")") else if (length(u) > 1) " (mixed units; see legend)" else ""
+  if (length(u) == 1) paste0(" (", u, ")") else ""
 }
 # ggplot's default shape scale stops at 6 values and silently drops the rest; a
 # urinary analyte can span more matrix/unit combinations than that.
 measure_shapes <- scale_shape_manual(values = c(16, 17, 15, 3, 4, 8, 1, 2, 0, 5, 6, 18, 7, 9, 10, 12, 13, 14, 11, 19, 20, 21, 22, 23, 24, 25))
 
-# Dyad tab: colour is study, so name each study's unit in the axis title.
-study_unit_suffix <- function(df) {
-  u <- dplyr::distinct(df, Study, Unit) %>% dplyr::filter(!is.na(Unit)) %>% dplyr::arrange(Study)
-  if (dplyr::n_distinct(u$Unit) <= 1) unit_suffix(u$Unit) else paste0(" (", paste0(u$Study, ": ", u$Unit, collapse = "; "), ")")
+# "Units in this view" table shown under each plot (2026-11-19 polish pass).
+# One row per study (and location where there is one); NHANES last.
+units_table <- function(df) {
+  cols <- intersect(c("Study", "Location", "Tissue", "Unit"), names(df))
+  if (!nrow(df) || !all(c("Study", "Unit") %in% cols)) return(NULL)
+  u <- df %>%
+    dplyr::mutate(dplyr::across(dplyr::all_of(cols), as.character)) %>%
+    dplyr::distinct(dplyr::across(dplyr::all_of(cols))) %>%
+    dplyr::arrange(Study == "NHANES", Study)
+  header <- c(Study = "Study", Location = "Location", Tissue = "Matrix", Unit = "Unit")[cols]
+  mixed <- dplyr::n_distinct(u$Unit) > 1
+  tags$details(
+    class = "mt-2", open = if (mixed) NA else NULL,
+    tags$summary(class = "text-muted small",
+                 if (mixed) "Units differ between cohorts in this view; compare urinary values with care."
+                 else paste("Units in this view:", u$Unit[1])),
+    tags$table(
+      class = "table table-sm small mt-1", style = "max-width: 720px;",
+      tags$thead(tags$tr(lapply(header, tags$th))),
+      tags$tbody(lapply(seq_len(nrow(u)), function(i) tags$tr(lapply(cols, function(cn) tags$td(u[[cn]][i])))))
+    )
+  )
 }
 
 conc_axis_title <- function(units, log1p = FALSE) {
@@ -407,12 +425,11 @@ ui <- fluidPage(
     
     tabPanel(
       title = "Landing Page",
-      sidebarLayout(
-        sidebarPanel(class = "sidebar-panel"),
-        
-        mainPanel(
+      fluidRow(
+        column(
+          width = 12,
           tags$div(
-            style = "max-width: 800px; margin: 0 auto;",
+            style = "max-width: 820px; margin: 24px auto;",
             
             tags$h2(style = "font-weight: 700;", "HHEAR Chemical Exposome Explorer"),
             
@@ -428,7 +445,7 @@ ui <- fluidPage(
             tags$p(
               "Use this platform to visualize exposure variability, compare exposure 
            intervals across demographic groups, and explore how exposures differ 
-           by location or population"
+           by location or population."
             ),
             
             tags$h4("How to use it"),
@@ -451,9 +468,9 @@ ui <- fluidPage(
             tags$p(
               "Blood, serum and plasma concentrations are shown in ng/mL. Urinary concentrations follow each
            cohort's dilution handling: creatinine-corrected cohorts are in µg/g creatinine, others are
-           specific-gravity-adjusted or unadjusted ng/mL, and NHANES urine is unadjusted. Point shapes and
-           hover text give the matrix and unit of every value, so urinary values from cohorts on different
-           scales should be compared with care."
+           specific-gravity-adjusted or unadjusted ng/mL, and NHANES urine is unadjusted. Point shapes mark the specimen matrix;
+           hover text and the table under each plot give every cohort's unit. Compare urinary values from
+           cohorts on different scales with care."
             ),
             tags$h4("Data Access"),
             tags$p(
@@ -557,13 +574,14 @@ ui <- fluidPage(
         mainPanel(
           div(class = "main-card",
               tags$h3(class = "mb-3", "Interval Distributions by Location"),
-              plotlyOutput("child_plot", height = "400px"),
+              plotlyOutput("child_plot", height = "560px"),
               tags$p(
                 class = "mt-3 text-muted",
-                "Points are the log concentration of individual exposure levels, colored by location as nearest city.
-                Dark bars show the predicted 25–75% interval, lighter bars show the predicted 5–95% interval, 
-                and large dot represent the predicted median exposure."
-              )
+                "Points are individual exposure levels, coloured by location (nearest city). Dark bars show the
+                pooled predicted 25–75% interval, lighter bars the predicted 5–95% interval, and the large dot the
+                predicted median. Open circles mark each cohort's limit of detection."
+              ),
+              uiOutput("loc_units")
           )
         )
       )
@@ -583,11 +601,12 @@ ui <- fluidPage(
         mainPanel(
           div(class = "main-card",
               tags$h3(class = "mb-3", "Observed Intervals by Study"),
-              plotlyOutput("study_qc_plot", height = "450px"),
+              plotlyOutput("study_qc_plot", height = "500px"),
               tags$p(
                 class = "mt-3 text-muted",
                 "Points are individual observations by study. Dark bars show observed 25–75% ranges, lighter bars show observed 5–95% ranges, the filled dot is the observed median, and the open circle is the study median LOD when available."
-              )
+              ),
+              uiOutput("qc_units")
           )
         )
       )
@@ -624,17 +643,19 @@ ui <- fluidPage(
       sidebarLayout(
         sidebarPanel(class = "sidebar-panel",
                      uiOutput("ridge_analyte_picker"),
-                     helpText("Filters the ridgeline plot by curr_analyte before plotting.")
+                     helpText("Compares locations within shared age/sex strata, so differences are not driven by who was sampled.")
         ),
         mainPanel(
           div(class = "main-card",
               tags$h3(class = "mb-3", "Exposure Concentrations Across Matched Strata"),
-              plotOutput("conc_ridge_plot", height = "500px"),
+              plotOutput("conc_ridge_plot", height = "640px"),
               tags$p(
                 class = "mt-3 text-muted",
-                "Each Ridge represents the exposure concentration distribution for that strata, colored by location as nearest city. 
-                The X axis shows the age/sex strata. "
-              )
+                "Each ridge is the concentration distribution in one age (and, for children, sex) stratum, coloured by
+                location (nearest city). Strata are on the y axis; the x axis is log1p concentration. Line type marks the
+                specimen matrix."
+              ),
+              uiOutput("ridge_units")
               #plotlyOutput("conc_ridge_plot", height = "500px")
           )
         )
@@ -657,7 +678,7 @@ ui <- fluidPage(
             options = list(placeholder = "Start typing an analyte…")
           ),
           
-          checkboxInput("dyad_log10", "Log10 scale (log10(x + 1e-8))", TRUE),
+          checkboxInput("dyad_log10", "Log10 scale", TRUE),
           checkboxInput("dyad_show_1to1", "Show 1:1 line", TRUE),
           
           tags$hr(),
@@ -673,7 +694,8 @@ ui <- fluidPage(
             class = "main-card",
             tags$h3(class = "mb-3", "Maternal vs Child Concentrations"),
             plotlyOutput("dyad_scatter", height = "520px"),
-            tags$div(style = "margin-top: 6px;", textOutput("dyad_note"))
+            tags$div(style = "margin-top: 6px;", textOutput("dyad_note")),
+            uiOutput("dyad_units")
             
             # tags$hr(style = "margin: 12px 0;"),
             # 
@@ -719,32 +741,35 @@ ui <- fluidPage(
     ),
 
     # ---- Summary ----
-    tabPanel(
-      "Summary",
-      div(class = "main-card",
-          tags$h3("Overview"),
-          tags$p(""),
-          tags$hr(class = "hr-soft"),
-          fluidRow(
-            column(
-              width = 6,
-              div(class = "main-card",
-                  style = "box-shadow:none; background:#f8f9fa;",
-                  tags$h4("Key Metrics"),
-                  tags$p(class = "text-muted", "Placeholder ")
-              )
-            ),
-            column(
-              width = 6,
-              div(class = "main-card",
-                  style = "box-shadow:none; background:#f8f9fa;",
-                  tags$h4("Notes"),
-                  tags$p(class = "text-muted", "Paper Information")
-              )
-            )
-          )
-      )
-    ),
+    # Summary tab hidden 2026-11-19 (polish pass): it only held placeholders
+    # ("Placeholder", "Paper Information"). Restore by uncommenting once it has content.
+    # tabPanel(
+    #   "Summary",
+    #   div(class = "main-card",
+    #       tags$h3("Overview"),
+    #       tags$p(""),
+    #       tags$hr(class = "hr-soft"),
+    #       fluidRow(
+    #         column(
+    #           width = 6,
+    #           div(class = "main-card",
+    #               style = "box-shadow:none; background:#f8f9fa;",
+    #               tags$h4("Key Metrics"),
+    #               tags$p(class = "text-muted", "Placeholder ")
+    #           )
+    #         ),
+    #         column(
+    #           width = 6,
+    #           div(class = "main-card",
+    #               style = "box-shadow:none; background:#f8f9fa;",
+    #               tags$h4("Notes"),
+    #               tags$p(class = "text-muted", "Paper Information")
+    #           )
+    #         )
+    #       )
+    #   )
+    # ),
+
     # ---- About ----
     tabPanel(
       "About",
@@ -770,11 +795,11 @@ ui <- fluidPage(
             tags$li("Matched-strata plots compare locations within shared age (and, for children, sex) strata.")
           ),
           tags$h4("Data access"),
-          tags$p("Participant-level data are available from the ",
-                 tags$a("HHEAR Data Center", href = "https://hheardatacenter.mssm.edu/", target = "_blank"),
-                 "; analysis code is on ",
-                 tags$a("GitHub", href = "https://github.com/dtlloyd96/HHEAR_Population_Analysis", target = "_blank"),
-                 ".")
+          tags$p(HTML(paste0(
+            'Participant-level data are available from the ',
+            '<a href="https://hheardatacenter.mssm.edu/" target="_blank">HHEAR Data Center</a>; ',
+            'analysis code is on ',
+            '<a href="https://github.com/dtlloyd96/HHEAR_Population_Analysis" target="_blank">GitHub</a>.')))
       )
     )
   )
@@ -1119,6 +1144,7 @@ server <- function(input, output, session) {
   })
   # ---- Filtered data (one analyte at a time) ----
   pts_data <- reactive({
+    req(input$population, input$analyte)
     Location_Plotdata %>%
       dplyr::filter(Population == input$population) %>% 
       dplyr::filter(curr_analyte == input$analyte)
@@ -1168,8 +1194,9 @@ server <- function(input, output, session) {
     p <- ggplot() +
       geom_jitter(
         data = pts_data(),
-        aes(x = xf(.data$plot_value), y = .data$Location, color = .data$Location, shape = .data$Measure,
-            text = paste0(.data$Study, " | ", .data$Location, "<br>", signif(.data$plot_value, 3), " ", .data$Unit)),
+        aes(x = xf(.data$plot_value), y = .data$Location, color = .data$Location, shape = .data$Tissue,
+            text = paste0(.data$Study, " | ", .data$Location, "<br>", signif(.data$plot_value, 3), " ", .data$Unit,
+                          " (", .data$Tissue, ")")),
         size = 0.6, alpha = 0.9, width = 0, height = 0.12
       ) +
       color_layer + measure_shapes +
@@ -1209,7 +1236,7 @@ server <- function(input, output, session) {
       #coord_cartesian(xlim = c(0, input$xmax), clip = "on") +
       labs(
         x = conc_axis_title(pts_data()$Unit, input$use_log1p),
-        y = "Location", shape = "Matrix: unit",
+        y = "Location", shape = "Matrix",
         #title = input$analyte
         title = name_data()
         
@@ -1231,7 +1258,7 @@ server <- function(input, output, session) {
         # Axes
         axis.title.x = element_text(size = 13, face = "bold"),
         axis.text.x = element_text(size = 11, face = "bold"),
-        axis.text.y = element_blank(),
+        axis.text.y = element_text(size = 10),
         axis.ticks = element_blank(),
         axis.line.y = element_blank(),
         
@@ -1267,6 +1294,8 @@ server <- function(input, output, session) {
   })
   
   # ---- Render interactive plot ----
+  output$loc_units <- renderUI(units_table(pts_data()))
+
   output$child_plot <- renderPlotly({
     ggplotly(plot_obj(), tooltip = "text") %>%
       layout(
@@ -1344,6 +1373,8 @@ server <- function(input, output, session) {
       mutate(Study = factor(Study, levels = levels(int_df$Study)))
   })
   
+  output$qc_units <- renderUI(units_table(dplyr::select(study_qc_points(), Study, Tissue, Unit)))
+
   output$study_qc_plot <- renderPlotly({
     pts <- study_qc_points()
     ints <- study_qc_intervals()
@@ -1356,8 +1387,8 @@ server <- function(input, output, session) {
     p <- ggplot() +
       geom_jitter(
         data = pts,
-        aes(x = xf(plot_value), y = Study, color = Study, shape = Measure,
-            text = paste0(Study, "<br>", signif(plot_value, 3), " ", Unit)),
+        aes(x = xf(plot_value), y = Study, color = Study, shape = Tissue,
+            text = paste0(Study, "<br>", signif(plot_value, 3), " ", Unit, " (", Tissue, ")")),
         size = 0.6, alpha = 0.55, width = 0, height = 0.12
       ) + measure_shapes +
       geom_errorbarh(
@@ -1387,7 +1418,7 @@ server <- function(input, output, session) {
       ) +
       labs(
         x = conc_axis_title(pts$Unit, input$qc_use_log1p),
-        y = "Study", shape = "Matrix: unit",
+        y = "Study", shape = "Matrix",
         title = paste0(qc_name_data(), " by Study")
       ) +
       theme_classic(base_size = 12) +
@@ -1523,7 +1554,7 @@ server <- function(input, output, session) {
   output$quantile_plot <- renderPlotly({
     DF_plot <- DF_plot_re()
    # print(DF_plot)
-    req(DF_plot, input$group_col, "Outcome" %in% names(DF_plot), "Value" %in% names(DF_plot))
+    req(DF_plot, input$group_col, input$outcome, "Outcome" %in% names(DF_plot), "Value" %in% names(DF_plot))
     group_col <- input$group_col
     group_palette <- palette_for_groups()
     
@@ -1610,7 +1641,7 @@ server <- function(input, output, session) {
           override.aes = list(size = 3.2, alpha = 1)
         )
       ) +
-      labs(title = chem_name) +
+      labs(title = chem_name, y = gsub("_", " ", group_col), color = gsub("_", " ", group_col)) +
       coord_cartesian(clip = "off")  +
       labs(x = conc_axis_title(
         Matrix_Lookup$Unit[Matrix_Lookup$Study == input$study_choice & Matrix_Lookup$Analyte_Code == input$outcome],
@@ -1744,6 +1775,8 @@ server <- function(input, output, session) {
   # })
   # 
   
+  output$ridge_units <- renderUI(units_table(ridge_df()))
+
   output$conc_ridge_plot <- renderPlot({
     df <- ridge_df()
     req(nrow(df) > 0)
@@ -1759,8 +1792,8 @@ server <- function(input, output, session) {
         color = "white",
         alpha = 0.9
       ) +
-      scale_fill_manual(values = location_colors, guide = guide_legend(title = NULL, byrow = TRUE)) +
-      scale_linetype_manual(values = c("dashed", "solid")) +
+      scale_fill_manual(values = location_colors, guide = guide_legend(title = NULL, byrow = TRUE, ncol = 4)) +
+      scale_linetype_manual(name = "Matrix", values = c("dashed", "solid")) +
       #facet_wrap(~ facet_label, scales = "free", ncol = 2, strip.position = "top") +
       facet_wrap(~ facet_label,scales = "free_y", ncol = 2, strip.position = "top") +
       theme_minimal(base_size = 12) +
@@ -1772,11 +1805,13 @@ server <- function(input, output, session) {
         axis.text.x = element_text(size = 9),
         plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
         legend.position = "bottom",
+        legend.box = "vertical",
+        legend.text = element_text(size = 9),
         panel.spacing = unit(1, "lines")
       ) +
       labs(x = conc_axis_title(df$Unit, log1p = TRUE), y = "Age–Sex Stratum",
            title = paste0(strata_chem_name(),""),
-           subtitle = paste("Units:", paste(sort(unique(paste0(df$Tissue, " ", df$Unit))), collapse = "; ")))
+)
     
     p
   }, res = 110)
@@ -1904,8 +1939,8 @@ server <- function(input, output, session) {
       geom_point(alpha = 0.6, size = 2) +
       scale_color_manual(values =mypal) +
       labs(
-        x = paste0(if (isTRUE(input$dyad_log10)) "Maternal concentration (log10)" else "Maternal concentration", study_unit_suffix(plot_dat)),
-        y = paste0(if (isTRUE(input$dyad_log10)) "Child concentration (log10)" else "Child concentration", study_unit_suffix(plot_dat)),
+        x = paste0(if (isTRUE(input$dyad_log10)) "Maternal concentration (log10)" else "Maternal concentration", unit_suffix(plot_dat$Unit)),
+        y = paste0(if (isTRUE(input$dyad_log10)) "Child concentration (log10)" else "Child concentration", unit_suffix(plot_dat$Unit)),
         title = paste0("Analyte: ", input$dyad_analyte)
       ) +
       theme_classic(base_size = 13)
@@ -1923,6 +1958,8 @@ server <- function(input, output, session) {
   
   
   
+  output$dyad_units <- renderUI(units_table(dplyr::select(dyad_plot_df(), Study, Unit)))
+
   # N count text
   output$dyad_note <- renderText({
     dfp <- dyad_plot_df()
