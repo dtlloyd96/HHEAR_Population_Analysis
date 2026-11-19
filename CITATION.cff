@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the archived release and the paper."
+title: "HHEAR Population Analysis: code for 'Population Structure of the Exposome Shapes Epidemiological Inference'"
+type: software
+authors:
+  - family-names: Lloyd
+    given-names: Dillon T.
+    affiliation: "Department of Biomedical Informatics, Harvard Medical School"
+  - family-names: Patel
+    given-names: Chirag J.
+    affiliation: "Department of Biomedical Informatics, Harvard Medical School"
+license: MIT
+repository-code: "https://github.com/dtlloyd96/HHEAR_Population_Analysis"
+version: "1.0.0"
+date-released: "2026-11-19"

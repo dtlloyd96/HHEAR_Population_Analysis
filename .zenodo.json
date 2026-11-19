@@ -1,0 +1,14 @@
+{
+  "title": "HHEAR Population Analysis: code for \"Population Structure of the Exposome Shapes Epidemiological Inference\"",
+  "upload_type": "software",
+  "description": "Analysis code for the manuscript \"Population Structure of the Exposome Shapes Epidemiological Inference\" (Science, aeh0807, in revision). Harmonizes 38 Human Health Exposure Analysis Resource (HHEAR) studies, fits censored quantile regression models of location, sampling year and sociodemographic factors, builds the main and supplementary figures, and runs the exposure-outcome association analyses. HHEAR data are not included; they are available from the HHEAR Data Repository.",
+  "creators": [
+    {"name": "Lloyd, Dillon T.", "affiliation": "Department of Biomedical Informatics, Harvard Medical School"},
+    {"name": "Patel, Chirag J.", "affiliation": "Department of Biomedical Informatics, Harvard Medical School"}
+  ],
+  "license": "MIT",
+  "keywords": ["exposome", "HHEAR", "biomonitoring", "quantile regression", "population structure"],
+  "related_identifiers": [
+    {"identifier": "https://github.com/dtlloyd96/HHEAR_Population_Analysis", "relation": "isSupplementTo", "scheme": "url"}
+  ]
+}
